@@ -22,12 +22,20 @@ class RecordAllowance {
     def kidsWithoutInterest = [emily]
     def kids = [jack, evan]
 
+
+    static def inputDateFormat = new SimpleDateFormat("yyyy-MM-dd")
+
     public static final void main(String[] args) {
         String accessToken = System.getenv("YNAB_ACCESS_TOKEN")
         if(StringUtils.isBlank(accessToken)) {
             throw new IllegalArgumentException("environment variable YNAB_ACCESS_TOKEN must be set")
         }
-        def ra = new RecordAllowance(accessToken)
+        def date = new Date()
+        if(args.length > 0) {
+            def dateStr = args[0]
+            date = inputDateFormat.parse(dateStr)
+        }
+        def ra = new RecordAllowance(accessToken, date)
 
         def categoryInfo = ra.getCategoryInfoByCategoryName()
 
@@ -60,9 +68,11 @@ class RecordAllowance {
     def accessToken = null
     def ynabClient = null
     def budgetId = null
+    def transactionDate = null
 
-    public RecordAllowance(String accessToken) {
+    public RecordAllowance(String accessToken, Date transactionDate) {
         this.accessToken = accessToken
+        this.transactionDate = transactionDate
         log.info("Using accessToken: ${accessToken}")
         ynabClient = HttpBuilder.configure {
             request.uri = "https://api.youneedabudget.com"
@@ -102,7 +112,7 @@ class RecordAllowance {
 
                 def transaction = [
                     account_id: accountId,
-                    date: dateFormat.format(new Date()),
+                    date: dateFormat.format(transactionDate),
                     amount: interestInMilliUnits,
                     payee_name: "$catName Interest",
                     category_id: catId,
@@ -126,7 +136,7 @@ class RecordAllowance {
                 def allowanceInMilliUnits = toMilliUnits(allowance)
                 def transaction = [
                         account_id: accountId,
-                        date: dateFormat.format(new Date()),
+                        date: dateFormat.format(transactionDate),
                         amount: allowanceInMilliUnits,
                         payee_name: "To $catName",
                         category_id: catId,
@@ -145,7 +155,7 @@ class RecordAllowance {
         def allowanceCategoryId = categoryInfoByCategoryName["Allowance"].id
         return [
                 account_id: accountId,
-                date: dateFormat.format(new Date()),
+                date: dateFormat.format(transactionDate),
                 amount: -totalMilliUnits,
                 payee_name: "Allowance Jack and Evan",
                 category_id: allowanceCategoryId,
@@ -159,7 +169,7 @@ class RecordAllowance {
         return kids.collect { kid ->
             [
                 account_id: accountId,
-                date: dateFormat.format(new Date()),
+                date: dateFormat.format(transactionDate),
                 amount: -1 * toMilliUnits(giveBankRate),
                 payee_name: "Allowance $kid (Give)",
                 category_id: allowanceCategoryId,
@@ -176,7 +186,7 @@ class RecordAllowance {
         return kidsWithoutInterest.collect { kid ->
             [
                     account_id: accountId,
-                    date: dateFormat.format(new Date()),
+                    date: dateFormat.format(transactionDate),
                     amount: -1 * toMilliUnits(amount),
                     payee_name: "Allowance $kid",
                     category_id: allowanceCategoryId,
