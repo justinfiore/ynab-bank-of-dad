@@ -4,6 +4,10 @@ repositories {
     mavenCentral()
 }
 
+apply plugin: 'application'
+
+mainClassName = "RecordAllowance"
+
 dependencies {
     compile 'org.codehaus.groovy:groovy-all:2.4.15'
     compile group: 'org.apache.commons', name: 'commons-lang3', version: '3.7'
