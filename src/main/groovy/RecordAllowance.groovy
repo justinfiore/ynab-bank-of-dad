@@ -3,6 +3,7 @@ import groovy.util.logging.Slf4j
 import groovyx.net.http.HttpBuilder
 import org.apache.commons.lang3.StringUtils
 
+import java.math.MathContext
 import java.text.SimpleDateFormat
 
 /**
@@ -13,14 +14,17 @@ class RecordAllowance {
 
     def spendBankSuffix = " Spend Bank"
     def saveBankSuffix = " Save Bank"
-    def allowanceRates = [spendBankSuffix: 1, saveBankSuffix: 0.5]
+    def giveBankSuffix = " Give Bank"
+    def allowanceRates = ["$spendBankSuffix": 1, "$saveBankSuffix": 0.5, "$giveBankSuffix": 0.5]
     def giveBankRate = 0.5
     def bankSuffixes = [spendBankSuffix, saveBankSuffix]
+	
     def jack = "Jack"
     def evan = "Evan"
     def emily = "Emily"
-    def kidsWithoutInterest = [emily]
-    def kids = [jack, evan]
+    def kidsWithoutInterest = []
+    def kids = [jack, evan, emily]
+
 
 
     static def inputDateFormat = new SimpleDateFormat("yyyy-MM-dd")
@@ -35,6 +39,7 @@ class RecordAllowance {
             def dateStr = args[0]
             date = inputDateFormat.parse(dateStr)
         }
+        println("Using Date: $date")
         def ra = new RecordAllowance(accessToken, date)
 
         def categoryInfo = ra.getCategoryInfoByCategoryName()
@@ -71,6 +76,7 @@ class RecordAllowance {
     def transactionDate = null
 
     public RecordAllowance(String accessToken, Date transactionDate) {
+
         this.accessToken = accessToken
         this.transactionDate = transactionDate
         log.info("Using accessToken: ${accessToken}")
@@ -86,7 +92,6 @@ class RecordAllowance {
 
     }
 
-    public static final float interestRatePercent = 2.0
 
     def postTransactions(transactions) {
         def r = ynabClient.post {
@@ -101,25 +106,46 @@ class RecordAllowance {
 
     def generateInterestTransactions(accountId, categoryInfoByCategoryName) {
         def transactions = []
+        def interestRatesByKidAndBankSuffix = [
+                "$jack": ["$spendBankSuffix": 2.0, "$saveBankSuffix": 1.0, "$giveBankSuffix": 0.0],
+                "$evan": ["$spendBankSuffix": 2.0, "$saveBankSuffix": 1.0, "$giveBankSuffix": 0.0],
+                "$emily": ["$spendBankSuffix": 2.0, "$saveBankSuffix": 1.0, "$giveBankSuffix": 0.0]
+        ]
+        log.info("Interest Rate Configuration: ${interestRatesByKidAndBankSuffix}")
         kids.each { kid ->
             bankSuffixes.each { bankSuffix ->
                 def catName = kid + bankSuffix
                 def categoryInfo = categoryInfoByCategoryName[catName]
                 def catId = categoryInfo.id
                 def currentBalance = toDollars(categoryInfo.balance)
-                def interest = ((interestRatePercent / 100.0) * currentBalance).round(2)
-                def interestInMilliUnits = toMilliUnits(interest)
-
-                def transaction = [
-                    account_id: accountId,
-                    date: dateFormat.format(transactionDate),
-                    amount: interestInMilliUnits,
-                    payee_name: "$catName Interest",
-                    category_id: catId,
-                    memo: "Interest",
-                    approved: true
-                ]
-                transactions.add(transaction)
+                log.info("className = ${interestRatesByKidAndBankSuffix.getClass().getSimpleName()}")
+                log.info("size = ${interestRatesByKidAndBankSuffix.size()}")
+				log.info("interestRatesByKidAndBankSuffix = $interestRatesByKidAndBankSuffix")
+				log.info("Determining Interest Rate for kid: $kid and bankSuffix: $bankSuffix using: ${interestRatesByKidAndBankSuffix["$kid"]}")
+				log.info("${interestRatesByKidAndBankSuffix.get("Evan")}")
+				log.info("keys = ${interestRatesByKidAndBankSuffix.keySet()}")
+                def interestRatesForKid = interestRatesByKidAndBankSuffix.find { k, v -> k == kid }.getValue()
+                log.info("interestRatesForKid = $interestRatesForKid")
+				def interestRatePercent = interestRatesForKid.find{ k, v -> k == bankSuffix }.getValue()
+				log.info("Found interest rate: $interestRatePercent")
+                def interest = ((interestRatePercent / 100.0) * currentBalance)
+                log.info("Calculated Interest: ${interest}")
+                def roundedInterest = interest.round(new MathContext(2))
+                log.info("Rounded Interest: ${roundedInterest}")
+                log.info("${roundedInterest * 1000}")
+                def interestInMilliUnits = toMilliUnits(roundedInterest)
+				if(interest > 0) {
+					def transaction = [
+						account_id: accountId,
+						date: dateFormat.format(transactionDate),
+						amount: interestInMilliUnits,
+						payee_name: "$catName Interest",
+						category_id: catId,
+						memo: "Interest",
+						approved: true
+					]
+					transactions.add(transaction)
+				}
             }
         }
         return transactions
@@ -132,7 +158,7 @@ class RecordAllowance {
                 def catName = kid + bankSuffix
                 def categoryInfo = categoryInfoByCategoryName[catName]
                 def catId = categoryInfo.id
-                def allowance = bankSuffix.contains("Spend") ? 1 : 0.50
+                def allowance = allowanceRates.find { k, v -> k == bankSuffix }.getValue()
                 def allowanceInMilliUnits = toMilliUnits(allowance)
                 def transaction = [
                         account_id: accountId,
@@ -157,7 +183,7 @@ class RecordAllowance {
                 account_id: accountId,
                 date: dateFormat.format(transactionDate),
                 amount: -totalMilliUnits,
-                payee_name: "Allowance Jack and Evan",
+                payee_name: "Allowance ${kids.join(", ")}",
                 category_id: allowanceCategoryId,
                 memo: "Allowance and Interest combined",
                 approved: true
