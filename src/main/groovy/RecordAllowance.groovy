@@ -17,7 +17,7 @@ class RecordAllowance {
     def giveBankSuffix = " Give Bank"
     def allowanceRates = ["$spendBankSuffix": 1, "$saveBankSuffix": 0.5, "$giveBankSuffix": 0.5]
     def giveBankRate = 0.5
-    def bankSuffixes = [spendBankSuffix, saveBankSuffix]
+    def bankSuffixes = [spendBankSuffix, saveBankSuffix, giveBankSuffix]
 	
     def jack = "Jack"
     def evan = "Evan"
@@ -56,7 +56,7 @@ class RecordAllowance {
         transactionsThatNeedOffsetting.addAll(ra.generateNewAllowanceTransactions(allowanceEscrowAccountId, categoryInfo))
 
         transactions.addAll(transactionsThatNeedOffsetting)
-        transactions.addAll(ra.generateGiveBankTransactions(allowanceEscrowAccountId, categoryInfo))
+        //transactions.addAll(ra.generateGiveBankTransactions(allowanceEscrowAccountId, categoryInfo))
 
         transactions.addAll(ra.generateOffsettingTransaction(allowanceEscrowAccountId, transactionsThatNeedOffsetting, categoryInfo))
 
