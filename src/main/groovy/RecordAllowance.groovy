@@ -28,9 +28,28 @@ class RecordAllowance {
     def kidsWithSimpleAccounts = [evan, emily]
     def kidsWithAdvancedAccounts = [jack]
 
+    def advancedAllowanceDeposits = [
+            "Jack": [
+                    "Jack: Savings Account": 1,
+                    "Jack: Checking Account": 0.5,
+                    "Jack Give Bank": 0.5
+            ]
+    ]
+
+    def interestRatesByAccountType = [
+            "Checking": 0.25,
+            "Savings": 0.75,
+            "CD 2-Month": 2.25,
+            "CD 3-Month": 2.5,
+            "CD 6-Month": 2.75
+    ]
+
     static def dryRun = false
 
     static def inputDateFormat = new SimpleDateFormat("yyyy-MM-dd")
+
+    static def cdDateFormat = new SimpleDateFormat("MM/dd/yy")
+
 
     public static final void main(String[] args) {
         String accessToken = System.getenv("YNAB_ACCESS_TOKEN")
@@ -73,6 +92,10 @@ class RecordAllowance {
 
         transactionsThatNeedOffsetting.addAll(ra.generateInterestTransactionsForSimpleAccounts(allowanceEscrowAccountId, categoryInfo))
         transactionsThatNeedOffsetting.addAll(ra.generateNewAllowanceTransactionsForSimpleAccounts(allowanceEscrowAccountId, categoryInfo))
+
+        transactionsThatNeedOffsetting.addAll(ra.generateInterestTransactionsForAdvancedAccounts(allowanceEscrowAccountId, categoryInfo))
+        transactionsThatNeedOffsetting.addAll(ra.generateNewAllowanceTransactionsForAdvancedAccounts(allowanceEscrowAccountId, categoryInfo))
+
 
         transactions.addAll(transactionsThatNeedOffsetting)
         //transactions.addAll(ra.generateGiveBankTransactions(allowanceEscrowAccountId, categoryInfo))
@@ -197,6 +220,109 @@ class RecordAllowance {
         return transactions
 
     }
+
+    def generateInterestTransactionsForAdvancedAccounts(accountId, categoryInfoByCategoryName) {
+        def transactions = []
+
+        log.info("Interest Rate Configuration: ${interestRatesByAccountType}")
+        kidsWithAdvancedAccounts.each { kid ->
+            def categoriesToProcess = categoryInfoByCategoryName.findAll { String catName, category ->
+                //log.info("catName: $catName")
+                def catNameIncludesKid = catName.contains(kid)
+                if(!catNameIncludesKid) {
+                    return false
+                }
+                boolean categoryIsAccount = false
+                for(String accountType : interestRatesByAccountType.keySet()) {
+                    if(catName.contains(accountType)) {
+                        categoryIsAccount = true;
+                    }
+                }
+                return categoryIsAccount;
+            }
+
+            log.info("Categories to Process: ${categoriesToProcess.size()}: ${categoriesToProcess.keySet().join(", ")}");
+
+            categoriesToProcess.each { String catName, categoryInfo ->
+                String accountTypeName = null
+                for(String accountType : interestRatesByAccountType.keySet()) {
+                    if(catName.contains(accountType)) {
+                        accountTypeName = accountType
+                    }
+                }
+                if(accountTypeName == null) {
+                    throw new IllegalArgumentException("Couldn't Find Account Type for category: $catName")
+                }
+
+                log.info("Processing Account: ${catName}")
+                def skip = false
+                def interestRatePercent = interestRatesByAccountType[accountTypeName]
+                if(accountTypeName.startsWith("CD")) {
+                    def maturityDateStr = catName.split(" ")[-1]
+                    log.info("Processing CD With Maturity Date: $maturityDateStr")
+                    def maturityDate = cdDateFormat.parse(maturityDateStr)
+                    if(transactionDate.after(maturityDate)) {
+                        skip = true
+                        log.warn("Skipping Account: ${catName} because transactionDate: ${cdDateFormat.format(transactionDate)} is after the maturity date: ${cdDateFormat.format(maturityDate)}")
+                    }
+                }
+                if(!skip) {
+                    def currentBalance = toDollars(categoryInfo.balance)
+                    def interest = ((interestRatePercent / 100.0) * currentBalance)
+                    log.info("Calculated Interest: ${interest}")
+                    def roundedInterest = interest.round(new MathContext(3))
+                    log.info("Rounded Interest: ${roundedInterest}")
+                    log.info("${roundedInterest * 1000}")
+                    def interestInMilliUnits = toMilliUnits(roundedInterest)
+                    def catId = categoryInfo.id
+                    if(interest > 0) {
+                        log.info("Account: $catName produced: ${roundedInterest} on ${currentBalance} at rate: ${interestRatePercent}")
+                        def transaction = [
+                                account_id: accountId,
+                                date: dateFormat.format(transactionDate),
+                                amount: interestInMilliUnits,
+                                payee_name: "$catName Interest",
+                                category_id: catId,
+                                memo: "Interest",
+                                approved: true
+                        ]
+                        transactions.add(transaction)
+                    }
+
+                }
+            }
+        };
+        return transactions
+    }
+
+
+    def generateNewAllowanceTransactionsForAdvancedAccounts(accountId, categoryInfoByCategoryName) {
+        def transactions = []
+        kidsWithAdvancedAccounts.each { kid ->
+            def categoryNameToDepositAmount = advancedAllowanceDeposits[kid]
+            categoryNameToDepositAmount.each { catName, allowance ->
+                def categoryInfo = categoryInfoByCategoryName[catName]
+                def catId = categoryInfo.id
+                def allowanceInMilliUnits = toMilliUnits(allowance)
+                def transaction = [
+                        account_id : accountId,
+                        date       : dateFormat.format(transactionDate),
+                        amount     : allowanceInMilliUnits,
+                        payee_name : "To $catName",
+                        category_id: catId,
+                        memo       : "Allowance",
+                        approved   : true
+                ]
+                transactions.add(transaction)
+
+            }
+
+        }
+
+        return transactions
+
+    }
+
 
     def generateOffsettingTransaction(accountId, transactionsForAllowanceAndInterest, categoryInfoByCategoryName) {
         def totalMilliUnits = transactionsForAllowanceAndInterest.collect {t -> t.amount}.sum()
