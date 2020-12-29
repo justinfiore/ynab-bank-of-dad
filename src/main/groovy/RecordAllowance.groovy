@@ -5,6 +5,7 @@ import org.apache.commons.lang3.StringUtils
 
 import java.math.MathContext
 import java.text.SimpleDateFormat
+import groovy.util.CliBuilder
 
 /**
  *
@@ -18,12 +19,14 @@ class RecordAllowance {
     def allowanceRates = ["$spendBankSuffix": 1, "$saveBankSuffix": 0.5, "$giveBankSuffix": 0.5]
     def giveBankRate = 0.5
     def bankSuffixes = [spendBankSuffix, saveBankSuffix, giveBankSuffix]
-	
+	static def DRY_RUN_PREFIX = "[DRY RUN] Would have "
     def jack = "Jack"
     def evan = "Evan"
     def emily = "Emily"
     def kidsWithoutInterest = []
     def kids = [jack, evan, emily]
+
+    static def dryRun = false
 
 
 
@@ -34,10 +37,26 @@ class RecordAllowance {
         if(StringUtils.isBlank(accessToken)) {
             throw new IllegalArgumentException("environment variable YNAB_ACCESS_TOKEN must be set")
         }
+
+        def cli = new CliBuilder(usage:'RecordAllowance')
+        cli.d(longOpt: 'date', args: 1, argName: 'Date to use', "Date to use: YYYY-MM-DD. Default: Current Date")
+        cli._(longOpt: 'dry-run', "Dry Run. Don't actually execute")
+        cli.h(longOpt: 'help', "Help")
+        def options = cli.parse(args)
+
+
         def date = new Date()
-        if(args.length > 0) {
-            def dateStr = args[0]
+        if(options.d) {
+            def dateStr = options.d
             date = inputDateFormat.parse(dateStr)
+        }
+        if(options.'dry-run') {
+            dryRun = true;
+            println("Dry Run Enabled.")
+        }
+        if(options.h) {
+            cli.usage()
+            System.exit(0)
         }
         println("Using Date: $date")
         def ra = new RecordAllowance(accessToken, date)
@@ -65,9 +84,12 @@ class RecordAllowance {
 
         log.info("Transactions to add: ${JsonOutput.prettyPrint(JsonOutput.toJson(transactions))}")
 
-        def postedTransactions = ra.postTransactions(transactions)
-        log.info("Successfully posted the following transactions: ${JsonOutput.prettyPrint(JsonOutput.toJson(postedTransactions))}")
-
+        if(!dryRun) {
+            def postedTransactions = ra.postTransactions(transactions)
+            log.info("Successfully posted the following transactions: ${JsonOutput.prettyPrint(JsonOutput.toJson(postedTransactions))}")
+        } else {
+            log.info(DRY_RUN_PREFIX + " posted the following transactions: ${JsonOutput.prettyPrint(JsonOutput.toJson(transactions))}")
+        }
     }
 
     def accessToken = null
