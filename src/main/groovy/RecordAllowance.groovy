@@ -5,7 +5,6 @@ import org.apache.commons.lang3.StringUtils
 
 import java.math.MathContext
 import java.text.SimpleDateFormat
-import groovy.util.CliBuilder
 
 /**
  *
@@ -20,15 +19,16 @@ class RecordAllowance {
     def giveBankRate = 0.5
     def bankSuffixes = [spendBankSuffix, saveBankSuffix, giveBankSuffix]
 	static def DRY_RUN_PREFIX = "[DRY RUN] Would have "
+
+
     def jack = "Jack"
     def evan = "Evan"
     def emily = "Emily"
     def kidsWithoutInterest = []
-    def kids = [jack, evan, emily]
+    def kidsWithSimpleAccounts = [evan, emily]
+    def kidsWithAdvancedAccounts = [jack]
 
     static def dryRun = false
-
-
 
     static def inputDateFormat = new SimpleDateFormat("yyyy-MM-dd")
 
@@ -71,8 +71,8 @@ class RecordAllowance {
 
         def transactionsThatNeedOffsetting = []
 
-        transactionsThatNeedOffsetting.addAll(ra.generateInterestTransactions(allowanceEscrowAccountId, categoryInfo))
-        transactionsThatNeedOffsetting.addAll(ra.generateNewAllowanceTransactions(allowanceEscrowAccountId, categoryInfo))
+        transactionsThatNeedOffsetting.addAll(ra.generateInterestTransactionsForSimpleAccounts(allowanceEscrowAccountId, categoryInfo))
+        transactionsThatNeedOffsetting.addAll(ra.generateNewAllowanceTransactionsForSimpleAccounts(allowanceEscrowAccountId, categoryInfo))
 
         transactions.addAll(transactionsThatNeedOffsetting)
         //transactions.addAll(ra.generateGiveBankTransactions(allowanceEscrowAccountId, categoryInfo))
@@ -108,7 +108,7 @@ class RecordAllowance {
             request.headers['Accept'] = "application/json"
         }
 
-        budgetId = getLatestBudgetId()
+        budgetId = getLatestBudgetId("Fiores")
 
         log.info("Most Recent Budget ID: $budgetId")
 
@@ -126,7 +126,7 @@ class RecordAllowance {
         return r
     }
 
-    def generateInterestTransactions(accountId, categoryInfoByCategoryName) {
+    def generateInterestTransactionsForSimpleAccounts(accountId, categoryInfoByCategoryName) {
         def transactions = []
         def interestRatesByKidAndBankSuffix = [
                 "$jack": ["$spendBankSuffix": 2.0, "$saveBankSuffix": 1.0, "$giveBankSuffix": 0.0],
@@ -134,7 +134,7 @@ class RecordAllowance {
                 "$emily": ["$spendBankSuffix": 2.0, "$saveBankSuffix": 1.0, "$giveBankSuffix": 0.0]
         ]
         log.info("Interest Rate Configuration: ${interestRatesByKidAndBankSuffix}")
-        kids.each { kid ->
+        kidsWithSimpleAccounts.each { kid ->
             bankSuffixes.each { bankSuffix ->
                 def catName = kid + bankSuffix
                 def categoryInfo = categoryInfoByCategoryName[catName]
@@ -173,9 +173,9 @@ class RecordAllowance {
         return transactions
     }
 
-    def generateNewAllowanceTransactions(accountId, categoryInfoByCategoryName) {
+    def generateNewAllowanceTransactionsForSimpleAccounts(accountId, categoryInfoByCategoryName) {
         def transactions = []
-        kids.each { kid ->
+        kidsWithSimpleAccounts.each { kid ->
             bankSuffixes.each { bankSuffix ->
                 def catName = kid + bankSuffix
                 def categoryInfo = categoryInfoByCategoryName[catName]
@@ -205,7 +205,7 @@ class RecordAllowance {
                 account_id: accountId,
                 date: dateFormat.format(transactionDate),
                 amount: -totalMilliUnits,
-                payee_name: "Allowance ${kids.join(", ")}",
+                payee_name: "Allowance ${kidsWithSimpleAccounts.join(", ")}",
                 category_id: allowanceCategoryId,
                 memo: "Allowance and Interest combined",
                 approved: true
@@ -214,7 +214,7 @@ class RecordAllowance {
 
     def generateGiveBankTransactions(accountId, categoryInfoByCategoryName) {
         def allowanceCategoryId = categoryInfoByCategoryName["Allowance"].id
-        return kids.collect { kid ->
+        return kidsWithSimpleAccounts.collect { kid ->
             [
                 account_id: accountId,
                 date: dateFormat.format(transactionDate),
@@ -290,12 +290,12 @@ class RecordAllowance {
 
     def dateFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssX")
 
-    def getLatestBudgetId() {
+    def getLatestBudgetId(budgetName) {
         def response = getBudgets()
 
         def budgets = []
         budgets.addAll(response.data.budgets)
-        def sortedBudgets = budgets.toSorted { a, b ->
+        def sortedBudgets = budgets.findAll{ b -> b.name == budgetName }.toSorted { a, b ->
             def bDate = dateFormat.parse(b.last_modified_on)
             def aDate = dateFormat.parse(a.last_modified_on)
             bDate.getTime() <=> aDate.getTime()
