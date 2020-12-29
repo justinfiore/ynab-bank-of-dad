@@ -30,18 +30,18 @@ class RecordAllowance {
 
     def advancedAllowanceDeposits = [
             "Jack": [
-                    "Jack: Savings Account": 1,
- //                   "Jack: Checking Account": 0,
+                    "Jack: Silver Account": 1,
+ //                   "Jack: Bronze Account": 0,
                     "Jack Give Bank": 0.5
             ]
     ]
 
     def interestRatesByAccountType = [
-            "Checking": 0.25,
-            "Savings": 0.75,
-            "CD 2-Month": 2.25,
-            "CD 3-Month": 2.5,
-            "CD 6-Month": 2.75
+            "Bronze": 0.25,
+            "Silver": 0.75,
+            "Gold CD 2-Month": 2.25,
+            "Gold CD 3-Month": 2.5,
+            "Gold CD 6-Month": 2.75
     ]
 
     static def dryRun = false
