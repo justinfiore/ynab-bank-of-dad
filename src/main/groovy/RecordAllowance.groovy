@@ -30,13 +30,13 @@ class RecordAllowance {
 
     def advancedAllowanceDeposits = [
             "Jack": [
-                    "Jack: Silver Account": 1,
- //                   "Jack: Bronze Account": 0,
+                    "Jack Silver Account": 1,
+ //                   "Jack Bronze Account": 0,
                     "Jack Give Bank": 0.5
             ],
             "Evan": [
-                    "Evan: Silver Account": 1,
-                    // "Evan: Bronze Account": 0,
+                    "Evan Silver Account": 1,
+                    // "Evan Bronze Account": 0,
                     "Evan Give Bank": 0.5
             ],
 
