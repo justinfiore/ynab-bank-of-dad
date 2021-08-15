@@ -25,8 +25,8 @@ class RecordAllowance {
     def evan = "Evan"
     def emily = "Emily"
     def kidsWithoutInterest = []
-    def kidsWithSimpleAccounts = [emily]
-    def kidsWithAdvancedAccounts = [jack, evan]
+    def kidsWithSimpleAccounts = []
+    def kidsWithAdvancedAccounts = [jack, evan, emily]
 
     def advancedAllowanceDeposits = [
             "Jack": [
@@ -39,6 +39,11 @@ class RecordAllowance {
                     // "Evan Bronze Account": 0,
                     "Evan Give Bank": 0.5
             ],
+            "Emily": [
+                    "Emily Silver Account": 1,
+                    // "Emily Bronze Account": 0,
+                    "Emily Give Bank": 0.5
+            ]
 
     ]
 
