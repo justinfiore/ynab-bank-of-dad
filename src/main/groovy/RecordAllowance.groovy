@@ -52,7 +52,8 @@ class RecordAllowance {
             "Silver": 0.75,
             "Gold CD 2-Month": 2.25,
             "Gold CD 3-Month": 2.5,
-            "Gold CD 6-Month": 2.75
+            "Gold CD 6-Month": 2.75,
+            "First Car Fund": 2.75
     ]
 
     static def dryRun = false
