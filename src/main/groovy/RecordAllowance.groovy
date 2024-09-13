@@ -36,7 +36,7 @@ class RecordAllowance {
                     "Jack Give Bank": 0.5
             ],
             "Evan": [
-                    "Evan Silver Account": 1,
+                    "Evan Silver Account": 3,
                     // "Evan Bronze Account": 0,
                     "Evan Give Bank": 0.5
             ],
