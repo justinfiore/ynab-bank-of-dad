@@ -53,13 +53,34 @@ class RecordAllowance {
 
     ]
 
-    def interestRatesByAccountType = [
-            "Bronze": 0.25,
-            "Silver": 0.75,
-            "Gold CD 2-Month": 2.25,
-            "Gold CD 3-Month": 2.5,
-            "Gold CD 6-Month": 2.75,
-            "First Car Fund": 2.75
+    def accountTypes = [
+            "Bronze",
+            "Silver",
+            "Gold CD 2-Month",
+            "Gold CD 3-Month",
+            "Gold CD 6-Month",
+            "First Car Fund"
+    ]
+
+    def interestRatesByAccountTypeAndDate = [
+            "Current": [
+                "Bronze": 0.25,
+                "Silver": 0.75,
+                "Gold CD 2-Month": 1.50,
+                "Gold CD 3-Month": 1.75,
+                "Gold CD 6-Month": 2.00,
+                "First Car Fund": 2.00
+            ],
+            "2024-12-25": [
+                "Gold CD 2-Month": 1.75,
+                "Gold CD 3-Month": 2.00,
+                "Gold CD 6-Month": 2.25,
+            ],
+            "2024-11-23": [
+                "Gold CD 2-Month": 2.25,
+                "Gold CD 3-Month": 2.5,
+                "Gold CD 6-Month": 2.75
+            ]
     ]
 
     static def dryRun = false
@@ -67,6 +88,7 @@ class RecordAllowance {
     static def inputDateFormat = new SimpleDateFormat("yyyy-MM-dd")
 
     static def cdDateFormat = new SimpleDateFormat("MM/dd/yy")
+    static def yyyymmddDateFormat = new SimpleDateFormat("yyyy-MM-dd")
 
 
     public static final void main(String[] args) {
@@ -174,7 +196,7 @@ class RecordAllowance {
                 "$evan": ["$spendBankSuffix": 2.0, "$saveBankSuffix": 1.0, "$giveBankSuffix": 0.0],
                 "$emily": ["$spendBankSuffix": 2.0, "$saveBankSuffix": 1.0, "$giveBankSuffix": 0.0]
         ]
-        log.info("Interest Rate Configuration: ${interestRatesByKidAndBankSuffix}")
+        log.info("Interest Rate Configuration (Simple): ${interestRatesByKidAndBankSuffix}")
         kidsWithSimpleAccounts.each { kid ->
             bankSuffixes.each { bankSuffix ->
                 def catName = kid + bankSuffix
@@ -242,7 +264,7 @@ class RecordAllowance {
     def generateInterestTransactionsForAdvancedAccounts(accountId, categoryInfoByCategoryName) {
         def transactions = []
 
-        log.info("Interest Rate Configuration: ${interestRatesByAccountType}")
+        log.info("Interest Rate Configuration (Advanced): ${interestRatesByAccountTypeAndDate}")
         kidsWithAdvancedAccounts.each { kid ->
             def categoriesToProcess = categoryInfoByCategoryName.findAll { String catName, category ->
                 //log.info("catName: $catName")
@@ -251,7 +273,7 @@ class RecordAllowance {
                     return false
                 }
                 boolean categoryIsAccount = false
-                for(String accountType : interestRatesByAccountType.keySet()) {
+                for(String accountType : accountTypes) {
                     if(catName.contains(accountType)) {
                         categoryIsAccount = true;
                     }
@@ -263,7 +285,7 @@ class RecordAllowance {
 
             categoriesToProcess.each { String catName, categoryInfo ->
                 String accountTypeName = null
-                for(String accountType : interestRatesByAccountType.keySet()) {
+                for(String accountType : accountTypes) {
                     if(catName.contains(accountType)) {
                         accountTypeName = accountType
                     }
@@ -272,10 +294,13 @@ class RecordAllowance {
                     throw new IllegalArgumentException("Couldn't Find Account Type for category: $catName")
                 }
 
-                log.info("Processing Account: ${catName}")
+                log.info("Processing Account: ${catName} of type: ${accountTypeName}")
                 def skip = false
-                def interestRatePercent = interestRatesByAccountType[accountTypeName]
-                if(accountTypeName.startsWith("CD")) {
+                // Get the "Current" interest rates by default.
+
+                def interestRatePercent = interestRatesByAccountTypeAndDate["Current"][accountTypeName]
+                // If it is a CD, we will make sure it isn't expired and then figure out the correct interest rate depending on the CD Origination Date.
+                if(accountTypeName.startsWith("Gold CD")) {
                     def maturityDateStr = catName.split(" ")[-1]
                     log.info("Processing CD With Maturity Date: $maturityDateStr")
                     def maturityDate = cdDateFormat.parse(maturityDateStr)
@@ -283,18 +308,26 @@ class RecordAllowance {
                         skip = true
                         log.warn("Skipping Account: ${catName} because transactionDate: ${cdDateFormat.format(transactionDate)} is after the maturity date: ${cdDateFormat.format(maturityDate)}")
                     }
+                    if(!skip) {
+                        def originationDate = getCDOriginationDate(catName, maturityDate)
+                        log.info("Finding CD Interest Rate for category: ${catName} based on origination date: ${originationDate} ...")
+                        def interestRatesForCDOriginationDate = findInterestRatesForDate(originationDate)
+                        interestRatePercent = interestRatesForCDOriginationDate[accountTypeName]
+                        log.info("Found CD Interest Rate for category: ${catName} of: ${interestRatePercent}%")
+                    }
                 }
                 if(!skip) {
+
                     def currentBalance = toDollars(categoryInfo.balance)
                     def interest = ((interestRatePercent / 100.0) * currentBalance)
-                    log.info("Calculated Interest: ${interest}")
+                    log.info("Calculated Interest: \$${interest}")
                     def roundedInterest = interest.round(new MathContext(3))
-                    log.info("Rounded Interest: ${roundedInterest}")
-                    log.info("${roundedInterest * 1000}")
+                    log.info("Rounded Interest: \$${roundedInterest}")
+                    //log.info("${roundedInterest * 1000}")
                     def interestInMilliUnits = toMilliUnits(roundedInterest)
                     def catId = categoryInfo.id
                     if(interest > 0) {
-                        log.info("Account: $catName produced: ${roundedInterest} on ${currentBalance} at rate: ${interestRatePercent}")
+                        log.info("Account: $catName produced: \$${roundedInterest} on \$${currentBalance} at rate: ${interestRatePercent}%")
                         def transaction = [
                                 account_id: accountId,
                                 date: dateFormat.format(transactionDate),
@@ -311,6 +344,53 @@ class RecordAllowance {
             }
         };
         return transactions
+    }
+
+    def interestRatesByDate = null;
+
+    static def getCDOriginationDate(categoryName, maturityDate) {
+        Calendar cal = Calendar.getInstance()
+        cal.setTime(maturityDate)
+        if(categoryName.contains("6-Month")) {
+            cal.add(Calendar.MONTH, -6)
+        } else if(categoryName.contains("3-Month")) {
+            cal.add(Calendar.MONTH, -3)
+        } else if(categoryName.contains("2-Month")) {
+            cal.add(Calendar.MONTH, -2)
+        } else {
+            throw new IllegalStateException("Could not calculate CD Origination Date from category: ${categoryName}")
+        }
+        return cal.getTime()
+    }
+
+    def getInterestRatesByDate() {
+        if(interestRatesByDate == null){
+            def t = new TreeMap();
+            for(Map.Entry<String, Map> e : interestRatesByAccountTypeAndDate.entrySet()) {
+                def dateKey = this.transactionDate;
+                if(e.getKey() != "Current") {
+                    dateKey = yyyymmddDateFormat.parse(e.getKey())
+                }
+                t[dateKey] = e.getValue()
+            }
+            interestRatesByDate = t;
+        }
+        return interestRatesByDate;
+    }
+
+    def findInterestRatesForDate(date) {
+        // Sorted oldest To Newest
+        def interestRatesByDate = getInterestRatesByDate()
+
+        for(Map.Entry<Date, Map> e : interestRatesByDate.entrySet()) {
+            // If the origination date of the CD is before the current date in the interest rate map, then we found the right rate
+            if(date.before(e.getKey())) {
+                return e.getValue()
+            } else if(date.equals(e.getKey())) {
+                return e.getValue();
+            }
+        }
+        throw new IllegalStateException("Could not find interest rates for date: ${date}")
     }
 
 
