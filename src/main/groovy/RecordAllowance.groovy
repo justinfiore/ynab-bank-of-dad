@@ -31,7 +31,7 @@ class RecordAllowance {
 
     def advancedAllowanceDeposits = [
             "Jack": [
-                    "Jack Silver Account": 1,
+                    "Jack Silver Account": 3,
  //                   "Jack Bronze Account": 0,
                     "Jack Give Bank": 0.5
             ],
@@ -64,12 +64,20 @@ class RecordAllowance {
 
     def interestRatesByAccountTypeAndDate = [
             "Current": [
-                "Bronze": 0.25,
-                "Silver": 0.75,
-                "Gold CD 2-Month": 1.50,
-                "Gold CD 3-Month": 1.75,
-                "Gold CD 6-Month": 2.00,
-                "First Car Fund": 2.00
+                "Bronze": 0.1,
+                "Silver": 0.5,
+                "Gold CD 2-Month": 0.75,
+                "Gold CD 3-Month": 1.00,
+                "Gold CD 6-Month": 1.25,
+                "First Car Fund": 1.25
+            ],
+            "2025-04-14": [
+                    "Bronze": 0.25,
+                    "Silver": 0.75,
+                    "Gold CD 2-Month": 1.50,
+                    "Gold CD 3-Month": 1.75,
+                    "Gold CD 6-Month": 2.00,
+                    "First Car Fund": 2.00
             ],
             "2024-12-25": [
                 "Gold CD 2-Month": 1.75,
