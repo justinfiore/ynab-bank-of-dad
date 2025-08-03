@@ -65,11 +65,19 @@ class RecordAllowance {
     def interestRatesByAccountTypeAndDate = [
             "Current": [
                 "Bronze": 0.1,
-                "Silver": 0.5,
-                "Gold CD 2-Month": 0.75,
-                "Gold CD 3-Month": 1.00,
-                "Gold CD 6-Month": 1.25,
-                "First Car Fund": 1.25
+                "Silver": 0.15,
+                "Gold CD 2-Month": 0.25,
+                "Gold CD 3-Month": 0.35,
+                "Gold CD 6-Month": 0.65,
+                "First Car Fund": 0.65
+            ],
+            "2025-06-01": [
+                    "Bronze": 0.1,
+                    "Silver": 0.5,
+                    "Gold CD 2-Month": 0.75,
+                    "Gold CD 3-Month": 1.00,
+                    "Gold CD 6-Month": 1.25,
+                    "First Car Fund": 1.25
             ],
             "2025-04-14": [
                     "Bronze": 0.25,
