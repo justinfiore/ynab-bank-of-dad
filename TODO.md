@@ -2,11 +2,11 @@
 
 High-level prioritized work items for this repo. These are intentionally lightweight placeholders that can later be expanded into OpenSpec changes/specs. Keep this list ordered by priority and check items off when they are complete.
 
-1. [ ] Add unit and integration tests
-   - Evaluate current, well-supported Groovy BDD-style testing frameworks that are compatible with the repo’s current Groovy and Java versions.
-   - Select a unit testing framework and mocking framework.
-   - Determine whether integration tests should use a mock HTTP layer and assess tools such as WireMock/OpenWire for simulating the YNAB API.
-   - Add coverage for core calculation logic and YNAB API interaction paths.
+1. [x] Add unit and integration tests
+   - Completed on branch `opsx-explore-tests-plan` via archived OpenSpec change `2026-06-28-add-automated-tests`.
+   - Added Spock 1.3 (`groovy-2.4`) unit tests and WireMock 1.58 integration-style tests compatible with the current Groovy 2.4 / Java 8 stack.
+   - Added coverage for core calculation logic, budget/account/category lookup, and bulk transaction posting behavior.
+   - Configured Gradle test runs to emit both JUnit XML and HTML reports, and documented the required `./gradlew test` workflow.
 
 2. [ ] Upgrade the main tech stack
    - Upgrade Java to the latest LTS release.
@@ -28,3 +28,7 @@ High-level prioritized work items for this repo. These are intentionally lightwe
 5. [ ] Support parent/child budget transaction syncing
    - Add support for syncing transactions between the parent YNAB budget and child YNAB budgets.
    - Define the expected sync model, mapping rules, and safety checks before implementation.
+
+6. [ ] Add licensing and public-hosting readiness
+   - Add a `LICENSE` file.
+   - Move the Git repo to GitHub or another location where it can be shared publicly.
