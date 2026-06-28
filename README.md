@@ -111,9 +111,51 @@ The script supports:
 ## Requirements
 
 To run this project you need:
-- Java/JDK installed
+- Java JDK 8 installed
+- `JAVA_HOME` set to your JDK 8 installation directory
 - Gradle wrapper support (`./gradlew` is included)
 - a valid YNAB personal access token in `YNAB_ACCESS_TOKEN`
+
+This project requires Java 8 specifically. On the Linux build host used for verification, the working version was:
+
+```text
+openjdk version "1.8.0_492"
+OpenJDK Runtime Environment (build 1.8.0_492-8u492-ga~us2-0ubuntu1~24.04.1-b09)
+OpenJDK 64-Bit Server VM (build 25.492-b09, mixed mode)
+```
+
+### Installing Java JDK 8 on Ubuntu / Linux Mint
+
+```bash
+sudo apt-get update
+sudo apt-get install -y openjdk-8-jdk
+```
+
+### Setting `JAVA_HOME`
+
+Typical Linux value for this environment:
+
+```bash
+export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64
+export PATH="$JAVA_HOME/bin:$PATH"
+```
+
+To verify:
+
+```bash
+java -version
+javac -version
+echo "$JAVA_HOME"
+```
+
+If you want this to persist across shells, add the `export` lines to your shell profile such as `~/.bashrc` or `~/.zshrc`.
+
+PowerShell example:
+
+```powershell
+$env:JAVA_HOME = 'C:\Program Files\Java\jdk1.8.0_xxx'
+$env:Path = "$env:JAVA_HOME\bin;$env:Path"
+```
 
 ## Running the app
 
@@ -147,6 +189,13 @@ You can also build a distributable installation:
 
 ```bash
 ./gradlew installDist
+```
+
+### Verified build note
+The project build environment was verified after Java 8 installation by successfully running:
+
+```bash
+./gradlew tasks --all
 ```
 
 ## CLI options
@@ -185,7 +234,6 @@ Current expected workflow:
 
 - No automated tests are currently present.
 - Most business logic is hard-coded inside a single Groovy file.
-- On the Hermes environment used for this documentation update, Java was not installed/configured, so Gradle task verification could not be executed there.
 
 ## Suggested next improvements
 
