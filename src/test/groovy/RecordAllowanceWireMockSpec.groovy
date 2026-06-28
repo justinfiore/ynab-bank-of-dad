@@ -1,3 +1,4 @@
+import groovy.json.JsonSlurper
 import com.github.tomakehurst.wiremock.WireMockServer
 import groovyx.net.http.HttpBuilder
 import spock.lang.Specification
@@ -133,9 +134,7 @@ class RecordAllowanceWireMockSpec extends Specification {
 
         and:
         def recordAllowance = new RecordAllowance('token', new Date(), true, buildClient())
-
-        when:
-        def response = recordAllowance.postTransactions([[
+        def transactions = [[
             account_id: 'acct-1',
             date: '2025-07-06T00:00:00Z',
             amount: 1000,
@@ -143,12 +142,18 @@ class RecordAllowanceWireMockSpec extends Specification {
             category_id: 'cat-1',
             memo: 'memo',
             approved: true
-        ]])
+        ]]
+
+        when:
+        def response = recordAllowance.postTransactions(transactions)
+        def requests = wireMockServer.findAll(postRequestedFor(urlEqualTo('/v1/budgets/budget-new/transactions/bulk')))
+        def body = new JsonSlurper().parseText(requests[0].bodyAsString)
 
         then:
         response.data.bulk.transaction_ids == ['txn-1']
-        verify(postRequestedFor(urlEqualTo('/v1/budgets/budget-new/transactions/bulk'))
-            .withHeader('Authorization', equalTo('Bearer token')))
+        requests.size() == 1
+        requests[0].getHeader('Authorization') == 'Bearer token'
+        body.transactions == transactions
     }
 
     private HttpBuilder buildClient() {

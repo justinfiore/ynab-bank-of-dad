@@ -34,16 +34,14 @@ class RecordAllowanceSpec extends Specification {
         RecordAllowance.cdDateFormat.format(RecordAllowance.getCDOriginationDate('Jack Gold CD 6-Month 08/15/25', maturityDate)) == '02/15/25'
     }
 
-    def "findInterestRatesForDate returns rate table matching origination date"() {
+    def "findInterestRatesForDate returns earliest known table for earlier origination dates"() {
         given:
         def recordAllowance = new RecordAllowance('token', dateFormat.parse('2025-07-06'), false)
 
-        when:
-        def rates = recordAllowance.findInterestRatesForDate(dateFormat.parse('2025-05-01'))
-
-        then:
-        rates['Silver'] == 0.5
-        rates['Gold CD 6-Month'] == 1.25
+        expect:
+        recordAllowance.findInterestRatesForDate(dateFormat.parse('2025-05-01'))['Silver'] == 0.5
+        recordAllowance.findInterestRatesForDate(dateFormat.parse('2025-04-14'))['Silver'] == 0.75
+        recordAllowance.findInterestRatesForDate(dateFormat.parse('2024-01-01'))['Gold CD 2-Month'] == 2.25
     }
 
     def "generateNewAllowanceTransactionsForAdvancedAccounts produces configured deposits"() {
@@ -87,12 +85,30 @@ class RecordAllowanceSpec extends Specification {
 
         when:
         def transactions = recordAllowance.generateInterestTransactionsForAdvancedAccounts('allowance-escrow', categoryInfo)
+        def byCategory = transactions.collectEntries { [(it.category_id): it] }
 
         then:
-        transactions*.category_id.containsAll(['jack-silver', 'evan-silver', 'emily-silver', 'colin-silver', 'colin-bronze', 'colin-cd'])
-        transactions.find { it.category_id == 'jack-silver' }.amount == 300
-        transactions.find { it.category_id == 'colin-bronze' }.amount == 100
-        transactions.find { it.category_id == 'colin-cd' }.amount == 250
+        transactions.size() == 6
+        byCategory.keySet() == ['jack-silver', 'evan-silver', 'emily-silver', 'colin-silver', 'colin-bronze', 'colin-cd'] as Set
+        byCategory['jack-silver'].amount == 300
+        byCategory['colin-bronze'].amount == 100
+        byCategory['colin-cd'].amount == 250
+        byCategory.values().every { it.account_id == 'allowance-escrow' }
+        byCategory.values().every { it.memo == 'Interest' }
+    }
+
+    def "generateInterestTransactionsForAdvancedAccounts skips matured cds"() {
+        given:
+        def recordAllowance = new RecordAllowance('token', dateFormat.parse('2025-07-06'), false)
+        def categoryInfo = [
+            'Colin Gold CD 2-Month 06/01/25': [id: 'matured-cd', balance: 100000]
+        ]
+
+        when:
+        def transactions = recordAllowance.generateInterestTransactionsForAdvancedAccounts('allowance-escrow', categoryInfo)
+
+        then:
+        transactions.empty
     }
 
     def "generateOffsettingTransaction offsets the total of allowance and interest transactions"() {

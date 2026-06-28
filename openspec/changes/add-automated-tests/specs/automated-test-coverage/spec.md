@@ -11,8 +11,8 @@ The project SHALL include automated Spock specifications that run under the exis
 - **WHEN** the specifications exercise category/account naming and allowance logic
 - **THEN** they SHALL reflect the current hard-coded assumptions used by the application, including the `Allowance` category, `Allowance Escrow` account, advanced account type names, and the existing CLI date-handling rules
 
-### Requirement: The project SHALL provide simulated YNAB API integration tests using OpenWire
-The project SHALL include automated integration-style tests that simulate the YNAB REST API through OpenWire-compatible HTTP fixtures so the CLI's current API interaction paths can be verified without live YNAB credentials or real transaction posting.
+### Requirement: The project SHALL provide simulated YNAB API integration tests using WireMock
+The project SHALL include automated integration-style tests that simulate the YNAB REST API through WireMock HTTP fixtures so the CLI's current API interaction paths can be verified without live YNAB credentials or real transaction posting.
 
 #### Scenario: Latest Fiores budget selection is validated without live API access
 - **WHEN** the integration test suite simulates multiple YNAB budgets including more than one budget named `Fiores`
