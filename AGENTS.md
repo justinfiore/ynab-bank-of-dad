@@ -75,6 +75,10 @@ For CDs, category names are expected to end with a maturity date formatted as `M
 - CD rates are selected based on derived origination date against the dated rate table.
 
 ## Important implementation details
+- The project's primary external dependency is the YNAB REST API.
+- YNAB API docs: `https://api.ynab.com/`
+- Always consult the YNAB API docs when making or planning changes to API calls.
+- Do not guess at YNAB API contracts, field names, request bodies, or response structures.
 - Money is converted between YNAB milliunits and dollars using helper methods:
   - `toDollars(milliunits)`
   - `toMilliUnits(dollars)`
@@ -91,13 +95,24 @@ For CDs, category names are expected to end with a maturity date formatted as `M
 
 ## Build and run notes
 - Wrapper scripts are present: `./gradlew` and `gradlew.bat`.
+- Java JDK 8 is now installed and verified on this Hermes host.
+- Verified build commands on this host:
+  - `./gradlew tasks --all`
+  - `./gradlew installDist`
+  - `./gradlew test`
 - Typical safe first run pattern on Linux/macOS:
-  1. export `YNAB_ACCESS_TOKEN`
-  2. run `./gradlew installDist`
-  3. run the app with `--dry-run`
+  1. export `JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64`
+  2. export `YNAB_ACCESS_TOKEN`
+  3. run `./gradlew installDist`
+  4. run the app with `--dry-run`
 - Example:
-  - `YNAB_ACCESS_TOKEN=... ./gradlew run --args='--dry-run --date 2025-08-03'`
-- On this Hermes host, Java is not currently installed/configured, so Gradle verification cannot run here until a JDK is available.
+  - `JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64 YNAB_ACCESS_TOKEN=... ./gradlew run --args='--dry-run --date 2025-08-03'`
+
+## OpenSpec status
+- OpenSpec is initialized in this repo.
+- Project configuration lives in `openspec/config.yaml` and has been customized for this codebase.
+- Repo-local OpenSpec command/skill guidance exists under `.claude/commands/opsx/` and `.claude/skills/`.
+- For brownfield OpenSpec work in this repo, prefer delta specs for the slice being changed instead of trying to spec the whole system up front.
 
 ## Safe change guidance for future work
 - Preserve exact YNAB category/account names unless you are intentionally updating the corresponding lookup logic.
@@ -114,7 +129,6 @@ For CDs, category names are expected to end with a maturity date formatted as `M
 ## Known issues / tech debt observed during inspection
 - No README existed prior to this documentation pass.
 - No automated tests are present in the repo today.
-- No Java toolchain is installed on this Hermes machine, so `./gradlew tasks --all` currently fails until Java is configured.
 - Sensitive token material appears in the checked-in Windows batch helper scripts and should be rotated/removed if those values are real.
 - The script currently logs the access token, which should likely be removed or masked.
 - Most business rules are hard-coded inside one large script; future refactors may benefit from extracting configuration and calculation logic.
