@@ -1,20 +1,64 @@
 schema: spec-driven
 
-# Project context (optional)
-# This is shown to AI when creating artifacts.
-# Add your tech stack, conventions, style guides, domain knowledge, etc.
-# Example:
-#   context: |
-#     Tech stack: TypeScript, React, Node.js
-#     We use conventional commits
-#     Domain: e-commerce platform
+context: |
+  Project: YNAB Bank of Dad
+  Purpose: A Groovy + Gradle command-line utility that records weekly allowance and interest transactions into YNAB.
 
-# Per-artifact rules (optional)
-# Add custom rules for specific artifacts.
-# Example:
-#   rules:
-#     proposal:
-#       - Keep proposals under 500 words
-#       - Always include a "Non-goals" section
-#     tasks:
-#       - Break tasks into chunks of max 2 hours
+  Tech stack:
+  - Groovy 2.4.x
+  - Gradle 4.2.1 wrapper
+  - Java JDK 8 required
+  - http-builder-ng-apache for YNAB API calls
+  - Logback for logging
+
+  Runtime and operations:
+  - Main entry point is RecordAllowance in src/main/groovy/RecordAllowance.groovy.
+  - The application requires YNAB_ACCESS_TOKEN.
+  - JAVA_HOME should point to a JDK 8 installation.
+  - Typical Linux JAVA_HOME on this host is /usr/lib/jvm/java-8-openjdk-amd64.
+  - Safe first runs should use --dry-run before creating real YNAB transactions.
+  - Build verification currently known to work with ./gradlew tasks --all, ./gradlew installDist, and ./gradlew test.
+
+  Domain model and hard-coded assumptions:
+  - The script talks directly to https://api.youneedabudget.com.
+  - It selects the most recently modified budget named Fiores.
+  - It looks up the YNAB account named Allowance Escrow.
+  - It expects a budget category named Allowance.
+  - Category names are significant and must match exact hard-coded strings.
+  - Simple-account bank suffixes are " Spend Bank", " Save Bank", and " Give Bank".
+  - Advanced account types are detected by substring matching: Bronze, Silver, Gold CD 2-Month, Gold CD 3-Month, Gold CD 6-Month, First Car Fund.
+  - CD categories are expected to end with a maturity date formatted as MM/dd/yy.
+  - Current advanced-account kids configured in code are Jack, Evan, Emily, and Colin.
+  - Most business rules are hard-coded in one script rather than externalized.
+
+  Repository and workflow conventions:
+  - This repo is hosted on a private git server, not GitHub or GitLab.
+  - Default branch work means commit directly to master after pulling the latest remote state first.
+  - Feature work normally happens on branches; "merge" means merge into master and push master to the remote.
+  - Commit openspec/ artifacts to git alongside code changes.
+  - For brownfield OpenSpec work, do not document the whole codebase up front; write deltas only for the slice being changed.
+
+rules:
+  proposal:
+    - Keep proposals grounded in the current codebase and describe the real motivation for the change.
+    - Explicitly identify any YNAB naming assumptions, environment variables, or runtime prerequisites affected by the change.
+    - Include a short Impact section naming the concrete files, scripts, or OpenSpec artifacts likely to change.
+    - Keep scope small and practical for this repo unless the user explicitly asks for a larger change.
+
+  specs:
+    - Write delta specs only for the behavior being changed; do not attempt a whole-system specification.
+    - Express requirements in concrete, testable language tied to this CLI application's behavior.
+    - Call out exact external names and formats when they matter, including category names, account names, budget names, env vars, date formats, and CLI flags.
+    - Prefer behavior observable through CLI output, generated transactions, build commands, or YNAB API interactions.
+
+  design:
+    - Prefer designs that preserve Java 8 and the current Gradle/Groovy toolchain unless the change explicitly targets modernization.
+    - Note operational and safety consequences of changes that can create real YNAB transactions.
+    - When refactoring, identify which hard-coded domain rules are being preserved versus intentionally changed.
+    - Favor small, incremental changes over architectural rewrites in this brownfield script-based project.
+
+  tasks:
+    - Break work into small sequential tasks with at most one in-progress coding concern at a time.
+    - Include explicit verification tasks using the repo's real commands when possible, such as ./gradlew tasks --all, ./gradlew installDist, ./gradlew test, or a dry-run invocation.
+    - Include documentation updates when user-visible behavior, setup, or project conventions change.
+    - Do not include tasks that manually edit ledgers or state just to force completion.
