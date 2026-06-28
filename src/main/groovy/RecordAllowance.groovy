@@ -180,7 +180,7 @@ class RecordAllowance {
 
         this.accessToken = accessToken
         this.transactionDate = transactionDate
-        log.info("Using accessToken: ${accessToken}")
+        log.info("YNAB access token loaded from environment")
         ynabClient = HttpBuilder.configure {
             request.uri = "https://api.youneedabudget.com"
             request.headers['Authorization'] = "Bearer ${this.accessToken}"
