@@ -177,19 +177,28 @@ class RecordAllowance {
     def transactionDate = null
 
     public RecordAllowance(String accessToken, Date transactionDate) {
+        this(accessToken, transactionDate, true)
+    }
+
+    public RecordAllowance(String accessToken, Date transactionDate, boolean initializeBudget) {
+        this(accessToken, transactionDate, initializeBudget, null)
+    }
+
+    public RecordAllowance(String accessToken, Date transactionDate, boolean initializeBudget, ynabClient) {
 
         this.accessToken = accessToken
         this.transactionDate = transactionDate
         log.info("YNAB access token loaded from environment")
-        ynabClient = HttpBuilder.configure {
+        this.ynabClient = ynabClient ?: HttpBuilder.configure {
             request.uri = "https://api.youneedabudget.com"
             request.headers['Authorization'] = "Bearer ${this.accessToken}"
             request.headers['Accept'] = "application/json"
         }
 
-        budgetId = getLatestBudgetId("Fiores")
-
-        log.info("Most Recent Budget ID: $budgetId")
+        if(initializeBudget) {
+            budgetId = getLatestBudgetId("Fiores")
+            log.info("Most Recent Budget ID: $budgetId")
+        }
 
     }
 

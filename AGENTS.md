@@ -100,6 +100,9 @@ For CDs, category names are expected to end with a maturity date formatted as `M
   - `./gradlew tasks --all`
   - `./gradlew installDist`
   - `./gradlew test`
+- Tests are part of apply completion for code changes: feature, bug-fix, and other non-doc-only changes should add/update automated tests and must pass `./gradlew test` before considering `openspec-apply` complete.
+- Doc-only changes do not require running the test suite.
+- Test reports are written in both JUnit XML and HTML formats under `build/test-results/` and `build/reports/tests/`.
 - Typical safe first run pattern on Linux/macOS:
   1. export `JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64`
   2. export `YNAB_ACCESS_TOKEN`
@@ -107,6 +110,8 @@ For CDs, category names are expected to end with a maturity date formatted as `M
   4. run the app with `--dry-run`
 - Example:
   - `JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64 YNAB_ACCESS_TOKEN=... ./gradlew run --args='--dry-run --date 2025-08-03'`
+- Run tests with:
+  - `export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64 && ./gradlew test`
 
 ## OpenSpec status
 - OpenSpec is initialized in this repo.
