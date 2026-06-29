@@ -177,19 +177,28 @@ class RecordAllowance {
     def transactionDate = null
 
     public RecordAllowance(String accessToken, Date transactionDate) {
+        this(accessToken, transactionDate, true)
+    }
+
+    public RecordAllowance(String accessToken, Date transactionDate, boolean initializeBudget) {
+        this(accessToken, transactionDate, initializeBudget, null)
+    }
+
+    public RecordAllowance(String accessToken, Date transactionDate, boolean initializeBudget, ynabClient) {
 
         this.accessToken = accessToken
         this.transactionDate = transactionDate
         log.info("YNAB access token loaded from environment")
-        ynabClient = HttpBuilder.configure {
+        this.ynabClient = ynabClient ?: HttpBuilder.configure {
             request.uri = "https://api.youneedabudget.com"
             request.headers['Authorization'] = "Bearer ${this.accessToken}"
             request.headers['Accept'] = "application/json"
         }
 
-        budgetId = getLatestBudgetId("Fiores")
-
-        log.info("Most Recent Budget ID: $budgetId")
+        if(initializeBudget) {
+            budgetId = getLatestBudgetId("Fiores")
+            log.info("Most Recent Budget ID: $budgetId")
+        }
 
     }
 
@@ -416,6 +425,9 @@ class RecordAllowance {
             def categoryNameToDepositAmount = advancedAllowanceDeposits[kid]
             categoryNameToDepositAmount.each { catName, allowance ->
                 def categoryInfo = categoryInfoByCategoryName[catName]
+                if(categoryInfo == null) {
+                    throw new IllegalStateException("Missing category info for advanced allowance category: ${catName}")
+                }
                 def catId = categoryInfo.id
                 def allowanceInMilliUnits = toMilliUnits(allowance)
                 def transaction = [
@@ -440,7 +452,11 @@ class RecordAllowance {
 
     def generateOffsettingTransaction(accountId, transactionsForAllowanceAndInterest, categoryInfoByCategoryName) {
         def totalMilliUnits = transactionsForAllowanceAndInterest.collect {t -> t.amount}.sum()
-        def allowanceCategoryId = categoryInfoByCategoryName["Allowance"].id
+        def allowanceCategory = categoryInfoByCategoryName["Allowance"]
+        if(allowanceCategory == null) {
+            throw new IllegalStateException("Missing category info for Allowance")
+        }
+        def allowanceCategoryId = allowanceCategory.id
         return [
                 account_id: accountId,
                 date: dateFormat.format(transactionDate),
@@ -491,7 +507,10 @@ class RecordAllowance {
             request.uri.path = "/v1/budgets/${budgetId}/accounts"
         }
         def account = r.data.accounts.find { a -> a.name == accountName}
-        return account?.id
+        if(account == null) {
+            throw new IllegalStateException("Could not find account named '${accountName}' in budget '${budgetId}'")
+        }
+        return account.id
     }
 
     def getCategoryInfoByCategoryName() {
@@ -541,6 +560,9 @@ class RecordAllowance {
             bDate.getTime() <=> aDate.getTime()
         }
         log.info("Sorted Budgets Found: ${sortedBudgets.collect { b -> b.last_modified_on + " " + b.name + " "  + b.id }}")
+        if(sortedBudgets.isEmpty()) {
+            throw new IllegalStateException("Could not find budget named '${budgetName}'")
+        }
         return sortedBudgets[0].id
     }
 }

@@ -21,6 +21,30 @@ The app:
 
 The current script is set up around a "Bank of Dad" approach with multiple kids and account styles.
 
+## Testing
+
+Automated tests now use:
+- Spock for specification-style unit tests
+- WireMock for simulated YNAB HTTP integration tests on the current Java 8 / Groovy 2.4 toolchain
+
+Run the test suite with:
+
+```bash
+export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64
+./gradlew test
+```
+
+Test execution writes reports in both formats:
+- JUnit XML: `build/test-results/`
+- HTML: `build/reports/tests/`
+
+Expectations for future changes:
+- code changes should add or update automated tests when behavior changes
+- `./gradlew test` must pass before considering an OpenSpec apply flow complete
+- doc-only changes do not require running the test suite
+
+The integration tests simulate YNAB endpoints locally and do not require a live `YNAB_ACCESS_TOKEN`.
+
 ### Kids currently configured
 The code currently lists these advanced-account kids:
 - Jack

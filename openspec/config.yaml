@@ -18,6 +18,8 @@ context: |
   - Typical Linux JAVA_HOME on this host is /usr/lib/jvm/java-8-openjdk-amd64.
   - Safe first runs should use --dry-run before creating real YNAB transactions.
   - Build verification currently known to work with ./gradlew tasks --all, ./gradlew installDist, and ./gradlew test.
+  - Run tests with `export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64 && ./gradlew test`.
+  - Gradle test runs produce both JUnit XML and HTML reports under build/test-results/ and build/reports/tests/.
 
   Domain model and hard-coded assumptions:
   - The script talks directly to https://api.youneedabudget.com.

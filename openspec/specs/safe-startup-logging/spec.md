@@ -1,7 +1,7 @@
 # safe-startup-logging Specification
 
 ## Purpose
-Define the logging safety requirements for CLI startup so `YNAB_ACCESS_TOKEN` is never exposed in normal initialization output while existing authentication and transaction behavior remain unchanged.
+Define startup logging requirements for YNAB Bank of Dad so the application never exposes the raw `YNAB_ACCESS_TOKEN` in normal initialization logs while preserving existing CLI behavior and authentication flow.
 
 ## Requirements
 ### Requirement: Startup logs do not expose the YNAB access token
