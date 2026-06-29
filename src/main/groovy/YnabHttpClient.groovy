@@ -3,10 +3,12 @@ import groovy.json.JsonSlurper
 import groovy.util.logging.Slf4j
 
 import java.net.URI
+import java.net.http.HttpTimeoutException
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.time.Duration
+import java.util.concurrent.TimeoutException
 
 /**
  * Thin, repo-local wrapper over JDK HttpClient for the YNAB API.
@@ -73,7 +75,15 @@ class YnabHttpClient {
     }
 
     private def sendJson(HttpRequest request, String method, String path) {
-        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
+        HttpResponse<String> response
+        try {
+            response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt()
+            throw new IllegalStateException("YNAB ${method} ${path} interrupted", e)
+        } catch (HttpTimeoutException | TimeoutException e) {
+            throw new IllegalStateException("YNAB ${method} ${path} timed out after ${requestTimeout}", e)
+        }
         String bodyText = response.body()
 
         if (response.statusCode() < 200 || response.statusCode() >= 300) {
