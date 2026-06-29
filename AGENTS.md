@@ -12,7 +12,7 @@ When I ask to make changes on the "default" branch or "master" or "main" branch,
 - This is a small Gradle + Groovy command-line application.
 - The entry point is `RecordAllowance` in `src/main/groovy/RecordAllowance.groovy`.
 - The Gradle `application` plugin is enabled, and `mainClassName` is `RecordAllowance`.
-- The tool talks directly to the YNAB REST API at `https://api.youneedabudget.com` using `http-builder-ng-apache`.
+- The tool talks directly to the YNAB REST API at `https://api.youneedabudget.com` using the repo-local `YnabHttpClient` wrapper over JDK `java.net.http.HttpClient`.
 - The main workflow computes weekly allowance and interest transactions, then posts them in bulk to the most recently modified YNAB budget named `Fiores`.
 
 ## Current Runtime Behavior
@@ -95,7 +95,7 @@ For CDs, category names are expected to end with a maturity date formatted as `M
 
 ## Build and run notes
 - Wrapper scripts are present: `./gradlew` and `gradlew.bat`.
-- Java JDK 8 is now installed and verified on this Hermes host.
+- Java JDK 25 is now installed and verified on this Hermes host at `/usr/lib/jvm/java-25-openjdk-amd64`.
 - Verified build commands on this host:
   - `./gradlew tasks --all`
   - `./gradlew installDist`
@@ -104,14 +104,20 @@ For CDs, category names are expected to end with a maturity date formatted as `M
 - Doc-only changes do not require running the test suite.
 - Test reports are written in both JUnit XML and HTML formats under `build/test-results/` and `build/reports/tests/`.
 - Typical safe first run pattern on Linux/macOS:
-  1. export `JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64`
+  1. export `JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64`
   2. export `YNAB_ACCESS_TOKEN`
   3. run `./gradlew installDist`
   4. run the app with `--dry-run`
 - Example:
-  - `JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64 YNAB_ACCESS_TOKEN=... ./gradlew run --args='--dry-run --date 2025-08-03'`
+  - `JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 YNAB_ACCESS_TOKEN=... ./gradlew run --args='--dry-run --date 2025-08-03'`
 - Run tests with:
-  - `export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64 && ./gradlew test`
+  - `export JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 && ./gradlew test`
+
+## HTTP client migration note
+- `http-builder-ng-apache` was removed during the Java 25 / Gradle 9 / Groovy 5 modernization because it is archived and failed under the upgraded Groovy runtime.
+- The replacement is intentionally small and local: `src/main/groovy/YnabHttpClient.groovy` wraps JDK `java.net.http.HttpClient` for the limited JSON GET/POST behavior this repo needs.
+- Keep that wrapper easy to understand; do not grow it into a clever internal DSL unless the repo's needs genuinely expand.
+- WireMock-backed integration tests remain the preferred way to verify end-to-end YNAB request/response behavior.
 
 ## OpenSpec status
 - OpenSpec is initialized in this repo.
@@ -133,7 +139,7 @@ For CDs, category names are expected to end with a maturity date formatted as `M
 
 ## Known issues / tech debt observed during inspection
 - No README existed prior to this documentation pass.
-- No automated tests are present in the repo today.
+- Automated tests are present and should remain authoritative on the upgraded toolchain.
 - Sensitive token material appears in the checked-in Windows batch helper scripts and should be rotated/removed if those values are real.
 - The script currently logs the access token, which should likely be removed or masked.
 - Most business rules are hard-coded inside one large script; future refactors may benefit from extracting configuration and calculation logic.

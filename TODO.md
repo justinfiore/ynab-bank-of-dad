@@ -15,7 +15,13 @@ High-level prioritized work items for this repo. These are intentionally lightwe
    - Upgrade the chosen testing framework(s) to current supported versions.
    - Verify Groovy compatibility across the upgraded toolchain.
 
-3. [ ] Externalize configuration and improve script portability
+3. [ ] Refactor the codebase for modularity, readability, and testability
+   - Break up large or tightly coupled classes/scripts into clearer modules with focused responsibilities.
+   - Improve naming, boundaries, and internal structure so the code is easier to understand and maintain.
+   - Reduce hidden dependencies and side effects to make behavior easier to test.
+   - Expand or reshape tests alongside the refactor so the improved structure remains well covered.
+
+4. [ ] Externalize configuration and improve script portability
    - Factor hard-coded configuration into `config.yaml` so the tool is reusable by others.
    - Add Bash scripts comparable to the existing Windows batch scripts.
    - Make the Windows batch scripts less specific to Justin’s local machine and environment.

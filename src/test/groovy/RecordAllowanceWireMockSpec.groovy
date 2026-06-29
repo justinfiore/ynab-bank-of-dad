@@ -1,6 +1,5 @@
 import groovy.json.JsonSlurper
 import com.github.tomakehurst.wiremock.WireMockServer
-import groovyx.net.http.HttpBuilder
 import spock.lang.Specification
 
 import static com.github.tomakehurst.wiremock.client.WireMock.*
@@ -290,11 +289,7 @@ class RecordAllowanceWireMockSpec extends Specification {
         thrown(Exception)
     }
 
-    private HttpBuilder buildClient() {
-        HttpBuilder.configure {
-            request.uri = "http://localhost:${wireMockServer.port()}"
-            request.headers['Authorization'] = 'Bearer token'
-            request.headers['Accept'] = 'application/json'
-        }
+    private YnabHttpClient buildClient() {
+        new YnabHttpClient("http://localhost:${wireMockServer.port()}", 'token')
     }
 }

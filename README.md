@@ -25,12 +25,13 @@ The current script is set up around a "Bank of Dad" approach with multiple kids 
 
 Automated tests now use:
 - Spock for specification-style unit tests
-- WireMock for simulated YNAB HTTP integration tests on the current Java 8 / Groovy 2.4 toolchain
+- WireMock for simulated YNAB HTTP integration tests on the upgraded Java 25 / Groovy 5 toolchain
+- a focused `YnabHttpClientSpec` to validate the in-repo JDK `HttpClient` wrapper directly
 
 Run the test suite with:
 
 ```bash
-export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64
+export JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64
 ./gradlew test
 ```
 
@@ -135,24 +136,24 @@ The script supports:
 ## Requirements
 
 To run this project you need:
-- Java JDK 8 installed
-- `JAVA_HOME` set to your JDK 8 installation directory
+- Java JDK 25 installed
+- `JAVA_HOME` set to your JDK 25 installation directory
 - Gradle wrapper support (`./gradlew` is included)
 - a valid YNAB personal access token in `YNAB_ACCESS_TOKEN`
 
-This project requires Java 8 specifically. On the Linux build host used for verification, the working version was:
+This project now targets Java 25. On the Linux build host used for verification, the working installation is:
 
 ```text
-openjdk version "1.8.0_492"
-OpenJDK Runtime Environment (build 1.8.0_492-8u492-ga~us2-0ubuntu1~24.04.1-b09)
-OpenJDK 64-Bit Server VM (build 25.492-b09, mixed mode)
+openjdk version "25.0.3" 2026-10-20
+OpenJDK Runtime Environment (build 25.0.3+6-Ubuntu-0ubuntu124.04)
+OpenJDK 64-Bit Server VM (build 25.0.3+6-Ubuntu-0ubuntu124.04, mixed mode, sharing)
 ```
 
-### Installing Java JDK 8 on Ubuntu / Linux Mint
+### Installing Java JDK 25 on Ubuntu / Linux Mint
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y openjdk-8-jdk
+sudo apt-get install -y openjdk-25-jdk
 ```
 
 ### Setting `JAVA_HOME`
@@ -160,7 +161,7 @@ sudo apt-get install -y openjdk-8-jdk
 Typical Linux value for this environment:
 
 ```bash
-export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64
+export JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64
 export PATH="$JAVA_HOME/bin:$PATH"
 ```
 
@@ -177,7 +178,7 @@ If you want this to persist across shells, add the `export` lines to your shell 
 PowerShell example:
 
 ```powershell
-$env:JAVA_HOME = 'C:\Program Files\Java\jdk1.8.0_xxx'
+$env:JAVA_HOME = 'C:\Program Files\Java\jdk-25'
 $env:Path = "$env:JAVA_HOME\bin;$env:Path"
 ```
 
@@ -216,7 +217,7 @@ You can also build a distributable installation:
 ```
 
 ### Verified build note
-The project build environment was verified after Java 8 installation by successfully running:
+The project build environment was verified after Java 25 installation by successfully running:
 
 ```bash
 ./gradlew tasks --all
@@ -241,8 +242,23 @@ The project build environment was verified after Java 8 installation by successf
 - Language: Groovy
 - Build tool: Gradle
 - Main entry point: `RecordAllowance`
-- HTTP client: `http-builder-ng-apache`
+- HTTP client: in-repo `YnabHttpClient` wrapper over JDK `java.net.http.HttpClient`
 - Logging: Logback (`src/main/resources/logback.groovy`)
+
+## Why the repo now uses a small JDK `HttpClient` wrapper
+
+The project previously used `http-builder-ng-apache` because it was lightweight and pleasant to use from Groovy. That library is now archived and proved incompatible with the Groovy 5 migration in this repo.
+
+The current replacement strategy is intentionally conservative:
+- use the JDK's built-in `java.net.http.HttpClient`
+- wrap it in a tiny repo-local `YnabHttpClient` helper
+- keep the wrapper focused only on the YNAB JSON GET/POST behavior this script actually needs
+
+This approach was chosen because it:
+- avoids adding another third-party HTTP client dependency
+- keeps long-term compatibility anchored to the JDK we already require
+- still gives the application simple call sites such as `getJson(...)` and `postJson(...)`
+- keeps the HTTP integration logic easy to understand and document for future maintainers
 
 ## Git workflow for this repo
 

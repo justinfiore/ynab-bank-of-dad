@@ -1,6 +1,6 @@
 import groovy.json.JsonOutput
+import groovy.cli.picocli.CliBuilder
 import groovy.util.logging.Slf4j
-import groovyx.net.http.HttpBuilder
 import org.apache.commons.lang3.StringUtils
 
 import java.math.MathContext
@@ -189,10 +189,9 @@ class RecordAllowance {
         this.accessToken = accessToken
         this.transactionDate = transactionDate
         log.info("YNAB access token loaded from environment")
-        this.ynabClient = ynabClient ?: HttpBuilder.configure {
-            request.uri = "https://api.youneedabudget.com"
-            request.headers['Authorization'] = "Bearer ${this.accessToken}"
-            request.headers['Accept'] = "application/json"
+        this.ynabClient = ynabClient
+        if (this.ynabClient == null && initializeBudget) {
+            this.ynabClient = new YnabHttpClient("https://api.youneedabudget.com", this.accessToken)
         }
 
         if(initializeBudget) {
@@ -204,14 +203,9 @@ class RecordAllowance {
 
 
     def postTransactions(transactions) {
-        def r = ynabClient.post {
-            request.uri.path = "/v1/budgets/$budgetId/transactions/bulk"
-            request.contentType = "application/json"
-            request.body = [
-                transactions: transactions
-            ]
-        }
-        return r
+        return ynabClient.postJson("/v1/budgets/$budgetId/transactions/bulk", [
+            transactions: transactions
+        ])
     }
 
     def generateInterestTransactionsForSimpleAccounts(accountId, categoryInfoByCategoryName) {
@@ -503,9 +497,7 @@ class RecordAllowance {
 
 
     def getAccountId(accountName) {
-        def r = ynabClient.get {
-            request.uri.path = "/v1/budgets/${budgetId}/accounts"
-        }
+        def r = ynabClient.getJson("/v1/budgets/${budgetId}/accounts")
         def account = r.data.accounts.find { a -> a.name == accountName}
         if(account == null) {
             throw new IllegalStateException("Could not find account named '${accountName}' in budget '${budgetId}'")
@@ -515,9 +507,7 @@ class RecordAllowance {
 
     def getCategoryInfoByCategoryName() {
         def path = "/v1/budgets/${budgetId}/categories"
-        def r = ynabClient.get {
-            request.uri.path = path
-        }
+        def r = ynabClient.getJson(path)
         def categoryInfoByCategoryName = [:]
         r.data.category_groups.each { cg ->
             cg.categories.each { c ->
@@ -536,15 +526,11 @@ class RecordAllowance {
     }
 
     def getUser() {
-        return ynabClient.get {
-            request.uri.path = "/v1/user"
-        }
+        return ynabClient.getJson("/v1/user")
     }
 
     def getBudgets() {
-        return ynabClient.get {
-            request.uri.path = "/v1/budgets"
-        }
+        return ynabClient.getJson("/v1/budgets")
     }
 
     def dateFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssX")
