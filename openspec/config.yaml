@@ -5,20 +5,20 @@ context: |
   Purpose: A Groovy + Gradle command-line utility that records weekly allowance and interest transactions into YNAB.
 
   Tech stack:
-  - Groovy 2.4.x
-  - Gradle 4.2.1 wrapper
-  - Java JDK 8 required
-  - http-builder-ng-apache for YNAB API calls
+  - Groovy 5.0.x
+  - Gradle 9.6.1 wrapper
+  - Java JDK 25 required
+  - repo-local YnabHttpClient wrapper over JDK java.net.http.HttpClient for YNAB API calls
   - Logback for logging
 
   Runtime and operations:
   - Main entry point is RecordAllowance in src/main/groovy/RecordAllowance.groovy.
   - The application requires YNAB_ACCESS_TOKEN.
-  - JAVA_HOME should point to a JDK 8 installation.
-  - Typical Linux JAVA_HOME on this host is /usr/lib/jvm/java-8-openjdk-amd64.
+  - JAVA_HOME should point to a JDK 25 installation.
+  - Typical Linux JAVA_HOME on this host is /usr/lib/jvm/java-25-openjdk-amd64.
   - Safe first runs should use --dry-run before creating real YNAB transactions.
   - Build verification currently known to work with ./gradlew tasks --all, ./gradlew installDist, and ./gradlew test.
-  - Run tests with `export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64 && ./gradlew test`.
+  - Run tests with `export JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 && ./gradlew test`.
   - Gradle test runs produce both JUnit XML and HTML reports under build/test-results/ and build/reports/tests/.
 
   Domain model and hard-coded assumptions:
@@ -54,7 +54,7 @@ rules:
     - Prefer behavior observable through CLI output, generated transactions, build commands, or YNAB API interactions.
 
   design:
-    - Prefer designs that preserve Java 8 and the current Gradle/Groovy toolchain unless the change explicitly targets modernization.
+    - Prefer designs that preserve the currently supported Java 25 / Gradle 9 / Groovy 5 baseline unless the change explicitly targets another modernization step.
     - Note operational and safety consequences of changes that can create real YNAB transactions.
     - When refactoring, identify which hard-coded domain rules are being preserved versus intentionally changed.
     - Favor small, incremental changes over architectural rewrites in this brownfield script-based project.
