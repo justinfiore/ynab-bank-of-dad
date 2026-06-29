@@ -34,6 +34,18 @@ class RecordAllowanceSpec extends Specification {
         RecordAllowance.cdDateFormat.format(RecordAllowance.getCDOriginationDate('Jack Gold CD 6-Month 08/15/25', maturityDate)) == '02/15/25'
     }
 
+    def "getCDOriginationDate throws for unrecognized non-CD category"() {
+        given:
+        def maturityDate = RecordAllowance.cdDateFormat.parse('08/15/25')
+
+        when:
+        RecordAllowance.getCDOriginationDate('Jack Savings Goal 08/15/25', maturityDate)
+
+        then:
+        def ex = thrown(IllegalStateException)
+        ex.message.contains('Could not calculate CD Origination Date')
+    }
+
     def "findInterestRatesForDate returns earliest known table for earlier origination dates"() {
         given:
         def recordAllowance = new RecordAllowance('token', dateFormat.parse('2025-07-06'), false)
@@ -111,6 +123,21 @@ class RecordAllowanceSpec extends Specification {
         transactions.empty
     }
 
+    def "generateNewAllowanceTransactionsForAdvancedAccounts throws when configured category is missing"() {
+        given:
+        def recordAllowance = new RecordAllowance('token', dateFormat.parse('2025-07-06'), false)
+        def categoryInfo = [
+            'Jack Silver Account': [id: 'jack-silver']
+        ]
+
+        when:
+        recordAllowance.generateNewAllowanceTransactionsForAdvancedAccounts('allowance-escrow', categoryInfo)
+
+        then:
+        def ex = thrown(IllegalStateException)
+        ex.message.contains('Missing category info for advanced allowance category')
+    }
+
     def "generateOffsettingTransaction offsets the total of allowance and interest transactions"() {
         given:
         def recordAllowance = new RecordAllowance('token', dateFormat.parse('2025-07-06'), false)
@@ -140,5 +167,17 @@ class RecordAllowanceSpec extends Specification {
         transactions.size() == 2
         transactions.every { it.amount == -2500 }
         transactions*.payee_name == ['Allowance Sam', 'Allowance Max']
+    }
+
+    def "generateOffsettingTransaction throws when Allowance category is missing"() {
+        given:
+        def recordAllowance = new RecordAllowance('token', dateFormat.parse('2025-07-06'), false)
+
+        when:
+        recordAllowance.generateOffsettingTransaction('allowance-escrow', [[amount: 1250]], [:])
+
+        then:
+        def ex = thrown(IllegalStateException)
+        ex.message.contains('Missing category info for Allowance')
     }
 }

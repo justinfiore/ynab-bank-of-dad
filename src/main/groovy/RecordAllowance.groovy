@@ -425,6 +425,9 @@ class RecordAllowance {
             def categoryNameToDepositAmount = advancedAllowanceDeposits[kid]
             categoryNameToDepositAmount.each { catName, allowance ->
                 def categoryInfo = categoryInfoByCategoryName[catName]
+                if(categoryInfo == null) {
+                    throw new IllegalStateException("Missing category info for advanced allowance category: ${catName}")
+                }
                 def catId = categoryInfo.id
                 def allowanceInMilliUnits = toMilliUnits(allowance)
                 def transaction = [
@@ -449,7 +452,11 @@ class RecordAllowance {
 
     def generateOffsettingTransaction(accountId, transactionsForAllowanceAndInterest, categoryInfoByCategoryName) {
         def totalMilliUnits = transactionsForAllowanceAndInterest.collect {t -> t.amount}.sum()
-        def allowanceCategoryId = categoryInfoByCategoryName["Allowance"].id
+        def allowanceCategory = categoryInfoByCategoryName["Allowance"]
+        if(allowanceCategory == null) {
+            throw new IllegalStateException("Missing category info for Allowance")
+        }
+        def allowanceCategoryId = allowanceCategory.id
         return [
                 account_id: accountId,
                 date: dateFormat.format(transactionDate),
@@ -500,7 +507,10 @@ class RecordAllowance {
             request.uri.path = "/v1/budgets/${budgetId}/accounts"
         }
         def account = r.data.accounts.find { a -> a.name == accountName}
-        return account?.id
+        if(account == null) {
+            throw new IllegalStateException("Could not find account named '${accountName}' in budget '${budgetId}'")
+        }
+        return account.id
     }
 
     def getCategoryInfoByCategoryName() {
@@ -550,6 +560,9 @@ class RecordAllowance {
             bDate.getTime() <=> aDate.getTime()
         }
         log.info("Sorted Budgets Found: ${sortedBudgets.collect { b -> b.last_modified_on + " " + b.name + " "  + b.id }}")
+        if(sortedBudgets.isEmpty()) {
+            throw new IllegalStateException("Could not find budget named '${budgetName}'")
+        }
         return sortedBudgets[0].id
     }
 }

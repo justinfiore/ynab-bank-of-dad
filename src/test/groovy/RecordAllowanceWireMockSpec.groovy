@@ -104,6 +104,111 @@ class RecordAllowanceWireMockSpec extends Specification {
         categories['Jack Silver Account'].balance == 1000
     }
 
+    def "constructor throws clear error when no Fiores budget exists"() {
+        given:
+        stubFor(get(urlEqualTo('/v1/budgets'))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader('Content-Type', 'application/json')
+                .withBody('''
+{
+  "data": {
+    "budgets": [
+      {"id": "budget-other", "name": "Other", "last_modified_on": "2025-07-09T12:00:00Z"}
+    ]
+  }
+}
+''')))
+
+        when:
+        new RecordAllowance('token', new Date(), true, buildClient())
+
+        then:
+        def ex = thrown(IllegalStateException)
+        ex.message.contains("Could not find budget named 'Fiores'")
+    }
+
+    def "getAccountId throws clear error when required account is missing"() {
+        given:
+        stubFor(get(urlEqualTo('/v1/budgets'))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader('Content-Type', 'application/json')
+                .withBody('''
+{
+  "data": {
+    "budgets": [
+      {"id": "budget-new", "name": "Fiores", "last_modified_on": "2025-07-08T12:00:00Z"}
+    ]
+  }
+}
+''')))
+        stubFor(get(urlEqualTo('/v1/budgets/budget-new/accounts'))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader('Content-Type', 'application/json')
+                .withBody('''
+{
+  "data": {
+    "accounts": [
+      {"id": "acct-2", "name": "Other"}
+    ]
+  }
+}
+''')))
+
+        when:
+        def recordAllowance = new RecordAllowance('token', new Date(), true, buildClient())
+        recordAllowance.getAccountId('Allowance Escrow')
+
+        then:
+        def ex = thrown(IllegalStateException)
+        ex.message.contains("Could not find account named 'Allowance Escrow'")
+    }
+
+    def "getCategoryInfoByCategoryName can reveal missing required categories from simulated YNAB responses"() {
+        given:
+        stubFor(get(urlEqualTo('/v1/budgets'))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader('Content-Type', 'application/json')
+                .withBody('''
+{
+  "data": {
+    "budgets": [
+      {"id": "budget-new", "name": "Fiores", "last_modified_on": "2025-07-08T12:00:00Z"}
+    ]
+  }
+}
+''')))
+        stubFor(get(urlEqualTo('/v1/budgets/budget-new/categories'))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader('Content-Type', 'application/json')
+                .withBody('''
+{
+  "data": {
+    "category_groups": [
+      {
+        "name": "Kids",
+        "categories": [
+          {"id": "cat-jack", "name": "Jack Silver Account", "balance": 1000}
+        ]
+      }
+    ]
+  }
+}
+''')))
+
+        when:
+        def recordAllowance = new RecordAllowance('token', new Date(), true, buildClient())
+        def categories = recordAllowance.getCategoryInfoByCategoryName()
+
+        then:
+        !categories.containsKey('Allowance')
+        categories['Jack Silver Account'].balance == 1000
+    }
+
     def "postTransactions sends bulk transaction request to simulated YNAB endpoint"() {
         given:
         stubFor(get(urlEqualTo('/v1/budgets'))
@@ -154,6 +259,35 @@ class RecordAllowanceWireMockSpec extends Specification {
         requests.size() == 1
         requests[0].getHeader('Authorization') == 'Bearer token'
         body.transactions == transactions
+    }
+
+    def "postTransactions surfaces simulated YNAB failure responses"() {
+        given:
+        stubFor(get(urlEqualTo('/v1/budgets'))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader('Content-Type', 'application/json')
+                .withBody('''
+{
+  "data": {
+    "budgets": [
+      {"id": "budget-new", "name": "Fiores", "last_modified_on": "2025-07-08T12:00:00Z"}
+    ]
+  }
+}
+''')))
+        stubFor(post(urlEqualTo('/v1/budgets/budget-new/transactions/bulk'))
+            .willReturn(aResponse()
+                .withStatus(500)
+                .withHeader('Content-Type', 'application/json')
+                .withBody('{"error":{"name":"internal_server_error","detail":"boom"}}')))
+
+        when:
+        def recordAllowance = new RecordAllowance('token', new Date(), true, buildClient())
+        recordAllowance.postTransactions([[account_id: 'acct-1', amount: 1000]])
+
+        then:
+        thrown(Exception)
     }
 
     private HttpBuilder buildClient() {
