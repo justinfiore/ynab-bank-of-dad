@@ -1,10 +1,10 @@
 # automated-test-coverage Specification
 
 ## Purpose
-Define the required automated test coverage, reporting, and verification expectations for YNAB Bank of Dad so code changes are validated on the current Java 8 / Groovy 2.4 / Gradle toolchain before they are considered complete.
+Define the required automated test coverage, reporting, and verification expectations for YNAB Bank of Dad so code changes are validated on the repository's supported Java / Groovy / Gradle toolchain before they are considered complete.
 ## Requirements
 ### Requirement: The project SHALL provide Spock-based automated unit tests for core business logic
-The project SHALL include automated Spock specifications that run under the existing Gradle workflow and validate the current Groovy CLI's core calculation, transaction-generation behavior, and error handling without calling the live YNAB API.
+The project SHALL include automated Spock specifications that run under the supported Gradle workflow and validate the current Groovy CLI's core calculation, transaction-generation behavior, and error handling without calling the live YNAB API.
 
 #### Scenario: Unit tests cover failure and boundary behavior
 - **WHEN** helper and business-rule methods encounter invalid or missing inputs under the current domain model assumptions
@@ -25,12 +25,12 @@ The project SHALL include automated integration-style tests that simulate the YN
 - **WHEN** the integration tests simulate `/v1/budgets/{budgetId}/transactions/bulk` failure responses
 - **THEN** they SHALL verify that the application surfaces the YNAB client failure rather than masking it
 
-### Requirement: Automated tests SHALL remain compatible with the current repo toolchain
-The initial automated test implementation SHALL remain compatible with the repository's current Java 8, Groovy 2.4.x, and existing Gradle wrapper constraints rather than requiring the separate tech-stack-upgrade change first.
+### Requirement: Automated tests SHALL remain compatible with the supported repo toolchain
+The automated test implementation SHALL remain compatible with the repository's supported Java, Groovy, Spock, and Gradle wrapper baseline rather than being tied only to the legacy Java 8, Groovy 2.4.x, and Gradle 4.2.1 stack.
 
-#### Scenario: Test suite runs on the current Gradle workflow
-- **WHEN** a developer runs `./gradlew test` in the repository's current toolchain
-- **THEN** the automated tests SHALL execute successfully without first upgrading Java, Groovy, or Gradle as part of this change
+#### Scenario: Test suite runs on the supported Gradle workflow
+- **WHEN** a developer runs `./gradlew test` using the repository's documented supported Java/toolchain baseline
+- **THEN** the automated tests SHALL execute successfully without requiring the legacy Java 8 / Groovy 2.4 / Gradle 4 environment described before this modernization change
 
 ### Requirement: Test enablement SHALL preserve production runtime behavior
 Any code changes introduced to make the script testable SHALL preserve the application's current CLI flags, environment-variable requirements, YNAB endpoint usage, and generated transaction semantics outside the test harness.
