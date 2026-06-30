@@ -1,12 +1,12 @@
 ## ADDED Requirements
 
 ### Requirement: The repository SHALL provide a GitHub Actions workflow for automated Gradle verification and packaging
-The repository SHALL include at least one GitHub Actions workflow under `.github/workflows/` that runs on push and pull request events, checks out the repository, provisions the documented supported Java baseline for this repo, executes `./gradlew test`, and executes `./gradlew installDist` without requiring a live `YNAB_ACCESS_TOKEN`.
+The repository SHALL include at least one GitHub Actions workflow under `.github/workflows/` that runs on push and pull request events, checks out the repository, provisions the documented supported Java baseline for this repo, executes `./gradlew testAll`, and executes `./gradlew installDist` without requiring a live `YNAB_ACCESS_TOKEN`.
 
 #### Scenario: Pushes trigger automated Gradle verification and packaging
 - **WHEN** a contributor pushes commits to a branch in the GitHub-hosted repository
 - **THEN** GitHub Actions SHALL run the repository's defined CI workflow
-- **AND** that workflow SHALL execute both `./gradlew test` and `./gradlew installDist` on a GitHub-hosted runner using the repo's documented supported Java baseline
+- **AND** that workflow SHALL execute both `./gradlew testAll` and `./gradlew installDist` on a GitHub-hosted runner using the repo's documented supported Java baseline
 
 #### Scenario: Pull requests trigger the same verification path
 - **WHEN** a pull request is opened, synchronized, or reopened against the default branch

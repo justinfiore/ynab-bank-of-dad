@@ -1,5 +1,7 @@
 # YNAB Bank of Dad
 
+[![CI](https://github.com/justinfiore/ynab-bank-of-dad/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/justinfiore/ynab-bank-of-dad/actions/workflows/ci.yml)
+
 A small Groovy/Gradle command-line utility for managing a family "Bank of Dad" system in [YNAB](https://www.ynab.com/).
 
 The idea is to model kid-specific allowance, saving, giving, and interest-bearing "accounts" as YNAB categories, then use this script to calculate and post the appropriate weekly transactions automatically.
@@ -45,6 +47,32 @@ Expectations for future changes:
 - doc-only changes do not require running the test suite
 
 The integration tests simulate YNAB endpoints locally and do not require a live `YNAB_ACCESS_TOKEN`.
+
+## Continuous integration
+
+GitHub Actions now runs the repository CI workflow on pushes and pull requests targeting `master`.
+
+The CI workflow:
+- runs on GitHub-hosted Ubuntu runners
+- provisions Temurin JDK 25
+- runs `./gradlew testAll`
+- runs `./gradlew installDist`
+- uploads these artifacts on every run:
+  - `build/test-results/`
+  - `build/reports/tests/`
+  - `build/install/`
+
+Workflow file:
+- `.github/workflows/ci.yml`
+
+Supply-chain hardening choices for CI:
+- external GitHub Actions are pinned to full commit SHAs rather than floating tags
+- the workflow intentionally uses a minimal dependency set
+- the workflow avoids unnecessary third-party helper actions, including compromised convenience actions such as `tj-actions/changed-files`
+- `actions/checkout` is configured with `persist-credentials: false` to reduce credential exposure in the runner workspace
+
+You can inspect workflow runs and download artifacts from the repository Actions tab:
+- `https://github.com/justinfiore/ynab-bank-of-dad/actions`
 
 ### Kids currently configured
 The code currently lists these advanced-account kids:
