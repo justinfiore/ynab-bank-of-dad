@@ -61,6 +61,7 @@ The CI workflow:
   - `build/test-results/`
   - `build/reports/tests/`
   - `build/install/`
+- publishes an inline GitHub job summary showing suite counts and, on failures, the failing test cases
 
 Workflow file:
 - `.github/workflows/ci.yml`

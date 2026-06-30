@@ -70,3 +70,7 @@ jobs:
           name: install-dist
           path: build/install/
           if-no-files-found: error
+
+      - name: Publish test result summary to job summary
+        if: always()
+        run: python3 .github/scripts/publish_test_summary.py

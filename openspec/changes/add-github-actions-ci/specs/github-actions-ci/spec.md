@@ -21,6 +21,19 @@ The GitHub Actions workflow SHALL retain the repository's generated test and pac
 - **THEN** the run SHALL publish the generated test-result, test-report, and installDist output directories as GitHub Actions artifacts
 - **AND** maintainers SHALL be able to download those artifacts without reproducing the run locally
 
+### Requirement: The workflow SHALL surface test outcomes directly in pull-request-visible GitHub UI
+The GitHub Actions workflow SHALL publish a human-readable test summary into GitHub's run summary or check output so reviewers can see pass/fail counts directly from the pull request checks experience, and when tests fail it SHALL identify the failing test cases without requiring artifact download.
+
+#### Scenario: Passing runs show an inline summary
+- **WHEN** the CI workflow finishes with passing unit and integration tests
+- **THEN** reviewers SHALL be able to see a direct summary of executed test suites and counts from the GitHub checks/run UI linked from the pull request
+- **AND** they SHALL not need to download the JUnit artifact just to confirm what ran
+
+#### Scenario: Failing runs list failing test cases inline
+- **WHEN** one or more tests fail in the CI workflow
+- **THEN** the GitHub checks/run UI SHALL identify the failing test cases and their suite context directly in the visible summary
+- **AND** reviewers SHALL not need to download artifacts first to learn which tests failed
+
 ### Requirement: External workflow dependencies SHALL be pinned to immutable identities
 The GitHub Actions workflow SHALL pin every external GitHub Action reference to a full commit SHA and SHALL pin any referenced container image to an immutable digest, rather than using floating tags, branch names, or unpinned image references.
 
