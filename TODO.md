@@ -31,7 +31,7 @@ High-level prioritized work items for this repo. These are intentionally lightwe
    - Add Bash scripts comparable to the existing Windows batch scripts.
    - Make the Windows batch scripts less specific to Justin’s local machine and environment.
 
-4. [ ] Rename and improve open-source onboarding
+4. [x] Rename and improve open-source onboarding
    - Rename the project to `YNABBankOfDad` where appropriate (repo, docs, and code references as needed).
    - Rewrite `README.md` to better target an external open-source audience.
    - Add `QUICK_START.md` with concise setup and first-run instructions.
@@ -40,6 +40,6 @@ High-level prioritized work items for this repo. These are intentionally lightwe
    - Add support for syncing transactions between the parent YNAB budget and child YNAB budgets.
    - Define the expected sync model, mapping rules, and safety checks before implementation.
 
-6. [ ] Add licensing and public-hosting readiness
+6. [x] Add licensing and public-hosting readiness
    - Add a `LICENSE` file.
-   - Move the Git repo to GitHub or another location where it can be shared publicly.
+   - Repo is already hosted on GitHub; remaining readiness work focused on licensing and onboarding clarity.
