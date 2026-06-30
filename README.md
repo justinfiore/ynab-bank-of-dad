@@ -126,7 +126,11 @@ The script supports:
 ├── src/
 │   └── main/
 │       ├── groovy/
-│       │   └── RecordAllowance.groovy
+│       │   ├── AllowanceCalculationService.groovy
+│       │   ├── RecordAllowance.groovy
+│       │   ├── TransactionAssemblyService.groovy
+│       │   ├── TransactionModels.groovy
+│       │   └── YnabBudgetRepository.groovy
 │       └── resources/
 │           └── logback.groovy
 └── gradle/
@@ -242,6 +246,9 @@ The project build environment was verified after Java 25 installation by success
 - Language: Groovy
 - Build tool: Gradle
 - Main entry point: `RecordAllowance`
+- Calculation logic: `AllowanceCalculationService`
+- YNAB lookups and posting boundary: `YnabBudgetRepository`
+- Transaction assembly and small value objects: `TransactionAssemblyService` and `TransactionModels`
 - HTTP client: in-repo `YnabHttpClient` wrapper over JDK `java.net.http.HttpClient`
 - Logging: Logback (`src/main/resources/logback.groovy`)
 
@@ -262,18 +269,18 @@ This approach was chosen because it:
 
 ## Git workflow for this repo
 
-This repository is hosted on a private Git server rather than GitHub/GitLab.
+This repository is hosted on GitHub and now uses a branch + pull-request workflow.
 
 Current expected workflow:
 - feature work normally happens on branches
-- commits are pushed directly to the remote git server
-- "merge" means merge the feature branch into `master` and push `master`
-- when asked to work directly on `master`/`main`/default branch, pull latest remote changes first, then commit directly to `master`
+- push the branch to GitHub and open a pull request for review
+- merge completed work through the reviewed PR flow unless explicitly told otherwise
+- when asked to work directly on `master`/`main`/default branch, pull latest remote changes first, then commit directly to that branch
 
 ## Limitations observed during documentation pass
 
-- No automated tests are currently present.
-- Most business logic is hard-coded inside a single Groovy file.
+- Some family/account configuration is still hard-coded in code rather than externalized.
+- The script still depends on exact YNAB naming conventions and a live personal access token.
 
 ## Suggested next improvements
 
@@ -281,5 +288,5 @@ Potential high-value follow-ups:
 - remove or mask token logging
 - remove hard-coded secrets from helper scripts
 - move kid/rate/account configuration into a config file
-- add automated tests around interest and allowance calculations
-- split API, rate, and transaction-building logic into smaller units
+- continue expanding targeted tests as new behavior is added
+- continue refining module boundaries if new features make them awkward
