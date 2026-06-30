@@ -8,7 +8,7 @@ High-level prioritized work items for this repo. These are intentionally lightwe
    - Added coverage for core calculation logic, budget/account/category lookup, and bulk transaction posting behavior.
    - Configured Gradle test runs to emit both JUnit XML and HTML reports, and documented the required `./gradlew test` workflow.
 
-2. [ ] Upgrade the main tech stack
+2. [x] Upgrade the main tech stack
    - Upgrade Java to the latest LTS release.
    - Upgrade Gradle to the latest major release.
    - Replace deprecated or incompatible libraries.
