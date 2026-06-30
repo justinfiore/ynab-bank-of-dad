@@ -21,7 +21,12 @@ High-level prioritized work items for this repo. These are intentionally lightwe
    - Reduce hidden dependencies and side effects to make behavior easier to test.
    - Expand or reshape tests alongside the refactor so the improved structure remains well covered.
 
-4. [ ] Externalize configuration and improve script portability
+4. [ ] Add GitHub Actions to build, run, and report on tests
+   - Add CI workflow(s) that build the project and run the automated test suite on pushes and pull requests.
+   - Publish or preserve test results/artifacts so failures are easier to inspect remotely.
+   - Document the CI workflow and any required repository settings or badges.
+
+5. [ ] Externalize configuration and improve script portability
    - Factor hard-coded configuration into `config.yaml` so the tool is reusable by others.
    - Add Bash scripts comparable to the existing Windows batch scripts.
    - Make the Windows batch scripts less specific to Justin’s local machine and environment.
