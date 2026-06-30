@@ -19,7 +19,7 @@
 ## 4. Verify, review, and document the refactor
 
 - [x] 4.1 Run `export JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 && ./gradlew test` and fix any regressions introduced by the refactor.
-- [ ] 4.2 If the new module boundaries change how developers understand or test the code, update `README.md` with concise structure/testing notes while keeping runtime guidance accurate.
-- [ ] 4.3 Run a dry-run-safe verification path if needed to confirm the refactor preserves the top-level CLI flow without posting real YNAB transactions.
-- [ ] 4.4 Perform a final branch review against the spec/design, address any findings, and keep commit history scoped for PR review.
+- [x] 4.2 If the new module boundaries change how developers understand or test the code, update `README.md` with concise structure/testing notes while keeping runtime guidance accurate.
+- [x] 4.3 Run a dry-run-safe verification path if needed to confirm the refactor preserves the top-level CLI flow without posting real YNAB transactions.
+- [x] 4.4 Perform a final branch review against the spec/design, address any findings, and keep commit history scoped for PR review.
 - [ ] 4.5 Archive the OpenSpec change after the implementation, review, and verification work are complete.
