@@ -56,7 +56,7 @@ class RecordAllowanceSpec extends Specification {
         recordAllowance.findInterestRatesForDate(dateFormat.parse('2024-01-01'))['Gold CD 2-Month'] == 2.25
     }
 
-    def "generateNewAllowanceTransactionsForAdvancedAccounts produces configured deposits"() {
+    def "generateNewAllowanceTransactionsForAdvancedAccounts produces configured deposits in stable order"() {
         given:
         def recordAllowance = new RecordAllowance('token', dateFormat.parse('2025-07-06'), false)
         def categoryInfo = [
@@ -76,13 +76,34 @@ class RecordAllowanceSpec extends Specification {
 
         then:
         transactions.size() == 9
-        transactions.find { it.category_id == 'jack-silver' }.amount == 3000
-        transactions.find { it.category_id == 'colin-bronze' }.amount == 500
+        transactions*.payee_name == [
+            'To Jack Silver Account',
+            'To Jack Give Bank',
+            'To Evan Silver Account',
+            'To Evan Give Bank',
+            'To Emily Silver Account',
+            'To Emily Give Bank',
+            'To Colin Silver Account',
+            'To Colin Bronze Account',
+            'To Colin Give Bank'
+        ]
+        transactions*.category_id == [
+            'jack-silver',
+            'jack-give',
+            'evan-silver',
+            'evan-give',
+            'emily-silver',
+            'emily-give',
+            'colin-silver',
+            'colin-bronze',
+            'colin-give'
+        ]
+        transactions*.amount == [3000, 500, 3000, 500, 1000, 500, 1000, 500, 500]
         transactions.every { it.account_id == 'allowance-escrow' }
         transactions.every { it.memo == 'Allowance' }
     }
 
-    def "generateInterestTransactionsForAdvancedAccounts creates interest transactions for matching categories"() {
+    def "generateInterestTransactionsForAdvancedAccounts creates interest transactions in stable order for matching categories"() {
         given:
         def recordAllowance = new RecordAllowance('token', dateFormat.parse('2025-07-06'), false)
         def categoryInfo = [
@@ -101,6 +122,16 @@ class RecordAllowanceSpec extends Specification {
 
         then:
         transactions.size() == 6
+        transactions*.payee_name == [
+            'Jack Silver Account Interest',
+            'Evan Silver Account Interest',
+            'Emily Silver Account Interest',
+            'Colin Silver Account Interest',
+            'Colin Bronze Account Interest',
+            'Colin Gold CD 2-Month 08/15/25 Interest'
+        ]
+        transactions*.category_id == ['jack-silver', 'evan-silver', 'emily-silver', 'colin-silver', 'colin-bronze', 'colin-cd']
+        transactions*.amount == [300, 150, 150, 150, 100, 250]
         byCategory.keySet() == ['jack-silver', 'evan-silver', 'emily-silver', 'colin-silver', 'colin-bronze', 'colin-cd'] as Set
         byCategory['jack-silver'].amount == 300
         byCategory['colin-bronze'].amount == 100
@@ -154,7 +185,7 @@ class RecordAllowanceSpec extends Specification {
         offset.memo == 'Allowance and Interest combined'
     }
 
-    def "generateNonInterestBearingTransactions creates one combined allowance transaction per kid"() {
+    def "generateNonInterestBearingTransactions creates one combined allowance transaction per kid in stable order"() {
         given:
         def recordAllowance = new RecordAllowance('token', dateFormat.parse('2025-07-06'), false)
         recordAllowance.kidsWithoutInterest = ['Sam', 'Max']
@@ -167,6 +198,56 @@ class RecordAllowanceSpec extends Specification {
         transactions.size() == 2
         transactions.every { it.amount == -2500 }
         transactions*.payee_name == ['Allowance Sam', 'Allowance Max']
+        transactions*.category_id == ['allowance-id', 'allowance-id']
+        transactions*.memo == ['To Sam Piggy Banks', 'To Max Piggy Banks']
+    }
+
+    def "generateOffsettingTransaction uses all transaction groups in a stable combined total"() {
+        given:
+        def recordAllowance = new RecordAllowance('token', dateFormat.parse('2025-07-06'), false)
+        recordAllowance.kidsWithoutInterest = ['Sam']
+        def groupedTransactions = []
+        groupedTransactions.addAll(recordAllowance.generateInterestTransactionsForAdvancedAccounts('allowance-escrow', [
+            'Jack Silver Account': [id: 'jack-silver', balance: 200000],
+            'Colin Bronze Account': [id: 'colin-bronze', balance: 100000],
+            'Allowance': [id: 'allowance-id']
+        ]))
+        groupedTransactions.addAll(recordAllowance.generateNewAllowanceTransactionsForAdvancedAccounts('allowance-escrow', [
+            'Jack Silver Account': [id: 'jack-silver'],
+            'Jack Give Bank': [id: 'jack-give'],
+            'Evan Silver Account': [id: 'evan-silver'],
+            'Evan Give Bank': [id: 'evan-give'],
+            'Emily Silver Account': [id: 'emily-silver'],
+            'Emily Give Bank': [id: 'emily-give'],
+            'Colin Silver Account': [id: 'colin-silver'],
+            'Colin Bronze Account': [id: 'colin-bronze'],
+            'Colin Give Bank': [id: 'colin-give']
+        ]))
+        groupedTransactions.addAll(recordAllowance.generateNonInterestBearingTransactions('allowance-escrow', ['Allowance': [id: 'allowance-id']]))
+
+        when:
+        def offset = recordAllowance.generateOffsettingTransaction('allowance-escrow', groupedTransactions, ['Allowance': [id: 'allowance-id']])
+
+        then:
+        groupedTransactions*.memo[0..1] == ['Interest', 'Interest']
+        groupedTransactions*.memo[2..10] == ['Allowance', 'Allowance', 'Allowance', 'Allowance', 'Allowance', 'Allowance', 'Allowance', 'Allowance', 'Allowance']
+        groupedTransactions*.memo[11] == 'To Sam Piggy Banks'
+        groupedTransactions*.payee_name[0..1] == ['Jack Silver Account Interest', 'Colin Bronze Account Interest']
+        groupedTransactions*.payee_name[2..10] == [
+            'To Jack Silver Account',
+            'To Jack Give Bank',
+            'To Evan Silver Account',
+            'To Evan Give Bank',
+            'To Emily Silver Account',
+            'To Emily Give Bank',
+            'To Colin Silver Account',
+            'To Colin Bronze Account',
+            'To Colin Give Bank'
+        ]
+        groupedTransactions*.payee_name[11] == 'Allowance Sam'
+        offset.amount == -groupedTransactions.sum { it.amount as Integer }
+        offset.payee_name == 'Allowance '
+        offset.memo == 'Allowance and Interest combined'
     }
 
     def "generateOffsettingTransaction throws when Allowance category is missing"() {
