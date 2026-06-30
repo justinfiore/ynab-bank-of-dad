@@ -2,11 +2,13 @@
 This project allows you to implement "Bank of Dad" concepts (from the book ["The First National Bank of Dad"](<https://a.co/d/0iDelQff>)) using YNAB as your budgeting software.
 
 ## Git Operations
-This repo (at least as of now) is a git repo stored on another server. Not Gitlab, Github or anything that supports PRs.
+This repo is hosted on GitHub and uses a branch + PR workflow.
 
-So for features, we will create branches, commit to those branches, and then push the branches to the remote.
-When I ask to "merge", this means merging the branch to the master branch and then pushing that to the remote.
-When I ask to make changes on the "default" branch or "master" or "main" branch, this means to add commits directly to the `master` branch (after pulling the latest commits from the remote first).
+- Any commits that are made on non-default branches must be pushed to the remote.
+- When work on a branch is complete, create a GitHub pull request using the `gh` CLI.
+- All pull requests must request `justinfiore` as a reviewer.
+- When I ask to make changes on the "default" branch or "master" or "main" branch, treat that as working directly on the `master` branch after pulling the latest commits from the remote first.
+- When I ask to update documentation or repo workflow guidance like this file, commit that change and push it to `master` unless I explicitly ask for a different branch workflow.
 
 ## Project Overview
 - This is a small Gradle + Groovy command-line application.
