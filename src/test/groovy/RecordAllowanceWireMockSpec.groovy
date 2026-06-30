@@ -8,6 +8,67 @@ class RecordAllowanceWireMockSpec extends Specification {
 
     WireMockServer wireMockServer
 
+    private RuntimeConfig demoConfig() {
+        RuntimeConfig.fromMap([
+            budgetName: 'Configured Budget',
+            allowanceEscrowAccountName: 'Allowance Escrow',
+            allowanceCategoryName: 'Allowance',
+            interestMemo: 'Interest',
+            allowanceMemo: 'Allowance',
+            combinedMemo: 'Allowance and Interest combined',
+            nonInterestMemoSuffix: 'Piggy Banks',
+            bankSuffixes: [' Spend Bank', ' Save Bank', ' Give Bank'],
+            allowanceRates: [' Spend Bank': 1.0, ' Save Bank': 0.5, ' Give Bank': 0.5],
+            giveBankRate: 0.5,
+            kidsWithoutInterest: [],
+            kidsWithSimpleAccounts: [],
+            kidsWithAdvancedAccounts: ['Child One', 'Child Two', 'Child Three', 'Child Four'],
+            advancedAllowanceDeposits: [
+                'Child One': ['Child One Silver Account': 3.0, 'Child One Give Bank': 0.5],
+                'Child Two': ['Child Two Silver Account': 3.0, 'Child Two Give Bank': 0.5],
+                'Child Three': ['Child Three Silver Account': 1.0, 'Child Three Give Bank': 0.5],
+                'Child Four': ['Child Four Silver Account': 1.0, 'Child Four Bronze Account': 0.5, 'Child Four Give Bank': 0.5]
+            ],
+            accountTypes: ['Bronze', 'Silver', 'Gold CD 2-Month', 'Gold CD 3-Month', 'Gold CD 6-Month', 'First Car Fund'],
+            interestRatesByAccountTypeAndDate: [
+                'Current': [
+                    'Bronze': 0.1,
+                    'Silver': 0.15,
+                    'Gold CD 2-Month': 0.25,
+                    'Gold CD 3-Month': 0.35,
+                    'Gold CD 6-Month': 0.65,
+                    'First Car Fund': 0.65
+                ],
+                '2025-06-01': [
+                    'Bronze': 0.1,
+                    'Silver': 0.5,
+                    'Gold CD 2-Month': 0.75,
+                    'Gold CD 3-Month': 1.0,
+                    'Gold CD 6-Month': 1.25,
+                    'First Car Fund': 1.25
+                ],
+                '2025-04-14': [
+                    'Bronze': 0.25,
+                    'Silver': 0.75,
+                    'Gold CD 2-Month': 1.5,
+                    'Gold CD 3-Month': 1.75,
+                    'Gold CD 6-Month': 2.0,
+                    'First Car Fund': 2.0
+                ],
+                '2024-12-25': [
+                    'Gold CD 2-Month': 1.75,
+                    'Gold CD 3-Month': 2.0,
+                    'Gold CD 6-Month': 2.25
+                ],
+                '2024-11-23': [
+                    'Gold CD 2-Month': 2.25,
+                    'Gold CD 3-Month': 2.5,
+                    'Gold CD 6-Month': 2.75
+                ]
+            ]
+        ])
+    }
+
     def setup() {
         wireMockServer = new WireMockServer(0)
         wireMockServer.start()
@@ -18,7 +79,7 @@ class RecordAllowanceWireMockSpec extends Specification {
         wireMockServer.stop()
     }
 
-    def "constructor selects newest Fiores budget using simulated YNAB budgets response"() {
+    def "constructor selects newest Configured Budget budget using simulated YNAB budgets response"() {
         given:
         stubFor(get(urlEqualTo('/v1/budgets'))
             .willReturn(aResponse()
@@ -28,8 +89,8 @@ class RecordAllowanceWireMockSpec extends Specification {
 {
   "data": {
     "budgets": [
-      {"id": "budget-old", "name": "Fiores", "last_modified_on": "2025-07-01T12:00:00Z"},
-      {"id": "budget-new", "name": "Fiores", "last_modified_on": "2025-07-08T12:00:00Z"},
+      {"id": "budget-old", "name": "Configured Budget", "last_modified_on": "2025-07-01T12:00:00Z"},
+      {"id": "budget-new", "name": "Configured Budget", "last_modified_on": "2025-07-08T12:00:00Z"},
       {"id": "budget-other", "name": "Other", "last_modified_on": "2025-07-09T12:00:00Z"}
     ]
   }
@@ -37,7 +98,7 @@ class RecordAllowanceWireMockSpec extends Specification {
 ''')))
 
         when:
-        def recordAllowance = new RecordAllowance('token', new Date(), true, buildClient())
+        def recordAllowance = new RecordAllowance('token', new Date(), demoConfig(), true, buildClient())
 
         then:
         recordAllowance.budgetId == 'budget-new'
@@ -53,7 +114,7 @@ class RecordAllowanceWireMockSpec extends Specification {
 {
   "data": {
     "budgets": [
-      {"id": "budget-new", "name": "Fiores", "last_modified_on": "2025-07-08T12:00:00Z"}
+      {"id": "budget-new", "name": "Configured Budget", "last_modified_on": "2025-07-08T12:00:00Z"}
     ]
   }
 }
@@ -84,7 +145,7 @@ class RecordAllowanceWireMockSpec extends Specification {
         "name": "Kids",
         "categories": [
           {"id": "cat-allowance", "name": "Allowance", "balance": 0},
-          {"id": "cat-jack", "name": "Jack Silver Account", "balance": 1000}
+          {"id": "cat-child-one", "name": "Child One Silver Account", "balance": 1000}
         ]
       }
     ]
@@ -93,17 +154,17 @@ class RecordAllowanceWireMockSpec extends Specification {
 ''')))
 
         when:
-        def recordAllowance = new RecordAllowance('token', new Date(), true, buildClient())
+        def recordAllowance = new RecordAllowance('token', new Date(), demoConfig(), true, buildClient())
         def accountId = recordAllowance.getAccountId('Allowance Escrow')
         def categories = recordAllowance.getCategoryInfoByCategoryName()
 
         then:
         accountId == 'acct-1'
         categories['Allowance'].id == 'cat-allowance'
-        categories['Jack Silver Account'].balance == 1000
+        categories['Child One Silver Account'].balance == 1000
     }
 
-    def "constructor throws clear error when no Fiores budget exists"() {
+    def "constructor throws clear error when no Configured Budget budget exists"() {
         given:
         stubFor(get(urlEqualTo('/v1/budgets'))
             .willReturn(aResponse()
@@ -120,11 +181,11 @@ class RecordAllowanceWireMockSpec extends Specification {
 ''')))
 
         when:
-        new RecordAllowance('token', new Date(), true, buildClient())
+        new RecordAllowance('token', new Date(), demoConfig(), true, buildClient())
 
         then:
         def ex = thrown(IllegalStateException)
-        ex.message.contains("Could not find budget named 'Fiores'")
+        ex.message.contains("Could not find budget named 'Configured Budget'")
     }
 
     def "getAccountId throws clear error when required account is missing"() {
@@ -137,7 +198,7 @@ class RecordAllowanceWireMockSpec extends Specification {
 {
   "data": {
     "budgets": [
-      {"id": "budget-new", "name": "Fiores", "last_modified_on": "2025-07-08T12:00:00Z"}
+      {"id": "budget-new", "name": "Configured Budget", "last_modified_on": "2025-07-08T12:00:00Z"}
     ]
   }
 }
@@ -157,7 +218,7 @@ class RecordAllowanceWireMockSpec extends Specification {
 ''')))
 
         when:
-        def recordAllowance = new RecordAllowance('token', new Date(), true, buildClient())
+        def recordAllowance = new RecordAllowance('token', new Date(), demoConfig(), true, buildClient())
         recordAllowance.getAccountId('Allowance Escrow')
 
         then:
@@ -175,7 +236,7 @@ class RecordAllowanceWireMockSpec extends Specification {
 {
   "data": {
     "budgets": [
-      {"id": "budget-new", "name": "Fiores", "last_modified_on": "2025-07-08T12:00:00Z"}
+      {"id": "budget-new", "name": "Configured Budget", "last_modified_on": "2025-07-08T12:00:00Z"}
     ]
   }
 }
@@ -191,7 +252,7 @@ class RecordAllowanceWireMockSpec extends Specification {
       {
         "name": "Kids",
         "categories": [
-          {"id": "cat-jack", "name": "Jack Silver Account", "balance": 1000}
+          {"id": "cat-child-one", "name": "Child One Silver Account", "balance": 1000}
         ]
       }
     ]
@@ -200,12 +261,12 @@ class RecordAllowanceWireMockSpec extends Specification {
 ''')))
 
         when:
-        def recordAllowance = new RecordAllowance('token', new Date(), true, buildClient())
+        def recordAllowance = new RecordAllowance('token', new Date(), demoConfig(), true, buildClient())
         def categories = recordAllowance.getCategoryInfoByCategoryName()
 
         then:
         !categories.containsKey('Allowance')
-        categories['Jack Silver Account'].balance == 1000
+        categories['Child One Silver Account'].balance == 1000
     }
 
     def "getCategoryInfoByCategoryName flattens multiple category groups and defaults missing balances to zero"() {
@@ -218,7 +279,7 @@ class RecordAllowanceWireMockSpec extends Specification {
 {
   "data": {
     "budgets": [
-      {"id": "budget-new", "name": "Fiores", "last_modified_on": "2025-07-08T12:00:00Z"}
+      {"id": "budget-new", "name": "Configured Budget", "last_modified_on": "2025-07-08T12:00:00Z"}
     ]
   }
 }
@@ -240,8 +301,8 @@ class RecordAllowanceWireMockSpec extends Specification {
       {
         "name": "Kids",
         "categories": [
-          {"id": "cat-jack", "name": "Jack Silver Account"},
-          {"id": "cat-colin", "name": "Colin Bronze Account", "balance": -250}
+          {"id": "cat-child-one", "name": "Child One Silver Account"},
+          {"id": "cat-child-four", "name": "Child Four Bronze Account", "balance": -250}
         ]
       }
     ]
@@ -250,14 +311,14 @@ class RecordAllowanceWireMockSpec extends Specification {
 ''')))
 
         when:
-        def recordAllowance = new RecordAllowance('token', new Date(), true, buildClient())
+        def recordAllowance = new RecordAllowance('token', new Date(), demoConfig(), true, buildClient())
         def categories = recordAllowance.getCategoryInfoByCategoryName()
 
         then:
-        categories.keySet().containsAll(['Allowance', 'Jack Silver Account', 'Colin Bronze Account'])
+        categories.keySet().containsAll(['Allowance', 'Child One Silver Account', 'Child Four Bronze Account'])
         categories['Allowance'].balance == 5000
-        categories['Jack Silver Account'].balance == 0
-        categories['Colin Bronze Account'].balance == -250
+        categories['Child One Silver Account'].balance == 0
+        categories['Child Four Bronze Account'].balance == -250
     }
 
     def "constructor surfaces budget endpoint failures from YNAB"() {
@@ -269,7 +330,7 @@ class RecordAllowanceWireMockSpec extends Specification {
                 .withBody('{"error":{"name":"service_unavailable","detail":"try later"}}')))
 
         when:
-        new RecordAllowance('token', new Date(), true, buildClient())
+        new RecordAllowance('token', new Date(), demoConfig(), true, buildClient())
 
         then:
         def ex = thrown(IllegalStateException)
@@ -295,7 +356,7 @@ class RecordAllowanceWireMockSpec extends Specification {
 ''')))
 
         when:
-        def recordAllowance = new RecordAllowance('token', new Date(), false, buildClient())
+        def recordAllowance = new RecordAllowance('token', new Date(), demoConfig(), false, buildClient())
         def response = recordAllowance.getUser()
         def requests = wireMockServer.findAll(getRequestedFor(urlEqualTo('/v1/user')))
 
@@ -316,7 +377,7 @@ class RecordAllowanceWireMockSpec extends Specification {
 {
   "data": {
     "budgets": [
-      {"id": "budget-new", "name": "Fiores", "last_modified_on": "2025-07-08T12:00:00Z"}
+      {"id": "budget-new", "name": "Configured Budget", "last_modified_on": "2025-07-08T12:00:00Z"}
     ]
   }
 }
@@ -351,16 +412,16 @@ class RecordAllowanceWireMockSpec extends Specification {
       {
         "name": "Kids",
         "categories": [
-          {"id": "cat-jack-silver", "name": "Jack Silver Account", "balance": 200000},
-          {"id": "cat-jack-give", "name": "Jack Give Bank", "balance": 0},
-          {"id": "cat-evan-silver", "name": "Evan Silver Account", "balance": 100000},
-          {"id": "cat-evan-give", "name": "Evan Give Bank", "balance": 0},
-          {"id": "cat-emily-silver", "name": "Emily Silver Account", "balance": 100000},
-          {"id": "cat-emily-give", "name": "Emily Give Bank", "balance": 0},
-          {"id": "cat-colin-silver", "name": "Colin Silver Account", "balance": 100000},
-          {"id": "cat-colin-bronze", "name": "Colin Bronze Account", "balance": 100000},
-          {"id": "cat-colin-give", "name": "Colin Give Bank", "balance": 0},
-          {"id": "cat-colin-cd", "name": "Colin Gold CD 2-Month 08/15/25", "balance": 100000}
+          {"id": "cat-child-one-silver", "name": "Child One Silver Account", "balance": 200000},
+          {"id": "cat-child-one-give", "name": "Child One Give Bank", "balance": 0},
+          {"id": "cat-child-two-silver", "name": "Child Two Silver Account", "balance": 100000},
+          {"id": "cat-child-two-give", "name": "Child Two Give Bank", "balance": 0},
+          {"id": "cat-child-three-silver", "name": "Child Three Silver Account", "balance": 100000},
+          {"id": "cat-child-three-give", "name": "Child Three Give Bank", "balance": 0},
+          {"id": "cat-child-four-silver", "name": "Child Four Silver Account", "balance": 100000},
+          {"id": "cat-child-four-bronze", "name": "Child Four Bronze Account", "balance": 100000},
+          {"id": "cat-child-four-give", "name": "Child Four Give Bank", "balance": 0},
+          {"id": "cat-child-four-cd", "name": "Child Four Gold CD 2-Month 08/15/25", "balance": 100000}
         ]
       }
     ]
@@ -380,7 +441,7 @@ class RecordAllowanceWireMockSpec extends Specification {
 ''')))
 
         and:
-        def recordAllowance = new RecordAllowance('token', new GregorianCalendar(2025, Calendar.JULY, 6).time, true, buildClient())
+        def recordAllowance = new RecordAllowance('token', new GregorianCalendar(2025, Calendar.JULY, 6).time, demoConfig(), true, buildClient())
 
         when:
         def categoryInfo = recordAllowance.getCategoryInfoByCategoryName()
@@ -405,21 +466,21 @@ class RecordAllowanceWireMockSpec extends Specification {
         requests.size() == 1
         body.transactions.size() == 16
         body.transactions*.payee_name == [
-            'Jack Silver Account Interest',
-            'Evan Silver Account Interest',
-            'Emily Silver Account Interest',
-            'Colin Silver Account Interest',
-            'Colin Bronze Account Interest',
-            'Colin Gold CD 2-Month 08/15/25 Interest',
-            'To Jack Silver Account',
-            'To Jack Give Bank',
-            'To Evan Silver Account',
-            'To Evan Give Bank',
-            'To Emily Silver Account',
-            'To Emily Give Bank',
-            'To Colin Silver Account',
-            'To Colin Bronze Account',
-            'To Colin Give Bank',
+            'Child One Silver Account Interest',
+            'Child Two Silver Account Interest',
+            'Child Three Silver Account Interest',
+            'Child Four Silver Account Interest',
+            'Child Four Bronze Account Interest',
+            'Child Four Gold CD 2-Month 08/15/25 Interest',
+            'To Child One Silver Account',
+            'To Child One Give Bank',
+            'To Child Two Silver Account',
+            'To Child Two Give Bank',
+            'To Child Three Silver Account',
+            'To Child Three Give Bank',
+            'To Child Four Silver Account',
+            'To Child Four Bronze Account',
+            'To Child Four Give Bank',
             'Allowance '
         ]
         body.transactions*.amount == [300, 150, 150, 150, 100, 250, 3000, 500, 3000, 500, 1000, 500, 1000, 500, 500, -11600]
@@ -440,7 +501,7 @@ class RecordAllowanceWireMockSpec extends Specification {
 {
   "data": {
     "budgets": [
-      {"id": "budget-new", "name": "Fiores", "last_modified_on": "2025-07-08T12:00:00Z"}
+      {"id": "budget-new", "name": "Configured Budget", "last_modified_on": "2025-07-08T12:00:00Z"}
     ]
   }
 }
@@ -459,7 +520,7 @@ class RecordAllowanceWireMockSpec extends Specification {
 ''')))
 
         and:
-        def recordAllowance = new RecordAllowance('token', new Date(), true, buildClient())
+        def recordAllowance = new RecordAllowance('token', new Date(), demoConfig(), true, buildClient())
         def transactions = [[
             account_id: 'acct-1',
             date: '2025-07-06T00:00:00Z',
@@ -492,7 +553,7 @@ class RecordAllowanceWireMockSpec extends Specification {
 {
   "data": {
     "budgets": [
-      {"id": "budget-new", "name": "Fiores", "last_modified_on": "2025-07-08T12:00:00Z"}
+      {"id": "budget-new", "name": "Configured Budget", "last_modified_on": "2025-07-08T12:00:00Z"}
     ]
   }
 }
@@ -504,7 +565,7 @@ class RecordAllowanceWireMockSpec extends Specification {
                 .withBody('{"error":{"name":"internal_server_error","detail":"boom"}}')))
 
         when:
-        def recordAllowance = new RecordAllowance('token', new Date(), true, buildClient())
+        def recordAllowance = new RecordAllowance('token', new Date(), demoConfig(), true, buildClient())
         recordAllowance.postTransactions([[account_id: 'acct-1', amount: 1000]])
 
         then:

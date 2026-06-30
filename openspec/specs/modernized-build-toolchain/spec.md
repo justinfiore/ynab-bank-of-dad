@@ -20,7 +20,7 @@ The project SHALL migrate legacy Gradle dependency configurations and applicatio
 - **THEN** the main build script SHALL use supported dependency and application-plugin configuration patterns instead of legacy `compile`, `testCompile`, and top-level `mainClassName` usage
 
 ### Requirement: Modernization SHALL preserve the current CLI runtime contract
-The toolchain modernization SHALL preserve the current runtime behavior of the CLI application, including the requirement for `YNAB_ACCESS_TOKEN`, support for `--date`, `--dry-run`, and `--help`, the dry-run-safe execution pattern, and the existing YNAB naming assumptions around `Fiores`, `Allowance Escrow`, and `Allowance`.
+The toolchain modernization SHALL preserve the current runtime behavior of the CLI application, including the requirement for `YNAB_ACCESS_TOKEN`, support for `--date`, `--dry-run`, `--help`, and any approved config-file flag, the dry-run-safe execution pattern, and runtime-config-driven YNAB lookup behavior rather than hard-coded personal naming assumptions.
 
 #### Scenario: Supported toolchain changes do not redefine application behavior
 - **WHEN** a developer reads the updated docs and runs the application on the supported toolchain

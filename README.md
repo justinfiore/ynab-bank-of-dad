@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/justinfiore/ynab-bank-of-dad/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/justinfiore/ynab-bank-of-dad/actions/workflows/ci.yml)
 
-YNABBankOfDad is a Groovy/Gradle command-line tool for running a family "Bank of Dad" workflow inside [YNAB](https://www.ynab.com/). It calculates weekly allowance and interest transactions based on the repository's current rules, then posts them to YNAB in a single bulk API request.
+YNABBankOfDad is a Groovy/Gradle command-line tool for running a family "Bank of Dad" workflow inside [YNAB](https://www.ynab.com/). It calculates weekly allowance and interest transactions from a YAML configuration file, then posts them to YNAB in a single bulk API request.
 
 This project is inspired by the book [*The First National Bank of Dad*](https://a.co/d/0iDelQff).
 
@@ -12,76 +12,62 @@ This repository is best suited to people who:
 - already use YNAB
 - are comfortable running a command-line tool
 - want to adapt a "Bank of Dad"-style family budgeting workflow
-- understand that the current implementation is still opinionated and not fully generalized
-
-This is **not** currently a plug-and-play budgeting app. The tool still depends on exact YNAB naming conventions and some hard-coded family/account rules described below.
+- want a configurable starting point rather than a plug-and-play budgeting app
 
 ## What the tool does
 
 The current CLI:
 - connects to the YNAB API using `YNAB_ACCESS_TOKEN`
-- finds the most recently modified budget named `Fiores`
-- looks up the account named `Allowance Escrow`
+- loads budget/account/category/rate rules from a YAML config file
+- finds the most recently modified budget matching the configured `budgetName`
+- looks up the configured allowance escrow account and allowance category names
 - reads all budget categories
-- calculates weekly allowance and interest transactions using the repo's current rules
+- calculates weekly allowance and interest transactions from the configured rules
 - posts those transactions in one bulk request
 - supports `--dry-run` so you can inspect proposed transactions before posting anything live
+- supports `-c` / `--config` so you can choose a config file path explicitly
 
 ## Safety first
 
 This tool can create **real YNAB transactions** when you do not use `--dry-run`.
 
 Before any live run:
-- verify your YNAB category and account names match this repo's assumptions
-- review the hard-coded kid/account/rate rules in the source
+- create your own local `config.yaml` from `config.yaml.example`
+- verify your configured budget/account/category names match your actual YNAB setup
 - run a dry run first
 - inspect the generated transactions carefully
 
-If you only want the shortest path to a first safe run, start with [QUICK_START.md](QUICK_START.md).
+If you only want the shortest safe path to a first run, start with [QUICK_START.md](QUICK_START.md).
 
-## Current constraints and assumptions
+## Required runtime inputs
 
-The current implementation is intentionally documented honestly so new users know what must be adapted before reuse.
-
-### Required runtime inputs
 - Java JDK 25
 - `JAVA_HOME` pointing at your JDK 25 installation
 - `YNAB_ACCESS_TOKEN`
+- a config file in the repository format (`config.yaml.example` is the starting template)
 - network access to `https://api.youneedabudget.com`
 
-### YNAB names that must currently match exactly
-- budget name: `Fiores`
-- account name: `Allowance Escrow`
-- category name: `Allowance`
+## Configuration model
 
-### Simple-account suffixes currently expected
-- ` Spend Bank`
-- ` Save Bank`
-- ` Give Bank`
+The application reads its runtime rules from YAML.
 
-### Advanced account types currently recognized
-- `Bronze`
-- `Silver`
-- `Gold CD 2-Month`
-- `Gold CD 3-Month`
-- `Gold CD 6-Month`
-- `First Car Fund`
+Committed template:
+- `config.yaml.example`
 
-### CD naming rule
-CD-style category names are expected to end with a maturity date formatted as `MM/dd/yy`.
+Local personal file:
+- `config.yaml` (gitignored)
 
-### Current kid/account model baked into the repo
-Advanced-account kids currently configured in code:
-- Jack
-- Evan
-- Emily
-- Colin
-
-The legacy simple-account path still exists but is currently disabled:
-- `kidsWithSimpleAccounts = []`
-
-The non-interest-bearing path also exists but is currently empty:
-- `kidsWithoutInterest = []`
+The config contains values such as:
+- `budgetName`
+- `allowanceEscrowAccountName`
+- `allowanceCategoryName`
+- bank suffixes
+- allowance rates
+- account types
+- dated interest-rate tables
+- child/account mappings
+- advanced allowance deposit mappings
+- memo text used in generated transactions
 
 ## Supported toolchain
 
@@ -96,7 +82,7 @@ Verified commands on the Hermes Linux host used during recent maintenance:
 ```bash
 export JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64
 ./gradlew tasks --all
-./gradlew test
+./gradlew testAll
 ./gradlew installDist
 ```
 
@@ -117,17 +103,16 @@ echo "$JAVA_HOME"
 
 ## Running the tool
 
-### Dry run
-A safe first run is:
+### Dry run with the default local config
 
 ```bash
-./gradlew run --args='--dry-run'
+./gradlew run --args='--dry-run --config config.yaml'
 ```
 
 ### Dry run for a specific date
 
 ```bash
-./gradlew run --args='--dry-run --date 2025-08-03'
+./gradlew run --args='--dry-run --date 2025-08-03 --config config.yaml'
 ```
 
 ### Build a distributable install
@@ -138,8 +123,21 @@ A safe first run is:
 
 ### CLI options
 - `--date YYYY-MM-DD` — run calculations for a specific date
+- `-c`, `--config PATH` — use a specific YAML config file
 - `--dry-run` — print what would be posted without creating YNAB transactions
 - `--help` — show usage information
+
+## Helper scripts
+
+Windows:
+- `RunWeeklyAllowance.bat`
+- `RunSpecificAllowance.bat YYYY-MM-DD [config-path]`
+
+Linux/macOS:
+- `./run-weekly-allowance.sh`
+- `./run-specific-allowance.sh YYYY-MM-DD [config-path]`
+
+These wrappers are repo-relative and expect `YNAB_ACCESS_TOKEN` to already be set in your environment.
 
 ## Testing
 
@@ -147,7 +145,7 @@ Run tests with:
 
 ```bash
 export JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64
-./gradlew test
+./gradlew testAll
 ```
 
 The test suite currently uses:
@@ -182,16 +180,20 @@ GitHub Actions runs and artifacts:
 ```text
 .
 ├── build.gradle
+├── config.yaml.example
 ├── gradlew
 ├── gradlew.bat
+├── QUICK_START.md
 ├── RunSpecificAllowance.bat
 ├── RunWeeklyAllowance.bat
-├── QUICK_START.md
+├── run-specific-allowance.sh
+├── run-weekly-allowance.sh
 ├── src/
 │   └── main/
 │       ├── groovy/
 │       │   ├── AllowanceCalculationService.groovy
 │       │   ├── RecordAllowance.groovy
+│       │   ├── RuntimeConfig.groovy
 │       │   ├── TransactionAssemblyService.groovy
 │       │   ├── TransactionModels.groovy
 │       │   └── YnabBudgetRepository.groovy
@@ -204,23 +206,14 @@ GitHub Actions runs and artifacts:
 ## Implementation notes for adopters
 
 A few current design choices matter if you plan to adapt the tool:
-- business rules are still largely hard-coded in the repo
-- exact YNAB naming matters for correct lookups
 - the code talks directly to the YNAB REST API
 - transaction posting uses `/v1/budgets/$budgetId/transactions/bulk`
 - the project uses a small in-repo `YnabHttpClient` wrapper over JDK `java.net.http.HttpClient`
+- account/category naming still matters, but those names now belong in config rather than source code
 
 ## License
 
 This project is licensed under the MIT License. See [LICENSE](LICENSE).
-
-## Current limitations
-
-Known limitations of the current repo shape:
-- configuration is not yet externalized into a reusable config file
-- some helper scripts remain environment-specific
-- the repo is documented for outside readers, but the runtime model is still opinionated toward the current family workflow
-- parent/child budget syncing is not implemented
 
 ## GitHub workflow status
 

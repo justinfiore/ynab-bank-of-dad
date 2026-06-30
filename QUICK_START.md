@@ -1,118 +1,105 @@
-# QUICK START — YNABBankOfDad
+# QUICK START — YNAB Bank of Dad
 
-This guide is the shortest safe path from clone to first evaluation run.
+Use these steps to configure `config.yaml` safely and run a dry run before any live posting.
 
-## 1. Know what this tool assumes
+## 1. Install prerequisites
 
-Before you run anything live, understand that the current repo assumes:
-- a YNAB budget named `Fiores`
-- an account named `Allowance Escrow`
-- a category named `Allowance`
-- category/account naming patterns used by the current family workflow
-- hard-coded kid/account/rate rules in the source
+1. Install Java JDK 25.
+2. Set `JAVA_HOME` to that JDK.
+3. Export your `YNAB_ACCESS_TOKEN`.
 
-If your budget does not match those assumptions, adapt the code before using it for real transactions.
-
-## 2. Install prerequisites
-
-You need:
-- Java JDK 25
-- `JAVA_HOME` set to that JDK
-- a YNAB personal access token
-
-Example on Ubuntu / Linux Mint:
-
-```bash
-sudo apt-get update
-sudo apt-get install -y openjdk-25-jdk
-```
-
-Typical Linux environment setup:
+Linux/macOS example:
 
 ```bash
 export JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64
 export PATH="$JAVA_HOME/bin:$PATH"
-```
-
-Verify:
-
-```bash
-java -version
-javac -version
-echo "$JAVA_HOME"
-```
-
-## 3. Clone the repo
-
-```bash
-git clone git@github.com:justinfiore/ynab-bank-of-dad.git
-cd ynab-bank-of-dad
-```
-
-## 4. Set your YNAB token
-
-Linux/macOS:
-
-```bash
 export YNAB_ACCESS_TOKEN='your-token-here'
 ```
 
-PowerShell:
+## 2. Create your local config
 
-```powershell
-$env:YNAB_ACCESS_TOKEN = 'your-token-here'
-```
-
-## 5. Run tests first (recommended)
+1. Copy the example file:
 
 ```bash
-export JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64
-./gradlew test
+cp config.yaml.example config.yaml
 ```
 
-## 6. Do a dry run
+2. Edit `config.yaml` and replace the example values with your real setup.
+3. Update at least these fields:
+   - `budgetName`
+   - `allowanceEscrowAccountName`
+   - `allowanceCategoryName`
+   - `kidsWithAdvancedAccounts`
+   - `advancedAllowanceDeposits`
+   - any category names, memo text, or rate tables that differ in your budget
 
-Always start here:
+`config.yaml` is gitignored and is intended for your personal values.
+
+## 3. Run tests
 
 ```bash
-export JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64
-./gradlew run --args='--dry-run'
+./gradlew testAll
+```
+
+## 4. Do a safe dry run
+
+Default config path:
+
+```bash
+./gradlew run --args='--dry-run --config config.yaml'
+```
+
+Specific date:
+
+```bash
+./gradlew run --args='--dry-run --date 2025-08-03 --config config.yaml'
+```
+
+## 5. Use the helper scripts if you prefer
+
+Windows weekly dry run:
+
+```bat
+RunWeeklyAllowance.bat
+```
+
+Windows specific-date dry run:
+
+```bat
+RunSpecificAllowance.bat 2025-08-03 config.yaml
+```
+
+Linux/macOS weekly dry run:
+
+```bash
+./run-weekly-allowance.sh
+```
+
+Linux/macOS specific-date dry run:
+
+```bash
+./run-specific-allowance.sh 2025-08-03 config.yaml
+```
+
+## 6. Review the dry-run output
+
+Before any live run, verify:
+
+1. the correct budget was selected
+2. the correct account and category names were found
+3. the generated transactions match your expectations
+4. your configured rates and account mappings are correct
+
+## 7. Optional live run
+
+Only after the dry run looks correct:
+
+```bash
+./gradlew run --args='--config config.yaml'
 ```
 
 Or for a specific date:
 
 ```bash
-export JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64
-./gradlew run --args='--dry-run --date 2025-08-03'
+./gradlew run --args='--date 2025-08-03 --config config.yaml'
 ```
-
-## 7. Review the output before any live run
-
-Before dropping `--dry-run`, verify:
-- the correct budget was selected
-- expected categories/accounts were found
-- generated transactions make sense
-- your naming matches the repo's assumptions
-- you are comfortable with the current hard-coded rules
-
-## 8. Optional: build a distributable install
-
-```bash
-export JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64
-./gradlew installDist
-```
-
-## 9. Do not do this first
-
-Do **not** start with a live posting run.
-
-Because this tool can create real YNAB transactions, a non-dry-run execution should happen only after:
-- reviewing the repo assumptions
-- checking your budget/account/category names
-- inspecting dry-run output carefully
-
-## 10. Where to learn more
-
-- Overview and current limitations: [README.md](README.md)
-- License terms: [LICENSE](LICENSE)
-- CI runs and artifacts: https://github.com/justinfiore/ynab-bank-of-dad/actions

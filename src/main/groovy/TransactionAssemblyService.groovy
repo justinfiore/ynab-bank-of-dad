@@ -1,16 +1,30 @@
 class TransactionAssemblyService {
     private final String transactionDate
     private final AllowanceCalculationService calculationService
+    private final String allowanceCategoryName
+    private final String allowanceMemo
+    private final String combinedMemo
+    private final String nonInterestMemoSuffix
 
-    TransactionAssemblyService(String transactionDate, AllowanceCalculationService calculationService) {
+    TransactionAssemblyService(String transactionDate,
+                               AllowanceCalculationService calculationService,
+                               String allowanceCategoryName,
+                               String allowanceMemo,
+                               String combinedMemo,
+                               String nonInterestMemoSuffix) {
         this.transactionDate = transactionDate
         this.calculationService = calculationService
+        this.allowanceCategoryName = allowanceCategoryName
+        this.allowanceMemo = allowanceMemo
+        this.combinedMemo = combinedMemo
+        this.nonInterestMemoSuffix = nonInterestMemoSuffix
     }
 
     List<TransactionDraft> generateInterestTransactionsForAdvancedAccounts(String accountId,
                                                                            Map<String, CategorySnapshot> categoryInfoByCategoryName,
                                                                            List<String> kidsWithAdvancedAccounts,
-                                                                           List<String> accountTypes) {
+                                                                           List<String> accountTypes,
+                                                                           String interestMemo) {
         List<TransactionDraft> transactions = []
         kidsWithAdvancedAccounts.each { String kid ->
             def categoriesToProcess = categoryInfoByCategoryName.findAll { String categoryName, CategorySnapshot snapshot ->
@@ -35,7 +49,7 @@ class TransactionAssemblyService {
                         interestInMilliUnits,
                         "$categoryName Interest",
                         category.id,
-                        'Interest',
+                        interestMemo,
                         true
                     )
                 }
@@ -61,7 +75,7 @@ class TransactionAssemblyService {
                     calculationService.toMilliUnits(allowance),
                     "To $categoryName",
                     category.id,
-                    'Allowance',
+                    allowanceMemo,
                     true
                 )
             }
@@ -74,17 +88,17 @@ class TransactionAssemblyService {
                                                    Map<String, CategorySnapshot> categoryInfoByCategoryName,
                                                    List<String> kidsWithSimpleAccounts) {
         Integer totalMilliUnits = transactionsForAllowanceAndInterest.sum { it.amount } as Integer
-        CategorySnapshot allowanceCategory = categoryInfoByCategoryName['Allowance']
+        CategorySnapshot allowanceCategory = categoryInfoByCategoryName[allowanceCategoryName]
         if (allowanceCategory == null) {
-            throw new IllegalStateException('Missing category info for Allowance')
+            throw new IllegalStateException("Missing category info for ${allowanceCategoryName}")
         }
         new TransactionDraft(
             accountId,
             transactionDate,
             -totalMilliUnits,
-            "Allowance ${kidsWithSimpleAccounts.join(', ')}",
+            "${allowanceMemo} ${kidsWithSimpleAccounts.join(', ')}",
             allowanceCategory.id,
-            'Allowance and Interest combined',
+            combinedMemo,
             true
         )
     }
@@ -94,16 +108,16 @@ class TransactionAssemblyService {
                                                                   List<String> kidsWithoutInterest,
                                                                   Map<String, Number> allowanceRates,
                                                                   Number giveBankRate) {
-        CategorySnapshot allowanceCategory = categoryInfoByCategoryName['Allowance']
+        CategorySnapshot allowanceCategory = categoryInfoByCategoryName[allowanceCategoryName]
         Number amount = giveBankRate + allowanceRates.values().sum()
         kidsWithoutInterest.collect { String kid ->
             new TransactionDraft(
                 accountId,
                 transactionDate,
                 -calculationService.toMilliUnits(amount),
-                "Allowance $kid",
+                "${allowanceMemo} $kid",
                 allowanceCategory.id,
-                "To $kid Piggy Banks",
+                "To $kid ${nonInterestMemoSuffix}",
                 true
             )
         }

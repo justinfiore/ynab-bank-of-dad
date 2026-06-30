@@ -2,7 +2,7 @@
 
 The codebase has already been refactored so transaction calculation, transaction assembly, and YNAB repository access are separated into smaller collaborators, but `RecordAllowance` still owns a large embedded domain-configuration block for kids, account types, allowance deposits, suffixes, and dated interest rates. The next TODO item also points out that the checked-in Windows `.bat` helpers are tied to a specific local checkout, a legacy Java 8 path, and a literal `YNAB_ACCESS_TOKEN`, and there are no equivalent Bash launchers for Linux/macOS users.
 
-This change should keep the current Java 25 / Gradle 9 / Groovy 5 baseline and preserve the live YNAB runtime contract: `YNAB_ACCESS_TOKEN` remains an environment variable, `--date`, `--dry-run`, and `--help` continue to work, the tool still targets the newest `Fiores` budget, `Allowance Escrow`, and `Allowance`, and the current transaction semantics remain unchanged unless the externalized config intentionally mirrors today’s values.
+This change should keep the current Java 25 / Gradle 9 / Groovy 5 baseline and preserve the live YNAB runtime contract: `YNAB_ACCESS_TOKEN` remains an environment variable, `--date`, `--dry-run`, and `--help` continue to work, the tool still targets the configured budget/account/category names supplied via YAML, and the current transaction semantics remain unchanged unless the externalized config intentionally mirrors today’s values.
 
 ## Goals / Non-Goals
 
@@ -21,13 +21,13 @@ This change should keep the current Java 25 / Gradle 9 / Groovy 5 baseline and p
 
 ## Decisions
 
-### Decision: Use one checked-in `config.yaml` as the source of runtime domain configuration
-The repo should add a single top-level `config.yaml` that captures the existing domain model now embedded in `RecordAllowance.groovy`: bank suffixes, simple-account allowance rates, lists of kids by account type, advanced allowance deposit mappings, recognized account types, and dated interest-rate tables.
+### Decision: Use one checked-in `config.yaml.example` as the shareable source of runtime domain configuration
+The repo should add a single top-level `config.yaml.example` that captures a safe example domain model for bank suffixes, simple-account allowance rates, lists of kids by account type, advanced allowance deposit mappings, recognized account types, and dated interest-rate tables. Each user should copy that file to a local `config.yaml`, tailor it to their own budget, and keep that personal file out of version control.
 
 **Why this over keeping defaults in code with partial overrides?**
 - The TODO item explicitly asks to factor hard-coded configuration into `config.yaml`.
-- A single checked-in file makes the portable path reviewable and gives other users one obvious place to start.
-- Keeping the initial config values identical to today’s hard-coded values reduces behavioral risk during the migration.
+- A checked-in example plus a gitignored personal file gives other users one obvious place to start without committing private budget details.
+- Keeping the initial personal config values identical to today’s local values reduces behavioral risk during the migration.
 
 ### Decision: Keep secrets and host-specific runtime values in environment variables, not YAML
 `YNAB_ACCESS_TOKEN` should remain environment-provided, and the helper scripts should rely on either `JAVA_HOME`/`PATH` already being configured or accept a caller-provided override rather than storing machine-specific paths in version-controlled files.
@@ -63,14 +63,14 @@ The README should explain which values live in `config.yaml`, which values still
 ## Risks / Trade-offs
 
 - **[YAML/config parsing errors break startup]** → Fail fast with explicit validation/errors when required config sections or keys are missing or malformed.
-- **[Behavior drifts during hard-coded-to-YAML migration]** → Seed `config.yaml` with the exact current values and cover the loader/default path with automated tests before changing behavior.
+- **[Behavior drifts during hard-coded-to-YAML migration]** → Seed `config.yaml.example` with safe representative values, keep a gitignored `config.yaml` for local real values, and cover the loader/default path with automated tests before changing behavior.
 - **[Portable scripts diverge across Windows and Bash]** → Keep both script families minimal, repo-relative, and aligned to the same install/run flow.
 - **[Users may expect secrets in config.yaml]** → Document clearly that `YNAB_ACCESS_TOKEN` remains environment-only and must never be committed.
 - **[Helper scripts may still assume too much about Java installation]** → Prefer using existing `JAVA_HOME`/`PATH` and emit actionable errors when Java is unavailable rather than hard-coding machine paths.
 
 ## Migration Plan
 
-1. Create `config.yaml` with values matching the current embedded domain configuration.
+1. Create `config.yaml.example` with safe representative values and a local `config.yaml` with private real values.
 2. Add a configuration loader/validator and wire `RecordAllowance` to use it while preserving the existing CLI flags and runtime behavior.
 3. Replace the machine-specific Windows scripts with repo-relative wrappers and add equivalent Bash scripts.
 4. Update README/setup guidance for config editing, environment variables, helper scripts, and safe dry-run usage.
@@ -80,4 +80,4 @@ Rollback is straightforward: revert the loader, config file, and portable helper
 
 ## Open Questions
 
-- None currently. The proposal assumes `config.yaml` should mirror the current live values first, then future changes can edit that file instead of changing Groovy source.
+- None currently. The proposal assumes `config.yaml.example` captures the shareable structure while each local `config.yaml` mirrors real budget values outside version control.

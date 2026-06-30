@@ -11,8 +11,8 @@ class AllowanceCalculationServiceSpec extends Specification {
         def service = buildService('2025-07-06')
 
         expect:
-        service.resolveInterestRatePercent('Silver', 'Jack Silver Account') == 0.15
-        service.resolveInterestRatePercent('Bronze', 'Colin Bronze Account') == 0.1
+        service.resolveInterestRatePercent('Silver', 'Child One Silver Account') == 0.15
+        service.resolveInterestRatePercent('Bronze', 'Child Four Bronze Account') == 0.1
     }
 
     def "resolveInterestRatePercent uses origination-date historical rates for CDs"() {
@@ -20,8 +20,8 @@ class AllowanceCalculationServiceSpec extends Specification {
         def service = buildService('2025-07-06')
 
         expect:
-        service.resolveInterestRatePercent('Gold CD 2-Month', 'Colin Gold CD 2-Month 06/15/25') == 0.75
-        service.resolveInterestRatePercent('Gold CD 6-Month', 'Colin Gold CD 6-Month 10/14/24') == 2.75
+        service.resolveInterestRatePercent('Gold CD 2-Month', 'Child Four Gold CD 2-Month 06/15/25') == 0.75
+        service.resolveInterestRatePercent('Gold CD 6-Month', 'Child Four Gold CD 6-Month 10/14/24') == 2.75
     }
 
     def "resolveAccountType returns null when category does not match a configured type"() {
@@ -29,7 +29,7 @@ class AllowanceCalculationServiceSpec extends Specification {
         def service = buildService('2025-07-06')
 
         expect:
-        service.resolveAccountType('Jack Vacation Bucket') == null
+        service.resolveAccountType('Child One Vacation Bucket') == null
     }
 
     def "isMaturedCd only returns true after the maturity date"() {
@@ -38,9 +38,9 @@ class AllowanceCalculationServiceSpec extends Specification {
         def afterMaturity = buildService('2025-08-16')
 
         expect:
-        !beforeMaturity.isMaturedCd('Gold CD 2-Month', 'Colin Gold CD 2-Month 08/15/25')
-        afterMaturity.isMaturedCd('Gold CD 2-Month', 'Colin Gold CD 2-Month 08/15/25')
-        !afterMaturity.isMaturedCd('Silver', 'Jack Silver Account')
+        !beforeMaturity.isMaturedCd('Gold CD 2-Month', 'Child Four Gold CD 2-Month 08/15/25')
+        afterMaturity.isMaturedCd('Gold CD 2-Month', 'Child Four Gold CD 2-Month 08/15/25')
+        !afterMaturity.isMaturedCd('Silver', 'Child One Silver Account')
     }
 
     def "calculateInterest rounds using the configured math context"() {

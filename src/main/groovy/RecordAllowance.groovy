@@ -11,105 +11,52 @@ import java.text.SimpleDateFormat
 @Slf4j
 class RecordAllowance {
 
-    def spendBankSuffix = " Spend Bank"
-    def saveBankSuffix = " Save Bank"
-    def giveBankSuffix = " Give Bank"
-    def allowanceRates = ["$spendBankSuffix": 1, "$saveBankSuffix": 0.5, "$giveBankSuffix": 0.5]
-    def giveBankRate = 0.5
-    def bankSuffixes = [spendBankSuffix, saveBankSuffix, giveBankSuffix]
-    static def DRY_RUN_PREFIX = "[DRY RUN] Would have "
+    static final String DEFAULT_CONFIG_PATH = 'config.yaml'
+    static final String DRY_RUN_PREFIX = '[DRY RUN] Would have '
+    static final SimpleDateFormat inputDateFormat = new SimpleDateFormat('yyyy-MM-dd')
+    static final SimpleDateFormat cdDateFormat = new SimpleDateFormat('MM/dd/yy')
+    static final SimpleDateFormat yyyymmddDateFormat = new SimpleDateFormat('yyyy-MM-dd')
 
-    def jack = "Jack"
-    def evan = "Evan"
-    def emily = "Emily"
-    def colin = "Colin"
-    def kidsWithoutInterest = []
-    def kidsWithSimpleAccounts = []
-    def kidsWithAdvancedAccounts = [jack, evan, emily, colin]
-
-    def advancedAllowanceDeposits = [
-        "Jack": [
-            "Jack Silver Account": 3,
-            "Jack Give Bank": 0.5
-        ],
-        "Evan": [
-            "Evan Silver Account": 3,
-            "Evan Give Bank": 0.5
-        ],
-        "Emily": [
-            "Emily Silver Account": 1,
-            "Emily Give Bank": 0.5
-        ],
-        "Colin": [
-            "Colin Silver Account": 1,
-            "Colin Bronze Account": 0.5,
-            "Colin Give Bank": 0.5
-        ]
-    ]
-
-    def accountTypes = [
-        "Bronze",
-        "Silver",
-        "Gold CD 2-Month",
-        "Gold CD 3-Month",
-        "Gold CD 6-Month",
-        "First Car Fund"
-    ]
-
-    def interestRatesByAccountTypeAndDate = [
-        "Current": [
-            "Bronze": 0.1,
-            "Silver": 0.15,
-            "Gold CD 2-Month": 0.25,
-            "Gold CD 3-Month": 0.35,
-            "Gold CD 6-Month": 0.65,
-            "First Car Fund": 0.65
-        ],
-        "2025-06-01": [
-            "Bronze": 0.1,
-            "Silver": 0.5,
-            "Gold CD 2-Month": 0.75,
-            "Gold CD 3-Month": 1.00,
-            "Gold CD 6-Month": 1.25,
-            "First Car Fund": 1.25
-        ],
-        "2025-04-14": [
-            "Bronze": 0.25,
-            "Silver": 0.75,
-            "Gold CD 2-Month": 1.50,
-            "Gold CD 3-Month": 1.75,
-            "Gold CD 6-Month": 2.00,
-            "First Car Fund": 2.00
-        ],
-        "2024-12-25": [
-            "Gold CD 2-Month": 1.75,
-            "Gold CD 3-Month": 2.00,
-            "Gold CD 6-Month": 2.25,
-        ],
-        "2024-11-23": [
-            "Gold CD 2-Month": 2.25,
-            "Gold CD 3-Month": 2.5,
-            "Gold CD 6-Month": 2.75
-        ]
-    ]
+    String allowanceEscrowAccountName
+    String allowanceCategoryName
+    String budgetName
+    String interestMemo
+    String allowanceMemo
+    String combinedMemo
+    String nonInterestMemoSuffix
+    List<String> bankSuffixes
+    Map<String, Number> allowanceRates
+    Number giveBankRate
+    List<String> kidsWithoutInterest
+    List<String> kidsWithSimpleAccounts
+    List<String> kidsWithAdvancedAccounts
+    Map<String, Map<String, Number>> advancedAllowanceDeposits
+    List<String> accountTypes
+    Map<String, Map<String, Number>> interestRatesByAccountTypeAndDate
 
     static def dryRun = false
 
-    static def inputDateFormat = new SimpleDateFormat("yyyy-MM-dd")
-    static def cdDateFormat = new SimpleDateFormat("MM/dd/yy")
-    static def yyyymmddDateFormat = new SimpleDateFormat("yyyy-MM-dd")
-
-    public static final void main(String[] args) {
-        String accessToken = System.getenv("YNAB_ACCESS_TOKEN")
+    static final void main(String[] args) {
+        String accessToken = System.getenv('YNAB_ACCESS_TOKEN')
         if (StringUtils.isBlank(accessToken)) {
-            throw new IllegalArgumentException("environment variable YNAB_ACCESS_TOKEN must be set")
+            throw new IllegalArgumentException('environment variable YNAB_ACCESS_TOKEN must be set')
         }
 
         def cli = new CliBuilder(usage: 'RecordAllowance')
-        cli.d(longOpt: 'date', args: 1, argName: 'Date to use', "Date to use: YYYY-MM-DD. Default: Current Date")
+        cli.d(longOpt: 'date', args: 1, argName: 'Date to use', 'Date to use: YYYY-MM-DD. Default: Current Date')
+        cli.c(longOpt: 'config', args: 1, argName: 'Config file', "Path to config YAML file. Default: ${DEFAULT_CONFIG_PATH}")
         cli._(longOpt: 'dry-run', "Dry Run. Don't actually execute")
-        cli.h(longOpt: 'help', "Help")
+        cli.h(longOpt: 'help', 'Help')
         def options = cli.parse(args)
+
+        if (!options) {
+            System.exit(1)
+        }
+
+        if (options.h) {
+            cli.usage()
+            System.exit(0)
+        }
 
         def date = new Date()
         if (options.d) {
@@ -117,19 +64,20 @@ class RecordAllowance {
         }
         if (options.'dry-run') {
             dryRun = true
-            println("Dry Run Enabled.")
-        }
-        if (options.h) {
-            cli.usage()
-            System.exit(0)
+            println('Dry Run Enabled.')
         }
         println("Using Date: $date")
-        def ra = new RecordAllowance(accessToken, date)
+
+        String configPath = options.c ?: DEFAULT_CONFIG_PATH
+        println("Using Config: $configPath")
+        RuntimeConfig config = RuntimeConfig.load(configPath)
+
+        def ra = new RecordAllowance(accessToken, date, config)
 
         def categoryInfo = ra.getCategoryInfoByCategoryName()
-        def allowanceEscrowAccountId = ra.getAccountId("Allowance Escrow")
+        def allowanceEscrowAccountId = ra.getAccountId(ra.allowanceEscrowAccountName)
 
-        log.info("Account Id for Allowance Escrow: $allowanceEscrowAccountId")
+        log.info("Account Id for ${ra.allowanceEscrowAccountName}: $allowanceEscrowAccountId")
 
         List<TransactionDraft> transactionsThatNeedOffsetting = []
         transactionsThatNeedOffsetting.addAll(ra.generateInterestTransactionsForSimpleAccounts(allowanceEscrowAccountId, categoryInfo))
@@ -161,32 +109,71 @@ class RecordAllowance {
     def calculationService = null
     def transactionAssemblyService = null
 
-    public RecordAllowance(String accessToken, Date transactionDate) {
-        this(accessToken, transactionDate, true)
+    RecordAllowance(String accessToken, Date transactionDate) {
+        this(accessToken, transactionDate, RuntimeConfig.load(DEFAULT_CONFIG_PATH), true, null)
     }
 
-    public RecordAllowance(String accessToken, Date transactionDate, boolean initializeBudget) {
-        this(accessToken, transactionDate, initializeBudget, null)
+    RecordAllowance(String accessToken, Date transactionDate, RuntimeConfig config) {
+        this(accessToken, transactionDate, config, true, null)
     }
 
-    public RecordAllowance(String accessToken, Date transactionDate, boolean initializeBudget, ynabClient) {
+    RecordAllowance(String accessToken, Date transactionDate, boolean initializeBudget) {
+        this(accessToken, transactionDate, RuntimeConfig.load(DEFAULT_CONFIG_PATH), initializeBudget, null)
+    }
+
+    RecordAllowance(String accessToken, Date transactionDate, boolean initializeBudget, ynabClient) {
+        this(accessToken, transactionDate, RuntimeConfig.load(DEFAULT_CONFIG_PATH), initializeBudget, ynabClient)
+    }
+
+    RecordAllowance(String accessToken, Date transactionDate, RuntimeConfig config, boolean initializeBudget) {
+        this(accessToken, transactionDate, config, initializeBudget, null)
+    }
+
+    RecordAllowance(String accessToken, Date transactionDate, RuntimeConfig config, boolean initializeBudget, ynabClient) {
         this.accessToken = accessToken
         this.transactionDate = transactionDate
-        log.info("YNAB access token loaded from environment")
+        applyConfig(config)
+        log.info('YNAB access token loaded from environment')
         this.ynabClient = ynabClient
         if (this.ynabClient == null && initializeBudget) {
-            this.ynabClient = new YnabHttpClient("https://api.youneedabudget.com", this.accessToken)
+            this.ynabClient = new YnabHttpClient('https://api.youneedabudget.com', this.accessToken)
         }
         if (this.ynabClient != null) {
             this.ynabRepository = new YnabBudgetRepository(this.ynabClient)
         }
         this.calculationService = new AllowanceCalculationService(transactionDate, interestRatesByAccountTypeAndDate, accountTypes)
-        this.transactionAssemblyService = new TransactionAssemblyService(dateFormat.format(transactionDate), calculationService)
+        this.transactionAssemblyService = new TransactionAssemblyService(
+            dateFormat.format(transactionDate),
+            calculationService,
+            allowanceCategoryName,
+            allowanceMemo,
+            combinedMemo,
+            nonInterestMemoSuffix
+        )
 
         if (initializeBudget) {
-            budgetId = getLatestBudgetId("Fiores")
+            budgetId = getLatestBudgetId(budgetName)
             log.info("Most Recent Budget ID: $budgetId")
         }
+    }
+
+    private void applyConfig(RuntimeConfig config) {
+        this.budgetName = config.budgetName
+        this.allowanceEscrowAccountName = config.allowanceEscrowAccountName
+        this.allowanceCategoryName = config.allowanceCategoryName
+        this.interestMemo = config.interestMemo
+        this.allowanceMemo = config.allowanceMemo
+        this.combinedMemo = config.combinedMemo
+        this.nonInterestMemoSuffix = config.nonInterestMemoSuffix
+        this.bankSuffixes = config.bankSuffixes
+        this.allowanceRates = config.allowanceRates
+        this.giveBankRate = config.giveBankRate
+        this.kidsWithoutInterest = config.kidsWithoutInterest
+        this.kidsWithSimpleAccounts = config.kidsWithSimpleAccounts
+        this.kidsWithAdvancedAccounts = config.kidsWithAdvancedAccounts
+        this.advancedAllowanceDeposits = config.advancedAllowanceDeposits
+        this.accountTypes = config.accountTypes
+        this.interestRatesByAccountTypeAndDate = config.interestRatesByAccountTypeAndDate
     }
 
     def postTransactions(transactions) {
@@ -205,7 +192,7 @@ class RecordAllowance {
         def snapshots = categoryInfoByCategoryName.collectEntries { String categoryName, category ->
             [(categoryName): asCategorySnapshot(categoryName, category)]
         }
-        transactionAssemblyService.generateInterestTransactionsForAdvancedAccounts(accountId, snapshots, kidsWithAdvancedAccounts, accountTypes)
+        transactionAssemblyService.generateInterestTransactionsForAdvancedAccounts(accountId, snapshots, kidsWithAdvancedAccounts, accountTypes, interestMemo)
             .collect { it.toYnabTransaction() }
     }
 
@@ -260,35 +247,35 @@ class RecordAllowance {
         ynabRepository.getCategoryInfoByCategoryName(budgetId)
     }
 
-    def toDollars(milliunits) {
-        calculationService.toDollars(milliunits)
-    }
-
-    def toMilliUnits(dollars) {
-        calculationService.toMilliUnits(dollars)
-    }
-
-    def getUser() {
-        ynabRepository.getUser()
-    }
-
-    def getBudgets() {
-        ynabRepository.getBudgets().collect { [id: it.id, name: it.name, last_modified_on: dateFormat.format(it.lastModifiedOn)] }
-    }
-
-    def dateFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssX")
-
-    def getLatestBudgetId(budgetName) {
+    def getLatestBudgetId(String budgetName) {
         ynabRepository.getLatestBudgetId(budgetName)
     }
 
-    private static List<Map<String, Object>> toYnabTransactions(List<TransactionDraft> drafts) {
-        drafts.collect { it.toYnabTransaction() }
+    def getUser() {
+        ynabClient.getJson('/v1/user')
     }
 
-    private static CategorySnapshot asCategorySnapshot(String categoryName, Object category) {
+    def dateFormat = yyyymmddDateFormat
+
+    static List<Map<String, Object>> toYnabTransactions(List<TransactionDraft> transactionDrafts) {
+        transactionDrafts.collect { it.toYnabTransaction() }
+    }
+
+    static Integer toMilliUnits(Number dollars) {
+        BigDecimal.valueOf(dollars as double)
+            .multiply(BigDecimal.valueOf(1000L))
+            .setScale(0, BigDecimal.ROUND_HALF_UP)
+            .intValueExact()
+    }
+
+    static BigDecimal toDollars(Number milliunits) {
+        BigDecimal.valueOf(milliunits as long)
+            .divide(BigDecimal.valueOf(1000L))
+    }
+
+    private static CategorySnapshot asCategorySnapshot(String categoryName, category) {
         if (category instanceof CategorySnapshot) {
-            return category as CategorySnapshot
+            return category
         }
         new CategorySnapshot(
             category.id as String,

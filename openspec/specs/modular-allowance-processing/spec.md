@@ -12,12 +12,12 @@ The codebase SHALL refactor the current monolithic allowance-processing implemen
 - **AND** `RecordAllowance` SHALL remain as the executable entry point or thin coordinator rather than continuing to house all substantive behavior
 
 ### Requirement: The refactor SHALL preserve the current CLI runtime contract
-The modularized implementation SHALL preserve the current required environment variable `YNAB_ACCESS_TOKEN`, support for `--date`, `--dry-run`, and `--help`, and the current YNAB naming assumptions around the `Fiores` budget, `Allowance Escrow` account, `Allowance` category, and existing category naming conventions.
+The modularized implementation SHALL preserve the current required environment variable `YNAB_ACCESS_TOKEN`, support for `--date`, `--dry-run`, `--help`, and `-c/--config`, a dry-run-safe execution pattern, and configurable YNAB lookup names loaded from runtime configuration rather than hard-coded personal values.
 
 #### Scenario: Existing invocation behavior remains intact after modularization
 - **WHEN** the application is run on the supported Java 25 / Gradle 9 / Groovy 5 toolchain with the same CLI inputs used before the refactor
-- **THEN** it SHALL continue to accept the same flags and environment variable requirements
-- **AND** it SHALL preserve the same YNAB lookup assumptions and dry-run-safe behavior unless another approved spec explicitly changes them
+- **THEN** it SHALL continue to accept the same flags and environment variable requirements plus the explicit config-path override
+- **AND** it SHALL preserve dry-run-safe behavior while resolving budget/account/category names from the configured runtime file unless another approved spec explicitly changes them
 
 ### Requirement: The refactor SHALL make business-rule logic callable without hidden posting side effects
 Allowance, interest, and transaction-building logic SHALL be organized so that core calculations can be exercised independently from the side-effecting bulk-post path to YNAB.

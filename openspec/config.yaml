@@ -21,17 +21,18 @@ context: |
   - Run tests with `export JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 && ./gradlew test`.
   - Gradle test runs produce both JUnit XML and HTML reports under build/test-results/ and build/reports/tests/.
 
-  Domain model and hard-coded assumptions:
+  Domain model and runtime configuration:
   - The script talks directly to https://api.youneedabudget.com.
-  - It selects the most recently modified budget named Fiores.
-  - It looks up the YNAB account named Allowance Escrow.
-  - It expects a budget category named Allowance.
-  - Category names are significant and must match exact hard-coded strings.
-  - Simple-account bank suffixes are " Spend Bank", " Save Bank", and " Give Bank".
-  - Advanced account types are detected by substring matching: Bronze, Silver, Gold CD 2-Month, Gold CD 3-Month, Gold CD 6-Month, First Car Fund.
+  - It loads budget/account/category names plus allowance/interest rules from a top-level YAML config file.
+  - `config.yaml.example` is the checked-in template; `config.yaml` is local and gitignored.
+  - `-c` / `--config` can point to an explicit config file path.
+  - It selects the most recently modified budget whose name matches `budgetName` from config.
+  - It looks up the YNAB account named by `allowanceEscrowAccountName`.
+  - It expects the allowance category named by `allowanceCategoryName`.
+  - Category names remain significant and must match the configured strings exactly.
+  - Simple-account bank suffixes come from config; defaults are " Spend Bank", " Save Bank", and " Give Bank".
+  - Advanced account types are detected by configured substring names such as Bronze, Silver, Gold CD 2-Month, Gold CD 3-Month, Gold CD 6-Month, and First Car Fund.
   - CD categories are expected to end with a maturity date formatted as MM/dd/yy.
-  - Current advanced-account kids configured in code are Jack, Evan, Emily, and Colin.
-  - Most business rules are hard-coded in one script rather than externalized.
 
   Repository and workflow conventions:
   - This repo is hosted on GitHub.

@@ -1,0 +1,74 @@
+budgetName: Demo Family Budget
+allowanceEscrowAccountName: Allowance Escrow
+allowanceCategoryName: Family Allowance
+interestMemo: Interest
+allowanceMemo: Allowance
+combinedMemo: Allowance and Interest combined
+nonInterestMemoSuffix: Piggy Banks
+bankSuffixes:
+  - " Spend Bank"
+  - " Save Bank"
+  - " Give Bank"
+allowanceRates:
+  " Spend Bank": 1.0
+  " Save Bank": 0.5
+  " Give Bank": 0.5
+giveBankRate: 0.5
+kidsWithoutInterest: []
+kidsWithSimpleAccounts: []
+kidsWithAdvancedAccounts:
+  - Child One
+  - Child Two
+  - Child Three
+  - Child Four
+advancedAllowanceDeposits:
+  Child One:
+    "Child One Silver Account": 3.0
+    "Child One Give Bank": 0.5
+  Child Two:
+    "Child Two Silver Account": 3.0
+    "Child Two Give Bank": 0.5
+  Child Three:
+    "Child Three Silver Account": 1.0
+    "Child Three Give Bank": 0.5
+  Child Four:
+    "Child Four Silver Account": 1.0
+    "Child Four Bronze Account": 0.5
+    "Child Four Give Bank": 0.5
+accountTypes:
+  - Bronze
+  - Silver
+  - Gold CD 2-Month
+  - Gold CD 3-Month
+  - Gold CD 6-Month
+  - First Car Fund
+interestRatesByAccountTypeAndDate:
+  Current:
+    Bronze: 0.1
+    Silver: 0.15
+    Gold CD 2-Month: 0.25
+    Gold CD 3-Month: 0.35
+    Gold CD 6-Month: 0.65
+    First Car Fund: 0.65
+  "2025-06-01":
+    Bronze: 0.1
+    Silver: 0.5
+    Gold CD 2-Month: 0.75
+    Gold CD 3-Month: 1.0
+    Gold CD 6-Month: 1.25
+    First Car Fund: 1.25
+  "2025-04-14":
+    Bronze: 0.25
+    Silver: 0.75
+    Gold CD 2-Month: 1.5
+    Gold CD 3-Month: 1.75
+    Gold CD 6-Month: 2.0
+    First Car Fund: 2.0
+  "2024-12-25":
+    Gold CD 2-Month: 1.75
+    Gold CD 3-Month: 2.0
+    Gold CD 6-Month: 2.25
+  "2024-11-23":
+    Gold CD 2-Month: 2.25
+    Gold CD 3-Month: 2.5
+    Gold CD 6-Month: 2.75
