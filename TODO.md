@@ -15,7 +15,7 @@ High-level prioritized work items for this repo. These are intentionally lightwe
    - Upgrade the chosen testing framework(s) to current supported versions.
    - Verify Groovy compatibility across the upgraded toolchain.
 
-3. [ ] Refactor the codebase for modularity, readability, and testability
+3. [x] Refactor the codebase for modularity, readability, and testability
    - Break up large or tightly coupled classes/scripts into clearer modules with focused responsibilities.
    - Improve naming, boundaries, and internal structure so the code is easier to understand and maintain.
    - Reduce hidden dependencies and side effects to make behavior easier to test.
