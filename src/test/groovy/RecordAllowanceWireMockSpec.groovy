@@ -260,7 +260,7 @@ class RecordAllowanceWireMockSpec extends Specification {
         body.transactions == transactions
     }
 
-    def "postTransactions surfaces simulated YNAB failure responses"() {
+    def "postTransactions throws explicit YNAB failure details"() {
         given:
         stubFor(get(urlEqualTo('/v1/budgets'))
             .willReturn(aResponse()
@@ -286,7 +286,9 @@ class RecordAllowanceWireMockSpec extends Specification {
         recordAllowance.postTransactions([[account_id: 'acct-1', amount: 1000]])
 
         then:
-        thrown(Exception)
+        def ex = thrown(IllegalStateException)
+        ex.message.contains('YNAB POST /v1/budgets/budget-new/transactions/bulk failed with status 500')
+        ex.message.contains('boom')
     }
 
     private YnabHttpClient buildClient() {
