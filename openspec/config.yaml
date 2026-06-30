@@ -1,7 +1,7 @@
 schema: spec-driven
 
 context: |
-  Project: YNAB Bank of Dad
+  Project: YNABBankOfDad
   Purpose: A Groovy + Gradle command-line utility that records weekly allowance and interest transactions into YNAB.
 
   Tech stack:
@@ -34,7 +34,7 @@ context: |
   - Most business rules are hard-coded in one script rather than externalized.
 
   Repository and workflow conventions:
-  - This repo is hosted on a private git server, not GitHub or GitLab.
+  - This repo is hosted on GitHub.
   - Default branch work means commit directly to master after pulling the latest remote state first.
   - Feature work normally happens on branches; "merge" means merge into master and push master to the remote.
   - Commit openspec/ artifacts to git alongside code changes.

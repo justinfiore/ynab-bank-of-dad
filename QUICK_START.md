@@ -66,6 +66,7 @@ $env:YNAB_ACCESS_TOKEN = 'your-token-here'
 ## 5. Run tests first (recommended)
 
 ```bash
+export JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64
 ./gradlew test
 ```
 
@@ -74,12 +75,14 @@ $env:YNAB_ACCESS_TOKEN = 'your-token-here'
 Always start here:
 
 ```bash
+export JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64
 ./gradlew run --args='--dry-run'
 ```
 
 Or for a specific date:
 
 ```bash
+export JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64
 ./gradlew run --args='--dry-run --date 2025-08-03'
 ```
 
@@ -95,6 +98,7 @@ Before dropping `--dry-run`, verify:
 ## 8. Optional: build a distributable install
 
 ```bash
+export JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64
 ./gradlew installDist
 ```
 
