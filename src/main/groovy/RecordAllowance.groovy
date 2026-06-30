@@ -3,7 +3,6 @@ import groovy.cli.picocli.CliBuilder
 import groovy.util.logging.Slf4j
 import org.apache.commons.lang3.StringUtils
 
-import java.math.MathContext
 import java.text.SimpleDateFormat
 
 /**
@@ -18,8 +17,7 @@ class RecordAllowance {
     def allowanceRates = ["$spendBankSuffix": 1, "$saveBankSuffix": 0.5, "$giveBankSuffix": 0.5]
     def giveBankRate = 0.5
     def bankSuffixes = [spendBankSuffix, saveBankSuffix, giveBankSuffix]
-	static def DRY_RUN_PREFIX = "[DRY RUN] Would have "
-
+    static def DRY_RUN_PREFIX = "[DRY RUN] Would have "
 
     def jack = "Jack"
     def evan = "Evan"
@@ -30,106 +28,98 @@ class RecordAllowance {
     def kidsWithAdvancedAccounts = [jack, evan, emily, colin]
 
     def advancedAllowanceDeposits = [
-            "Jack": [
-                    "Jack Silver Account": 3,
- //                   "Jack Bronze Account": 0,
-                    "Jack Give Bank": 0.5
-            ],
-            "Evan": [
-                    "Evan Silver Account": 3,
-                    // "Evan Bronze Account": 0,
-                    "Evan Give Bank": 0.5
-            ],
-            "Emily": [
-                    "Emily Silver Account": 1,
-                    // "Emily Bronze Account": 0,
-                    "Emily Give Bank": 0.5
-            ],
-            "Colin": [
-                    "Colin Silver Account": 1,
-                    "Colin Bronze Account": 0.5,
-                    "Colin Give Bank": 0.5
-            ]
-
+        "Jack": [
+            "Jack Silver Account": 3,
+            "Jack Give Bank": 0.5
+        ],
+        "Evan": [
+            "Evan Silver Account": 3,
+            "Evan Give Bank": 0.5
+        ],
+        "Emily": [
+            "Emily Silver Account": 1,
+            "Emily Give Bank": 0.5
+        ],
+        "Colin": [
+            "Colin Silver Account": 1,
+            "Colin Bronze Account": 0.5,
+            "Colin Give Bank": 0.5
+        ]
     ]
 
     def accountTypes = [
-            "Bronze",
-            "Silver",
-            "Gold CD 2-Month",
-            "Gold CD 3-Month",
-            "Gold CD 6-Month",
-            "First Car Fund"
+        "Bronze",
+        "Silver",
+        "Gold CD 2-Month",
+        "Gold CD 3-Month",
+        "Gold CD 6-Month",
+        "First Car Fund"
     ]
 
     def interestRatesByAccountTypeAndDate = [
-            "Current": [
-                "Bronze": 0.1,
-                "Silver": 0.15,
-                "Gold CD 2-Month": 0.25,
-                "Gold CD 3-Month": 0.35,
-                "Gold CD 6-Month": 0.65,
-                "First Car Fund": 0.65
-            ],
-            "2025-06-01": [
-                    "Bronze": 0.1,
-                    "Silver": 0.5,
-                    "Gold CD 2-Month": 0.75,
-                    "Gold CD 3-Month": 1.00,
-                    "Gold CD 6-Month": 1.25,
-                    "First Car Fund": 1.25
-            ],
-            "2025-04-14": [
-                    "Bronze": 0.25,
-                    "Silver": 0.75,
-                    "Gold CD 2-Month": 1.50,
-                    "Gold CD 3-Month": 1.75,
-                    "Gold CD 6-Month": 2.00,
-                    "First Car Fund": 2.00
-            ],
-            "2024-12-25": [
-                "Gold CD 2-Month": 1.75,
-                "Gold CD 3-Month": 2.00,
-                "Gold CD 6-Month": 2.25,
-            ],
-            "2024-11-23": [
-                "Gold CD 2-Month": 2.25,
-                "Gold CD 3-Month": 2.5,
-                "Gold CD 6-Month": 2.75
-            ]
+        "Current": [
+            "Bronze": 0.1,
+            "Silver": 0.15,
+            "Gold CD 2-Month": 0.25,
+            "Gold CD 3-Month": 0.35,
+            "Gold CD 6-Month": 0.65,
+            "First Car Fund": 0.65
+        ],
+        "2025-06-01": [
+            "Bronze": 0.1,
+            "Silver": 0.5,
+            "Gold CD 2-Month": 0.75,
+            "Gold CD 3-Month": 1.00,
+            "Gold CD 6-Month": 1.25,
+            "First Car Fund": 1.25
+        ],
+        "2025-04-14": [
+            "Bronze": 0.25,
+            "Silver": 0.75,
+            "Gold CD 2-Month": 1.50,
+            "Gold CD 3-Month": 1.75,
+            "Gold CD 6-Month": 2.00,
+            "First Car Fund": 2.00
+        ],
+        "2024-12-25": [
+            "Gold CD 2-Month": 1.75,
+            "Gold CD 3-Month": 2.00,
+            "Gold CD 6-Month": 2.25,
+        ],
+        "2024-11-23": [
+            "Gold CD 2-Month": 2.25,
+            "Gold CD 3-Month": 2.5,
+            "Gold CD 6-Month": 2.75
+        ]
     ]
 
     static def dryRun = false
 
     static def inputDateFormat = new SimpleDateFormat("yyyy-MM-dd")
-
     static def cdDateFormat = new SimpleDateFormat("MM/dd/yy")
     static def yyyymmddDateFormat = new SimpleDateFormat("yyyy-MM-dd")
 
-
     public static final void main(String[] args) {
         String accessToken = System.getenv("YNAB_ACCESS_TOKEN")
-        if(StringUtils.isBlank(accessToken)) {
+        if (StringUtils.isBlank(accessToken)) {
             throw new IllegalArgumentException("environment variable YNAB_ACCESS_TOKEN must be set")
         }
 
-        def cli = new CliBuilder(usage:'RecordAllowance')
+        def cli = new CliBuilder(usage: 'RecordAllowance')
         cli.d(longOpt: 'date', args: 1, argName: 'Date to use', "Date to use: YYYY-MM-DD. Default: Current Date")
         cli._(longOpt: 'dry-run', "Dry Run. Don't actually execute")
         cli.h(longOpt: 'help', "Help")
         def options = cli.parse(args)
 
-
         def date = new Date()
-        if(options.d) {
-            def dateStr = options.d
-            date = inputDateFormat.parse(dateStr)
+        if (options.d) {
+            date = inputDateFormat.parse(options.d)
         }
-        if(options.'dry-run') {
-            dryRun = true;
+        if (options.'dry-run') {
+            dryRun = true
             println("Dry Run Enabled.")
         }
-        if(options.h) {
+        if (options.h) {
             cli.usage()
             System.exit(0)
         }
@@ -137,44 +127,39 @@ class RecordAllowance {
         def ra = new RecordAllowance(accessToken, date)
 
         def categoryInfo = ra.getCategoryInfoByCategoryName()
-
         def allowanceEscrowAccountId = ra.getAccountId("Allowance Escrow")
 
         log.info("Account Id for Allowance Escrow: $allowanceEscrowAccountId")
 
-        def transactions = []
-
-        def transactionsThatNeedOffsetting = []
-
+        List<TransactionDraft> transactionsThatNeedOffsetting = []
         transactionsThatNeedOffsetting.addAll(ra.generateInterestTransactionsForSimpleAccounts(allowanceEscrowAccountId, categoryInfo))
         transactionsThatNeedOffsetting.addAll(ra.generateNewAllowanceTransactionsForSimpleAccounts(allowanceEscrowAccountId, categoryInfo))
-
         transactionsThatNeedOffsetting.addAll(ra.generateInterestTransactionsForAdvancedAccounts(allowanceEscrowAccountId, categoryInfo))
         transactionsThatNeedOffsetting.addAll(ra.generateNewAllowanceTransactionsForAdvancedAccounts(allowanceEscrowAccountId, categoryInfo))
 
-
+        List<TransactionDraft> transactions = []
         transactions.addAll(transactionsThatNeedOffsetting)
-        //transactions.addAll(ra.generateGiveBankTransactions(allowanceEscrowAccountId, categoryInfo))
-
-        transactions.addAll(ra.generateOffsettingTransaction(allowanceEscrowAccountId, transactionsThatNeedOffsetting, categoryInfo))
-
+        transactions << ra.generateOffsettingTransaction(allowanceEscrowAccountId, transactionsThatNeedOffsetting, categoryInfo)
         transactions.addAll(ra.generateNonInterestBearingTransactions(allowanceEscrowAccountId, categoryInfo))
 
+        def ynabTransactions = toYnabTransactions(transactions)
+        log.info("Transactions to add: ${JsonOutput.prettyPrint(JsonOutput.toJson(ynabTransactions))}")
 
-        log.info("Transactions to add: ${JsonOutput.prettyPrint(JsonOutput.toJson(transactions))}")
-
-        if(!dryRun) {
-            def postedTransactions = ra.postTransactions(transactions)
+        if (!dryRun) {
+            def postedTransactions = ra.postTransactions(ynabTransactions)
             log.info("Successfully posted the following transactions: ${JsonOutput.prettyPrint(JsonOutput.toJson(postedTransactions))}")
         } else {
-            log.info(DRY_RUN_PREFIX + " posted the following transactions: ${JsonOutput.prettyPrint(JsonOutput.toJson(transactions))}")
+            log.info(DRY_RUN_PREFIX + " posted the following transactions: ${JsonOutput.prettyPrint(JsonOutput.toJson(ynabTransactions))}")
         }
     }
 
     def accessToken = null
     def ynabClient = null
+    def ynabRepository = null
     def budgetId = null
     def transactionDate = null
+    def calculationService = null
+    def transactionAssemblyService = null
 
     public RecordAllowance(String accessToken, Date transactionDate) {
         this(accessToken, transactionDate, true)
@@ -185,7 +170,6 @@ class RecordAllowance {
     }
 
     public RecordAllowance(String accessToken, Date transactionDate, boolean initializeBudget, ynabClient) {
-
         this.accessToken = accessToken
         this.transactionDate = transactionDate
         log.info("YNAB access token loaded from environment")
@@ -193,362 +177,123 @@ class RecordAllowance {
         if (this.ynabClient == null && initializeBudget) {
             this.ynabClient = new YnabHttpClient("https://api.youneedabudget.com", this.accessToken)
         }
+        if (this.ynabClient != null) {
+            this.ynabRepository = new YnabBudgetRepository(this.ynabClient)
+        }
+        this.calculationService = new AllowanceCalculationService(transactionDate, interestRatesByAccountTypeAndDate, accountTypes)
+        this.transactionAssemblyService = new TransactionAssemblyService(dateFormat.format(transactionDate), calculationService)
 
-        if(initializeBudget) {
+        if (initializeBudget) {
             budgetId = getLatestBudgetId("Fiores")
             log.info("Most Recent Budget ID: $budgetId")
         }
-
     }
 
-
     def postTransactions(transactions) {
-        return ynabClient.postJson("/v1/budgets/$budgetId/transactions/bulk", [
-            transactions: transactions
-        ])
+        ynabRepository.postTransactions(budgetId, transactions)
     }
 
     def generateInterestTransactionsForSimpleAccounts(accountId, categoryInfoByCategoryName) {
-        def transactions = []
-        def interestRatesByKidAndBankSuffix = [
-                "$jack": ["$spendBankSuffix": 2.0, "$saveBankSuffix": 1.0, "$giveBankSuffix": 0.0],
-                "$evan": ["$spendBankSuffix": 2.0, "$saveBankSuffix": 1.0, "$giveBankSuffix": 0.0],
-                "$emily": ["$spendBankSuffix": 2.0, "$saveBankSuffix": 1.0, "$giveBankSuffix": 0.0]
-        ]
-        log.info("Interest Rate Configuration (Simple): ${interestRatesByKidAndBankSuffix}")
-        kidsWithSimpleAccounts.each { kid ->
-            bankSuffixes.each { bankSuffix ->
-                def catName = kid + bankSuffix
-                def categoryInfo = categoryInfoByCategoryName[catName]
-                def catId = categoryInfo.id
-                def currentBalance = toDollars(categoryInfo.balance)
-                log.info("className = ${interestRatesByKidAndBankSuffix.getClass().getSimpleName()}")
-                log.info("size = ${interestRatesByKidAndBankSuffix.size()}")
-				log.info("interestRatesByKidAndBankSuffix = $interestRatesByKidAndBankSuffix")
-				log.info("Determining Interest Rate for kid: $kid and bankSuffix: $bankSuffix using: ${interestRatesByKidAndBankSuffix["$kid"]}")
-				log.info("${interestRatesByKidAndBankSuffix.get("Evan")}")
-				log.info("keys = ${interestRatesByKidAndBankSuffix.keySet()}")
-                def interestRatesForKid = interestRatesByKidAndBankSuffix.find { k, v -> k == kid }.getValue()
-                log.info("interestRatesForKid = $interestRatesForKid")
-				def interestRatePercent = interestRatesForKid.find{ k, v -> k == bankSuffix }.getValue()
-				log.info("Found interest rate: $interestRatePercent")
-                def interest = ((interestRatePercent / 100.0) * currentBalance)
-                log.info("Calculated Interest: ${interest}")
-                def roundedInterest = interest.round(new MathContext(2))
-                log.info("Rounded Interest: ${roundedInterest}")
-                log.info("${roundedInterest * 1000}")
-                def interestInMilliUnits = toMilliUnits(roundedInterest)
-				if(interest > 0) {
-					def transaction = [
-						account_id: accountId,
-						date: dateFormat.format(transactionDate),
-						amount: interestInMilliUnits,
-						payee_name: "$catName Interest",
-						category_id: catId,
-						memo: "Interest",
-						approved: true
-					]
-					transactions.add(transaction)
-				}
-            }
-        }
-        return transactions
+        []
     }
 
     def generateNewAllowanceTransactionsForSimpleAccounts(accountId, categoryInfoByCategoryName) {
-        def transactions = []
-        kidsWithSimpleAccounts.each { kid ->
-            bankSuffixes.each { bankSuffix ->
-                def catName = kid + bankSuffix
-                def categoryInfo = categoryInfoByCategoryName[catName]
-                def catId = categoryInfo.id
-                def allowance = allowanceRates.find { k, v -> k == bankSuffix }.getValue()
-                def allowanceInMilliUnits = toMilliUnits(allowance)
-                def transaction = [
-                        account_id: accountId,
-                        date: dateFormat.format(transactionDate),
-                        amount: allowanceInMilliUnits,
-                        payee_name: "To $catName",
-                        category_id: catId,
-                        memo: "Allowance",
-                        approved: true
-                ]
-                transactions.add(transaction)
-            }
-        }
-        return transactions
-
+        []
     }
 
     def generateInterestTransactionsForAdvancedAccounts(accountId, categoryInfoByCategoryName) {
-        def transactions = []
-
-        log.info("Interest Rate Configuration (Advanced): ${interestRatesByAccountTypeAndDate}")
-        kidsWithAdvancedAccounts.each { kid ->
-            def categoriesToProcess = categoryInfoByCategoryName.findAll { String catName, category ->
-                //log.info("catName: $catName")
-                def catNameIncludesKid = catName.contains(kid)
-                if(!catNameIncludesKid) {
-                    return false
-                }
-                boolean categoryIsAccount = false
-                for(String accountType : accountTypes) {
-                    if(catName.contains(accountType)) {
-                        categoryIsAccount = true;
-                    }
-                }
-                return categoryIsAccount;
-            }
-
-            log.info("Categories to Process: ${categoriesToProcess.size()}: ${categoriesToProcess.keySet().join(", ")}");
-
-            categoriesToProcess.each { String catName, categoryInfo ->
-                String accountTypeName = null
-                for(String accountType : accountTypes) {
-                    if(catName.contains(accountType)) {
-                        accountTypeName = accountType
-                    }
-                }
-                if(accountTypeName == null) {
-                    throw new IllegalArgumentException("Couldn't Find Account Type for category: $catName")
-                }
-
-                log.info("Processing Account: ${catName} of type: ${accountTypeName}")
-                def skip = false
-                // Get the "Current" interest rates by default.
-
-                def interestRatePercent = interestRatesByAccountTypeAndDate["Current"][accountTypeName]
-                // If it is a CD, we will make sure it isn't expired and then figure out the correct interest rate depending on the CD Origination Date.
-                if(accountTypeName.startsWith("Gold CD")) {
-                    def maturityDateStr = catName.split(" ")[-1]
-                    log.info("Processing CD With Maturity Date: $maturityDateStr")
-                    def maturityDate = cdDateFormat.parse(maturityDateStr)
-                    if(transactionDate.after(maturityDate)) {
-                        skip = true
-                        log.warn("Skipping Account: ${catName} because transactionDate: ${cdDateFormat.format(transactionDate)} is after the maturity date: ${cdDateFormat.format(maturityDate)}")
-                    }
-                    if(!skip) {
-                        def originationDate = getCDOriginationDate(catName, maturityDate)
-                        log.info("Finding CD Interest Rate for category: ${catName} based on origination date: ${originationDate} ...")
-                        def interestRatesForCDOriginationDate = findInterestRatesForDate(originationDate)
-                        interestRatePercent = interestRatesForCDOriginationDate[accountTypeName]
-                        log.info("Found CD Interest Rate for category: ${catName} of: ${interestRatePercent}%")
-                    }
-                }
-                if(!skip) {
-
-                    def currentBalance = toDollars(categoryInfo.balance)
-                    def interest = ((interestRatePercent / 100.0) * currentBalance)
-                    log.info("Calculated Interest: \$${interest}")
-                    def roundedInterest = interest.round(new MathContext(3))
-                    log.info("Rounded Interest: \$${roundedInterest}")
-                    //log.info("${roundedInterest * 1000}")
-                    def interestInMilliUnits = toMilliUnits(roundedInterest)
-                    def catId = categoryInfo.id
-                    if(interest > 0) {
-                        log.info("Account: $catName produced: \$${roundedInterest} on \$${currentBalance} at rate: ${interestRatePercent}%")
-                        def transaction = [
-                                account_id: accountId,
-                                date: dateFormat.format(transactionDate),
-                                amount: interestInMilliUnits,
-                                payee_name: "$catName Interest",
-                                category_id: catId,
-                                memo: "Interest",
-                                approved: true
-                        ]
-                        transactions.add(transaction)
-                    }
-
-                }
-            }
-        };
-        return transactions
+        def snapshots = categoryInfoByCategoryName.collectEntries { String categoryName, category ->
+            [(categoryName): asCategorySnapshot(categoryName, category)]
+        }
+        transactionAssemblyService.generateInterestTransactionsForAdvancedAccounts(accountId, snapshots, kidsWithAdvancedAccounts, accountTypes)
+            .collect { it.toYnabTransaction() }
     }
-
-    def interestRatesByDate = null;
 
     static def getCDOriginationDate(categoryName, maturityDate) {
-        Calendar cal = Calendar.getInstance()
-        cal.setTime(maturityDate)
-        if(categoryName.contains("6-Month")) {
-            cal.add(Calendar.MONTH, -6)
-        } else if(categoryName.contains("3-Month")) {
-            cal.add(Calendar.MONTH, -3)
-        } else if(categoryName.contains("2-Month")) {
-            cal.add(Calendar.MONTH, -2)
-        } else {
-            throw new IllegalStateException("Could not calculate CD Origination Date from category: ${categoryName}")
-        }
-        return cal.getTime()
-    }
-
-    def getInterestRatesByDate() {
-        if(interestRatesByDate == null){
-            def t = new TreeMap();
-            for(Map.Entry<String, Map> e : interestRatesByAccountTypeAndDate.entrySet()) {
-                def dateKey = this.transactionDate;
-                if(e.getKey() != "Current") {
-                    dateKey = yyyymmddDateFormat.parse(e.getKey())
-                }
-                t[dateKey] = e.getValue()
-            }
-            interestRatesByDate = t;
-        }
-        return interestRatesByDate;
+        new AllowanceCalculationService(new Date(), [:], []).getCDOriginationDate(categoryName as String, maturityDate as Date)
     }
 
     def findInterestRatesForDate(date) {
-        // Sorted oldest To Newest
-        def interestRatesByDate = getInterestRatesByDate()
-
-        for(Map.Entry<Date, Map> e : interestRatesByDate.entrySet()) {
-            // If the origination date of the CD is before the current date in the interest rate map, then we found the right rate
-            if(date.before(e.getKey())) {
-                return e.getValue()
-            } else if(date.equals(e.getKey())) {
-                return e.getValue();
-            }
-        }
-        throw new IllegalStateException("Could not find interest rates for date: ${date}")
+        calculationService.findInterestRatesForDate(date)
     }
-
 
     def generateNewAllowanceTransactionsForAdvancedAccounts(accountId, categoryInfoByCategoryName) {
-        def transactions = []
-        kidsWithAdvancedAccounts.each { kid ->
-            def categoryNameToDepositAmount = advancedAllowanceDeposits[kid]
-            categoryNameToDepositAmount.each { catName, allowance ->
-                def categoryInfo = categoryInfoByCategoryName[catName]
-                if(categoryInfo == null) {
-                    throw new IllegalStateException("Missing category info for advanced allowance category: ${catName}")
-                }
-                def catId = categoryInfo.id
-                def allowanceInMilliUnits = toMilliUnits(allowance)
-                def transaction = [
-                        account_id : accountId,
-                        date       : dateFormat.format(transactionDate),
-                        amount     : allowanceInMilliUnits,
-                        payee_name : "To $catName",
-                        category_id: catId,
-                        memo       : "Allowance",
-                        approved   : true
-                ]
-                transactions.add(transaction)
-
-            }
-
+        def snapshots = categoryInfoByCategoryName.collectEntries { String categoryName, category ->
+            [(categoryName): asCategorySnapshot(categoryName, category)]
         }
-
-        return transactions
-
+        transactionAssemblyService.generateNewAllowanceTransactionsForAdvancedAccounts(accountId, snapshots, kidsWithAdvancedAccounts, advancedAllowanceDeposits)
+            .collect { it.toYnabTransaction() }
     }
 
-
     def generateOffsettingTransaction(accountId, transactionsForAllowanceAndInterest, categoryInfoByCategoryName) {
-        def totalMilliUnits = transactionsForAllowanceAndInterest.collect {t -> t.amount}.sum()
-        def allowanceCategory = categoryInfoByCategoryName["Allowance"]
-        if(allowanceCategory == null) {
-            throw new IllegalStateException("Missing category info for Allowance")
+        def drafts = transactionsForAllowanceAndInterest.collect { Map transaction ->
+            new TransactionDraft(
+                transaction.account_id as String,
+                transaction.date as String,
+                transaction.amount as Integer,
+                transaction.payee_name as String,
+                transaction.category_id as String,
+                transaction.memo as String,
+                transaction.approved as Boolean
+            )
         }
-        def allowanceCategoryId = allowanceCategory.id
-        return [
-                account_id: accountId,
-                date: dateFormat.format(transactionDate),
-                amount: -totalMilliUnits,
-                payee_name: "Allowance ${kidsWithSimpleAccounts.join(", ")}",
-                category_id: allowanceCategoryId,
-                memo: "Allowance and Interest combined",
-                approved: true
-        ]
+        transactionAssemblyService.generateOffsettingTransaction(accountId, drafts, categoryInfoByCategoryName, kidsWithSimpleAccounts).toYnabTransaction()
     }
 
     def generateGiveBankTransactions(accountId, categoryInfoByCategoryName) {
-        def allowanceCategoryId = categoryInfoByCategoryName["Allowance"].id
-        return kidsWithSimpleAccounts.collect { kid ->
-            [
-                account_id: accountId,
-                date: dateFormat.format(transactionDate),
-                amount: -1 * toMilliUnits(giveBankRate),
-                payee_name: "Allowance $kid (Give)",
-                category_id: allowanceCategoryId,
-                memo: "To $kid Give Bank",
-                approved: true
-            ]
-        }
+        []
     }
 
     def generateNonInterestBearingTransactions(accountId, categoryInfoByCategoryName) {
-        def allowanceCategoryId = categoryInfoByCategoryName["Allowance"].id
-        def allowanceRateValues = allowanceRates.values()
-        def amount = giveBankRate + allowanceRateValues.sum()
-        return kidsWithoutInterest.collect { kid ->
-            [
-                    account_id: accountId,
-                    date: dateFormat.format(transactionDate),
-                    amount: -1 * toMilliUnits(amount),
-                    payee_name: "Allowance $kid",
-                    category_id: allowanceCategoryId,
-                    memo: "To $kid Piggy Banks",
-                    approved: true
-            ]
+        def snapshots = categoryInfoByCategoryName.collectEntries { String categoryName, category ->
+            [(categoryName): asCategorySnapshot(categoryName, category)]
         }
+        transactionAssemblyService.generateNonInterestBearingTransactions(accountId, snapshots, kidsWithoutInterest, allowanceRates, giveBankRate)
+            .collect { it.toYnabTransaction() }
     }
 
-
-
     def getAccountId(accountName) {
-        def r = ynabClient.getJson("/v1/budgets/${budgetId}/accounts")
-        def account = r.data.accounts.find { a -> a.name == accountName}
-        if(account == null) {
-            throw new IllegalStateException("Could not find account named '${accountName}' in budget '${budgetId}'")
-        }
-        return account.id
+        ynabRepository.getAccountId(budgetId, accountName)
     }
 
     def getCategoryInfoByCategoryName() {
-        def path = "/v1/budgets/${budgetId}/categories"
-        def r = ynabClient.getJson(path)
-        def categoryInfoByCategoryName = [:]
-        r.data.category_groups.each { cg ->
-            cg.categories.each { c ->
-                categoryInfoByCategoryName[c.name] = c
-            }
-        }
-        return categoryInfoByCategoryName
+        ynabRepository.getCategoryInfoByCategoryName(budgetId)
     }
 
     def toDollars(milliunits) {
-        return milliunits / 1000.0
+        calculationService.toDollars(milliunits)
     }
 
     def toMilliUnits(dollars) {
-        return (int) (dollars * 1000)
+        calculationService.toMilliUnits(dollars)
     }
 
     def getUser() {
-        return ynabClient.getJson("/v1/user")
+        ynabRepository.getUser()
     }
 
     def getBudgets() {
-        return ynabClient.getJson("/v1/budgets")
+        ynabRepository.getBudgets().collect { [id: it.id, name: it.name, last_modified_on: dateFormat.format(it.lastModifiedOn)] }
     }
 
     def dateFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssX")
 
     def getLatestBudgetId(budgetName) {
-        def response = getBudgets()
+        ynabRepository.getLatestBudgetId(budgetName)
+    }
 
-        def budgets = []
-        budgets.addAll(response.data.budgets)
-        def sortedBudgets = budgets.findAll{ b -> b.name == budgetName }.toSorted { a, b ->
-            def bDate = dateFormat.parse(b.last_modified_on)
-            def aDate = dateFormat.parse(a.last_modified_on)
-            bDate.getTime() <=> aDate.getTime()
+    private static List<Map<String, Object>> toYnabTransactions(List<TransactionDraft> drafts) {
+        drafts.collect { it.toYnabTransaction() }
+    }
+
+    private static CategorySnapshot asCategorySnapshot(String categoryName, Object category) {
+        if (category instanceof CategorySnapshot) {
+            return category as CategorySnapshot
         }
-        log.info("Sorted Budgets Found: ${sortedBudgets.collect { b -> b.last_modified_on + " " + b.name + " "  + b.id }}")
-        if(sortedBudgets.isEmpty()) {
-            throw new IllegalStateException("Could not find budget named '${budgetName}'")
-        }
-        return sortedBudgets[0].id
+        new CategorySnapshot(
+            category.id as String,
+            categoryName,
+            (category.balance ?: 0) as Integer
+        )
     }
 }
