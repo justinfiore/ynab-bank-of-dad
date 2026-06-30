@@ -11,6 +11,9 @@ application {
     mainClass = 'RecordAllowance'
 }
 
+def integrationTestPatterns = ['**/*WireMockSpec.class']
+def unitTestExcludes = integrationTestPatterns
+
 dependencies {
     implementation 'org.apache.groovy:groovy:5.0.6'
     implementation 'org.apache.groovy:groovy-json:5.0.6'
@@ -38,3 +41,37 @@ tasks.withType(Test).configureEach {
     }
 }
 
+tasks.named('test', Test) {
+    group = LifecycleBasePlugin.VERIFICATION_GROUP
+    description = 'Runs unit tests only.'
+    enabled = false
+    exclude(unitTestExcludes)
+}
+
+def unitTestTask = tasks.register('unitTest', Test) {
+    group = LifecycleBasePlugin.VERIFICATION_GROUP
+    description = 'Runs unit tests only.'
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    exclude(unitTestExcludes)
+}
+
+def integrationTestTask = tasks.register('integrationTest', Test) {
+    group = LifecycleBasePlugin.VERIFICATION_GROUP
+    description = 'Runs integration tests only.'
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    include(integrationTestPatterns)
+    mustRunAfter(unitTestTask)
+}
+
+def combinedTestTask = tasks.register('testAll') {
+    group = LifecycleBasePlugin.VERIFICATION_GROUP
+    description = 'Runs unit tests first, then integration tests if unit tests pass.'
+    dependsOn(unitTestTask)
+    dependsOn(integrationTestTask)
+}
+
+tasks.named('check') {
+    dependsOn(combinedTestTask)
+}
