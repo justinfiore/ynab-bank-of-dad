@@ -21,7 +21,7 @@ High-level prioritized work items for this repo. These are intentionally lightwe
    - Reduce hidden dependencies and side effects to make behavior easier to test.
    - Expand or reshape tests alongside the refactor so the improved structure remains well covered.
 
-4. [ ] Add GitHub Actions to build, run, and report on tests
+4. [x] Add GitHub Actions to build, run, and report on tests
    - Add CI workflow(s) that build the project and run the automated test suite on pushes and pull requests.
    - Publish or preserve test results/artifacts so failures are easier to inspect remotely.
    - Document the CI workflow and any required repository settings or badges.
