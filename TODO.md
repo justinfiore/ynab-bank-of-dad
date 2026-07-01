@@ -26,7 +26,7 @@ High-level prioritized work items for this repo. These are intentionally lightwe
    - Publish or preserve test results/artifacts so failures are easier to inspect remotely.
    - Document the CI workflow and any required repository settings or badges.
 
-5. [ ] Externalize configuration and improve script portability
+5. [x] Externalize configuration and improve script portability
    - Factor hard-coded configuration into `config.yaml` so the tool is reusable by others.
    - Add Bash scripts comparable to the existing Windows batch scripts.
    - Make the Windows batch scripts less specific to Justin’s local machine and environment.
