@@ -28,7 +28,7 @@ class YnabBudgetRepositorySpec extends Specification {
 {
   "data": {
     "budgets": [
-      {"id": "budget-1", "name": "Fiores", "last_modified_on": "2025-07-01T12:00:00Z"},
+      {"id": "budget-1", "name": "Configured Budget", "last_modified_on": "2025-07-01T12:00:00Z"},
       {"id": "budget-2", "name": "Other", "last_modified_on": "2025-07-08T12:00:00Z"}
     ]
   }
@@ -40,7 +40,7 @@ class YnabBudgetRepositorySpec extends Specification {
 
         then:
         budgets*.id == ['budget-1', 'budget-2']
-        budgets*.name == ['Fiores', 'Other']
+        budgets*.name == ['Configured Budget', 'Other']
         budgets*.lastModifiedOn*.time == [
             java.time.OffsetDateTime.parse('2025-07-01T12:00:00Z').toInstant().toEpochMilli(),
             java.time.OffsetDateTime.parse('2025-07-08T12:00:00Z').toInstant().toEpochMilli()
@@ -57,8 +57,8 @@ class YnabBudgetRepositorySpec extends Specification {
 {
   "data": {
     "budgets": [
-      {"id": "budget-old", "name": "Fiores", "last_modified_on": "2025-07-01T12:00:00Z"},
-      {"id": "budget-new", "name": "Fiores", "last_modified_on": "2025-07-08T12:00:00Z"},
+      {"id": "budget-old", "name": "Configured Budget", "last_modified_on": "2025-07-01T12:00:00Z"},
+      {"id": "budget-new", "name": "Configured Budget", "last_modified_on": "2025-07-08T12:00:00Z"},
       {"id": "budget-other", "name": "Other", "last_modified_on": "2025-07-09T12:00:00Z"}
     ]
   }
@@ -66,7 +66,7 @@ class YnabBudgetRepositorySpec extends Specification {
 ''')))
 
         expect:
-        buildRepository().getLatestBudgetId('Fiores') == 'budget-new'
+        buildRepository().getLatestBudgetId('Configured Budget') == 'budget-new'
     }
 
     def "getCategoryInfoByCategoryName preserves names and defaults missing balances to zero"() {
@@ -83,7 +83,7 @@ class YnabBudgetRepositorySpec extends Specification {
         "name": "Kids",
         "categories": [
           {"id": "cat-allowance", "name": "Allowance", "balance": 0},
-          {"id": "cat-jack", "name": "Jack Silver Account"}
+          {"id": "cat-jack", "name": "Child One Silver Account"}
         ]
       }
     ]
@@ -96,7 +96,7 @@ class YnabBudgetRepositorySpec extends Specification {
 
         then:
         categories['Allowance'] == new CategorySnapshot('cat-allowance', 'Allowance', 0)
-        categories['Jack Silver Account'] == new CategorySnapshot('cat-jack', 'Jack Silver Account', 0)
+        categories['Child One Silver Account'] == new CategorySnapshot('cat-jack', 'Child One Silver Account', 0)
     }
 
     def "postTransactions sends the expected bulk payload to YNAB"() {

@@ -15,15 +15,16 @@ This repo is hosted on GitHub and uses a branch + PR workflow.
 - The entry point is `RecordAllowance` in `src/main/groovy/RecordAllowance.groovy`.
 - The Gradle `application` plugin is enabled, and `mainClassName` is `RecordAllowance`.
 - The tool talks directly to the YNAB REST API at `https://api.youneedabudget.com` using the repo-local `YnabHttpClient` wrapper over JDK `java.net.http.HttpClient`.
-- The main workflow computes weekly allowance and interest transactions, then posts them in bulk to the most recently modified YNAB budget named `Fiores`.
+- The main workflow computes weekly allowance and interest transactions, then posts them in bulk to the most recently modified YNAB budget whose name is configured in `config.yaml`.
 
 ## Current Runtime Behavior
 - Requires environment variable `YNAB_ACCESS_TOKEN`.
 - Supports CLI flags:
   - `--date YYYY-MM-DD` to run for a specific date.
+  - `-c`, `--config PATH` to load an explicit YAML config file.
   - `--dry-run` to calculate/log transactions without posting them.
   - `--help` for usage.
-- Looks up the YNAB account named `Allowance Escrow` and the budget category named `Allowance`.
+- Looks up the YNAB account and budget category names configured in `config.yaml`.
 - Loads all categories and maps them by category name.
 - Generates several transaction groups:
   - interest for simple accounts
@@ -33,30 +34,21 @@ This repo is hosted on GitHub and uses a branch + PR workflow.
   - a single offsetting transaction against the `Allowance` category
   - non-interest-bearing kid transactions (currently based on `kidsWithoutInterest`)
 
-## Domain Model Encoded in the Script
+## Domain Model Configured in YAML
 ### Kids and account styles
-- Simple accounts are supported, but the current live configuration uses:
-  - `kidsWithSimpleAccounts = []`
-  - `kidsWithAdvancedAccounts = [Jack, Evan, Emily, Colin]`
-- Non-interest accounts are also supported via `kidsWithoutInterest`, which is currently empty.
+- Simple accounts are supported via `kidsWithSimpleAccounts` in `config.yaml`.
+- Advanced-account kids and deposit mappings are configured via `kidsWithAdvancedAccounts` and `advancedAllowanceDeposits` in `config.yaml`.
+- Non-interest accounts are supported via `kidsWithoutInterest` in `config.yaml`.
 
 ### Bank/category naming conventions
-The script depends heavily on YNAB category names matching exact strings.
+The script depends heavily on YNAB category names matching exact strings from `config.yaml`.
 
-Common suffixes:
+Common suffixes are configured in `bankSuffixes`, for example:
 - ` Spend Bank`
 - ` Save Bank`
 - ` Give Bank`
 
-Advanced-account examples currently hard-coded in `advancedAllowanceDeposits` include:
-- `Jack Silver Account`
-- `Jack Give Bank`
-- `Evan Silver Account`
-- `Emily Silver Account`
-- `Colin Silver Account`
-- `Colin Bronze Account`
-
-Supported advanced account types are detected by substring matching:
+Supported advanced account types are detected by substring matching against the configured `accountTypes` list:
 - `Bronze`
 - `Silver`
 - `Gold CD 2-Month`
@@ -66,12 +58,9 @@ Supported advanced account types are detected by substring matching:
 
 For CDs, category names are expected to end with a maturity date formatted as `MM/dd/yy` so the script can derive origination dates and determine the correct historical rate table.
 
-## Interest/allowance rules currently hard-coded
-- Base simple-account allowance rates:
-  - Spend Bank: `$1.00`
-  - Save Bank: `$0.50`
-  - Give Bank: `$0.50`
-- Advanced-account weekly deposit amounts are hard-coded per child in `advancedAllowanceDeposits`.
+## Interest/allowance rules configured in YAML
+- Base simple-account allowance rates come from `allowanceRates`.
+- Advanced-account weekly deposit amounts come from `advancedAllowanceDeposits`.
 - Interest rates are versioned by date in `interestRatesByAccountTypeAndDate`.
 - `Current` rates are used for non-CD advanced accounts.
 - CD rates are selected based on derived origination date against the dated rate table.
@@ -85,9 +74,9 @@ For CDs, category names are expected to end with a maturity date formatted as `M
   - `toDollars(milliunits)`
   - `toMilliUnits(dollars)`
 - Transactions are posted with `/v1/budgets/$budgetId/transactions/bulk`.
-- Budget selection is based on the newest `last_modified_on` timestamp among budgets named `Fiores`.
-- The script logs the access token at startup (`log.info("Using accessToken: ...")`), which is convenient for debugging but unsafe for production/shared logs.
-- The Windows helper scripts currently contain a literal `YNAB_ACCESS_TOKEN` value and machine-specific `JAVA_HOME` paths; treat them as sensitive/local convenience scripts, not portable documentation.
+- Budget selection is based on the newest `last_modified_on` timestamp among budgets whose name matches `budgetName` in `config.yaml`.
+- The script should not log the raw access token.
+- Helper scripts should remain repo-relative and rely on the caller's environment rather than checked-in secrets or machine-specific Java paths.
 
 ## Logging and debugging
 - Logging is configured in `src/main/resources/logback.groovy`.
@@ -111,7 +100,7 @@ For CDs, category names are expected to end with a maturity date formatted as `M
   3. run `./gradlew installDist`
   4. run the app with `--dry-run`
 - Example:
-  - `JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 YNAB_ACCESS_TOKEN=... ./gradlew run --args='--dry-run --date 2025-08-03'`
+  - `JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 YNAB_ACCESS_TOKEN=... ./gradlew run --args='--dry-run --date 2025-08-03 --config config.yaml'`
 - Run tests with:
   - `export JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 && ./gradlew test`
 
@@ -128,14 +117,14 @@ For CDs, category names are expected to end with a maturity date formatted as `M
 - For brownfield OpenSpec work in this repo, prefer delta specs for the slice being changed instead of trying to spec the whole system up front.
 
 ## Safe change guidance for future work
-- Preserve exact YNAB category/account names unless you are intentionally updating the corresponding lookup logic.
+- Preserve the configured YNAB category/account names unless you are intentionally updating `config.yaml` and the corresponding lookup logic.
 - Be careful when editing interest rate tables: CD logic depends on date ordering and account-type key names matching exactly.
-- If adding a new child or account type, update all related structures together:
+- If adding a new child or account type, update all related config structures together:
   - kid lists
   - allowance deposit maps
-  - account type detection
+  - account type list
   - interest rate tables
-  - any README examples
+  - any README / QUICK_START / example config entries
 - Prefer `--dry-run` first for any behavior change that could create YNAB transactions.
 - Before modifying the default branch (`master`), pull latest changes from remote first.
 

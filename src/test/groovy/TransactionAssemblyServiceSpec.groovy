@@ -10,15 +10,16 @@ class TransactionAssemblyServiceSpec extends Specification {
         given:
         def service = buildAssemblyService('2025-07-06')
         def categories = [
-            'Jack Silver Account': new CategorySnapshot('jack-silver', 'Jack Silver Account', 100)
+            'Child One Silver Account': new CategorySnapshot('child-one-silver', 'Child One Silver Account', 100)
         ]
 
         when:
         def transactions = service.generateInterestTransactionsForAdvancedAccounts(
             'allowance-escrow',
             categories,
-            ['Jack'],
-            ['Silver']
+            ['Child One'],
+            ['Silver'],
+            'Interest'
         )
 
         then:
@@ -29,27 +30,28 @@ class TransactionAssemblyServiceSpec extends Specification {
         given:
         def service = buildAssemblyService('2025-07-06')
         def categories = [
-            'Jack Mystery Account': new CategorySnapshot('jack-mystery', 'Jack Mystery Account', 100000)
+            'Child One Mystery Account': new CategorySnapshot('child-one-mystery', 'Child One Mystery Account', 100000)
         ]
 
         when:
         service.generateInterestTransactionsForAdvancedAccounts(
             'allowance-escrow',
             categories,
-            ['Jack'],
-            ['Mystery']
+            ['Child One'],
+            ['Mystery'],
+            'Interest'
         )
 
         then:
         def ex = thrown(IllegalArgumentException)
-        ex.message.contains("Couldn't Find Account Type for category: Jack Mystery Account")
+        ex.message.contains("Couldn't Find Account Type for category: Child One Mystery Account")
     }
 
     def "generateOffsettingTransaction throws when no component transactions are provided"() {
         given:
         def service = buildAssemblyService('2025-07-06')
         def categories = [
-            'Allowance': new CategorySnapshot('allowance-id', 'Allowance', 0)
+            'Family Allowance': new CategorySnapshot('allowance-id', 'Family Allowance', 0)
         ]
 
         when:
@@ -63,7 +65,7 @@ class TransactionAssemblyServiceSpec extends Specification {
         given:
         def service = buildAssemblyService('2025-07-06')
         def categories = [
-            'Allowance': new CategorySnapshot('allowance-id', 'Allowance', 0)
+            'Family Allowance': new CategorySnapshot('allowance-id', 'Family Allowance', 0)
         ]
 
         when:
@@ -123,6 +125,13 @@ class TransactionAssemblyServiceSpec extends Specification {
             ],
             ['Bronze', 'Silver', 'Gold CD 2-Month', 'Gold CD 3-Month', 'Gold CD 6-Month', 'First Car Fund']
         )
-        new TransactionAssemblyService("${transactionDate}T00:00:00Z", calculationService)
+        new TransactionAssemblyService(
+            "${transactionDate}T00:00:00Z",
+            calculationService,
+            'Family Allowance',
+            'Allowance',
+            'Allowance and Interest combined',
+            'Piggy Banks'
+        )
     }
 }
