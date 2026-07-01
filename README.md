@@ -38,6 +38,7 @@ Before any live run:
 - inspect the generated transactions carefully
 
 If you only want the shortest safe path to a first run, start with [QUICK_START.md](QUICK_START.md).
+For the full configuration guide, see [CONFIGURATION.md](CONFIGURATION.md).
 
 ## Required runtime inputs
 
@@ -47,27 +48,12 @@ If you only want the shortest safe path to a first run, start with [QUICK_START.
 - a config file in the repository format (`config.yaml.example` is the starting template)
 - network access to `https://api.youneedabudget.com`
 
-## Configuration model
+## Configuration
 
-The application reads its runtime rules from YAML.
-
-Committed template:
-- `config.yaml.example`
-
-Local personal file:
-- `config.yaml` (gitignored)
-
-The config contains values such as:
-- `budgetName`
-- `allowanceEscrowAccountName`
-- `allowanceCategoryName`
-- bank suffixes
-- allowance rates
-- account types
-- dated interest-rate tables
-- child/account mappings
-- advanced allowance deposit mappings
-- memo text used in generated transactions
+Use these files together:
+- `config.yaml.example` — commented example template
+- `CONFIGURATION.md` — detailed field-by-field documentation, examples, and Simple vs. Advanced account guidance
+- `config.yaml` — your personal local file (gitignored)
 
 ## Supported toolchain
 
@@ -180,6 +166,7 @@ GitHub Actions runs and artifacts:
 ```text
 .
 ├── build.gradle
+├── CONFIGURATION.md
 ├── config.yaml.example
 ├── gradlew
 ├── gradlew.bat

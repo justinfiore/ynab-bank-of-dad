@@ -2,6 +2,8 @@
 
 Use these steps to configure `config.yaml` safely and run a dry run before any live posting.
 
+For the full field-by-field configuration reference, Simple vs. Advanced account modeling, and inline YAML examples, see [CONFIGURATION.md](CONFIGURATION.md).
+
 ## 1. Install prerequisites
 
 1. Install Java JDK 25.
@@ -24,13 +26,13 @@ export YNAB_ACCESS_TOKEN='your-token-here'
 cp config.yaml.example config.yaml
 ```
 
-2. Edit `config.yaml` and replace the example values with your real setup.
-3. Update at least these fields:
+2. Read [CONFIGURATION.md](CONFIGURATION.md) before editing if you need help choosing between Simple and Advanced account modeling.
+3. Edit `config.yaml` and replace the example values with your real setup.
+4. Update at least these fields:
    - `budgetName`
    - `allowanceEscrowAccountName`
    - `allowanceCategoryName`
-   - `kidsWithAdvancedAccounts`
-   - `advancedAllowanceDeposits`
+   - your Simple-account settings and/or Advanced-account settings
    - any category names, memo text, or rate tables that differ in your budget
 
 `config.yaml` is gitignored and is intended for your personal values.

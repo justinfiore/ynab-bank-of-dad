@@ -23,6 +23,14 @@ combinedMemo: Allowance and Interest combined
 # bearing allowance transaction instead of per-account interest.
 nonInterestMemoSuffix: Piggy Banks
 
+# -----------------------------------------------------------------------------
+# Simple-account configuration
+# -----------------------------------------------------------------------------
+# Use this section for kids whose allowance is derived from bank suffixes plus a
+# standard weekly amount per suffix. For each kid in kidsWithSimpleAccounts, the
+# script expects categories such as "<Kid> Spend Bank", "<Kid> Save Bank", and
+# "<Kid> Give Bank".
+
 # Category-name suffixes for simple-account kids. These are appended to each
 # kid name to locate the matching YNAB categories.
 bankSuffixes:
@@ -43,18 +51,24 @@ allowanceRates:
   # Weekly give amount for simple accounts.
   " Give Bank": 0.5
 
-# Weekly give-bank amount, in dollars, used when generating a single combined
-# non-interest-bearing transaction for a kid in kidsWithoutInterest.
-giveBankRate: 0.5
+# Kids whose allowance is generated from bankSuffixes + allowanceRates. For
+# each name here, the script expects categories like "<Kid> Spend Bank".
+kidsWithSimpleAccounts: []
 
 # Kids who receive one combined weekly allowance transaction and no interest
 # transactions. The script uses this list to build memos/payees only; exact
 # category names are not derived from these names.
 kidsWithoutInterest: []
 
-# Kids whose allowance is generated from bankSuffixes + allowanceRates. For
-# each name here, the script expects categories like "<Kid> Spend Bank".
-kidsWithSimpleAccounts: []
+# Weekly give-bank amount, in dollars, used when generating a single combined
+# non-interest-bearing transaction for a kid in kidsWithoutInterest.
+giveBankRate: 0.5
+
+# -----------------------------------------------------------------------------
+# Advanced-account configuration
+# -----------------------------------------------------------------------------
+# Use this section for kids whose weekly deposits are configured explicitly by
+# exact category name instead of being inferred from bank suffixes.
 
 # Kids whose weekly allowance is generated from the explicit per-category map
 # in advancedAllowanceDeposits.
