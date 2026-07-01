@@ -16,9 +16,12 @@ if "%~1"=="" (
 
 set "JAVA_VERSION_LINE="
 for /f "usebackq delims=" %%I in (`java -version 2^>^&1`) do (
-  if not defined JAVA_VERSION_LINE set "JAVA_VERSION_LINE=%%I"
+  if not defined JAVA_VERSION_LINE (
+    set "JAVA_VERSION_LINE=%%I"
+  )
 )
-for /f "tokens=2 delims=.\"" %%I in ("!JAVA_VERSION_LINE!") do set "JAVA_MAJOR_VERSION=%%I"
+for /f tokens^=2^ delims^=^" %%I in ("!JAVA_VERSION_LINE!") do set "JAVA_VERSION_VALUE=%%I"
+for /f "tokens=1 delims=." %%I in ("!JAVA_VERSION_VALUE!") do set "JAVA_MAJOR_VERSION=%%I"
 if not defined JAVA_MAJOR_VERSION (
   echo ERROR: Java 25 or later is required.
   echo Make sure JAVA_HOME is set to a Java 25 installation and that the java on the PATH is Java 25.

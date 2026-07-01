@@ -34,6 +34,9 @@ class ScriptWrapperBehaviorSpec extends Specification {
 
         expect:
         script.contains('java -version 2^>^&1')
+        script.contains('set "JAVA_VERSION_LINE=%%I"')
+        script.contains('for /f tokens^=2^ delims^=^" %%I in ("!JAVA_VERSION_LINE!") do set "JAVA_VERSION_VALUE=%%I"')
+        script.contains('for /f "tokens=1 delims=." %%I in ("!JAVA_VERSION_VALUE!") do set "JAVA_MAJOR_VERSION=%%I"')
         script.contains('Java 25 or later is required.')
         script.contains('Make sure JAVA_HOME is set to a Java 25 installation and that the java on the PATH is Java 25.')
         script.contains('Detected java version:')
@@ -47,6 +50,9 @@ class ScriptWrapperBehaviorSpec extends Specification {
 
         expect:
         script.contains('java -version 2^>^&1')
+        script.contains('set "JAVA_VERSION_LINE=%%I"')
+        script.contains('for /f tokens^=2^ delims^=^" %%I in ("!JAVA_VERSION_LINE!") do set "JAVA_VERSION_VALUE=%%I"')
+        script.contains('for /f "tokens=1 delims=." %%I in ("!JAVA_VERSION_VALUE!") do set "JAVA_MAJOR_VERSION=%%I"')
         script.contains('Java 25 or later is required.')
         script.contains('Make sure JAVA_HOME is set to a Java 25 installation and that the java on the PATH is Java 25.')
         script.contains('Detected java version:')
