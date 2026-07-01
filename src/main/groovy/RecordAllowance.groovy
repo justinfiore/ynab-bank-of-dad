@@ -213,7 +213,10 @@ class RecordAllowance {
     }
 
     def generateOffsettingTransaction(accountId, transactionsForAllowanceAndInterest, categoryInfoByCategoryName) {
-        def drafts = transactionsForAllowanceAndInterest.collect { Map transaction ->
+        def drafts = transactionsForAllowanceAndInterest.collect { transaction ->
+            if (transaction instanceof TransactionDraft) {
+                return transaction
+            }
             new TransactionDraft(
                 transaction.account_id as String,
                 transaction.date as String,
@@ -236,7 +239,6 @@ class RecordAllowance {
             [(categoryName): asCategorySnapshot(categoryName, category)]
         }
         transactionAssemblyService.generateNonInterestBearingTransactions(accountId, snapshots, kidsWithoutInterest, allowanceRates, giveBankRate)
-            .collect { it.toYnabTransaction() }
     }
 
     def getAccountId(accountName) {
@@ -258,7 +260,12 @@ class RecordAllowance {
     def dateFormat = yyyymmddDateFormat
 
     static List<Map<String, Object>> toYnabTransactions(List<TransactionDraft> transactionDrafts) {
-        transactionDrafts.collect { it.toYnabTransaction() }
+        transactionDrafts.collect { transaction ->
+            if (transaction instanceof TransactionDraft) {
+                return transaction.toYnabTransaction()
+            }
+            transaction as Map<String, Object>
+        }
     }
 
     static Integer toMilliUnits(Number dollars) {

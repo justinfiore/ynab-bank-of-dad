@@ -257,9 +257,42 @@ class RecordAllowanceSpec extends Specification {
         then:
         transactions.size() == 2
         transactions.every { it.amount == -2500 }
-        transactions*.payee_name == ['Allowance Sam', 'Allowance Max']
-        transactions*.category_id == ['allowance-id', 'allowance-id']
+        transactions*.payeeName == ['Allowance Sam', 'Allowance Max']
+        transactions*.categoryId == ['allowance-id', 'allowance-id']
         transactions*.memo == ['To Sam Piggy Banks', 'To Max Piggy Banks']
+    }
+
+    def "toYnabTransactions converts mixed transaction draft groups without runtime method errors"() {
+        given:
+        def recordAllowance = new RecordAllowance('token', dateFormat.parse('2025-07-06'), demoConfig(), false)
+        recordAllowance.kidsWithoutInterest = ['Sam']
+        def transactionsThatNeedOffsetting = []
+        transactionsThatNeedOffsetting.addAll(recordAllowance.generateNewAllowanceTransactionsForAdvancedAccounts('allowance-escrow', [
+            'Child One Silver Account': [id: 'child-one-silver'],
+            'Child One Give Bank': [id: 'child-one-give'],
+            'Child Two Silver Account': [id: 'child-two-silver'],
+            'Child Two Give Bank': [id: 'child-two-give'],
+            'Child Three Silver Account': [id: 'child-three-silver'],
+            'Child Three Give Bank': [id: 'child-three-give'],
+            'Child Four Silver Account': [id: 'child-four-silver'],
+            'Child Four Bronze Account': [id: 'child-four-bronze'],
+            'Child Four Give Bank': [id: 'child-four-give']
+        ]))
+
+        def transactions = []
+        transactions.addAll(transactionsThatNeedOffsetting)
+        transactions << recordAllowance.generateOffsettingTransaction('allowance-escrow', transactionsThatNeedOffsetting, ['Family Allowance': [id: 'allowance-id']])
+        transactions.addAll(recordAllowance.generateNonInterestBearingTransactions('allowance-escrow', ['Family Allowance': [id: 'allowance-id']]))
+
+        when:
+        def ynabTransactions = RecordAllowance.toYnabTransactions(transactions)
+
+        then:
+        ynabTransactions.size() == 11
+        ynabTransactions.every { it instanceof Map }
+        ynabTransactions[-1].payee_name == 'Allowance Sam'
+        ynabTransactions[-1].category_id == 'allowance-id'
+        ynabTransactions[-1].memo == 'To Sam Piggy Banks'
     }
 
     def "generateOffsettingTransaction uses all transaction groups in a stable combined total"() {
@@ -286,13 +319,14 @@ class RecordAllowanceSpec extends Specification {
 
         when:
         def offset = recordAllowance.generateOffsettingTransaction('allowance-escrow', groupedTransactions, ['Family Allowance': [id: 'allowance-id']])
+        def ynabTransactions = RecordAllowance.toYnabTransactions(groupedTransactions)
 
         then:
-        groupedTransactions*.memo[0..1] == ['Interest', 'Interest']
-        groupedTransactions*.memo[2..10] == ['Allowance', 'Allowance', 'Allowance', 'Allowance', 'Allowance', 'Allowance', 'Allowance', 'Allowance', 'Allowance']
-        groupedTransactions*.memo[11] == 'To Sam Piggy Banks'
-        groupedTransactions*.payee_name[0..1] == ['Child One Silver Account Interest', 'Child Four Bronze Account Interest']
-        groupedTransactions*.payee_name[2..10] == [
+        ynabTransactions*.memo[0..1] == ['Interest', 'Interest']
+        ynabTransactions*.memo[2..10] == ['Allowance', 'Allowance', 'Allowance', 'Allowance', 'Allowance', 'Allowance', 'Allowance', 'Allowance', 'Allowance']
+        ynabTransactions*.memo[11] == 'To Sam Piggy Banks'
+        ynabTransactions*.payee_name[0..1] == ['Child One Silver Account Interest', 'Child Four Bronze Account Interest']
+        ynabTransactions*.payee_name[2..10] == [
             'To Child One Silver Account',
             'To Child One Give Bank',
             'To Child Two Silver Account',
@@ -303,7 +337,7 @@ class RecordAllowanceSpec extends Specification {
             'To Child Four Bronze Account',
             'To Child Four Give Bank'
         ]
-        groupedTransactions*.payee_name[11] == 'Allowance Sam'
+        ynabTransactions*.payee_name[11] == 'Allowance Sam'
         offset.amount == -groupedTransactions.sum { it.amount as Integer }
         offset.payee_name == 'Allowance '
         offset.memo == 'Allowance and Interest combined'
