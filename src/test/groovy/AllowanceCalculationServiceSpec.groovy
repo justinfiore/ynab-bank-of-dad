@@ -24,6 +24,39 @@ class AllowanceCalculationServiceSpec extends Specification {
         service.resolveInterestRatePercent('Gold CD 6-Month', 'Child Four Gold CD 6-Month 10/14/24') == 2.75
     }
 
+    def "findInterestRatesForDate falls back to Current for dates newer than the most recent dated table"() {
+        given:
+        def service = buildService('2026-05-08')
+
+        expect:
+        service.findInterestRatesForDate(dateFormat.parse('2026-06-07'))['Gold CD 2-Month'] == 0.25
+        service.findInterestRatesForDate(dateFormat.parse('2026-06-07'))['Silver'] == 0.15
+    }
+
+    def "findInterestRatesForDate treats the Current rate table case-insensitively"() {
+        given:
+        def service = new AllowanceCalculationService(
+            dateFormat.parse('2026-05-08'),
+            [
+                'current': [
+                    'Bronze': 0.1,
+                    'Silver': 0.15,
+                    'Gold CD 2-Month': 0.25
+                ],
+                '2025-06-01': [
+                    'Bronze': 0.1,
+                    'Silver': 0.5,
+                    'Gold CD 2-Month': 0.75
+                ]
+            ],
+            ['Bronze', 'Silver', 'Gold CD 2-Month']
+        )
+
+        expect:
+        service.findInterestRatesForDate(dateFormat.parse('2026-06-07'))['Gold CD 2-Month'] == 0.25
+        service.resolveInterestRatePercent('Silver', 'Child One Silver Account') == 0.15
+    }
+
     def "resolveAccountType returns null when category does not match a configured type"() {
         given:
         def service = buildService('2025-07-06')

@@ -31,6 +31,10 @@ class AllowanceCalculationService {
                 return entry.value
             }
         }
+        Map<String, Number> currentRates = getCurrentInterestRates()
+        if (currentRates != null) {
+            return currentRates
+        }
         throw new IllegalStateException("Could not find interest rates for date: ${date}")
     }
 
@@ -66,7 +70,7 @@ class AllowanceCalculationService {
     }
 
     Number resolveInterestRatePercent(String accountTypeName, String categoryName) {
-        Number interestRatePercent = interestRatesByAccountTypeAndDate["Current"][accountTypeName]
+        Number interestRatePercent = getCurrentInterestRates()[accountTypeName]
         if (accountTypeName.startsWith("Gold CD")) {
             Date maturityDate = CD_DATE_FORMAT.parse(categoryName.split(" ")[-1])
             Date originationDate = getCDOriginationDate(categoryName, maturityDate)
@@ -78,9 +82,19 @@ class AllowanceCalculationService {
     private Map<Date, Map<String, Number>> getInterestRatesByDate() {
         TreeMap<Date, Map<String, Number>> sorted = new TreeMap<>()
         interestRatesByAccountTypeAndDate.each { String dateKey, Map<String, Number> rates ->
-            Date effectiveDate = dateKey == "Current" ? transactionDate : YYYYMMDD_DATE_FORMAT.parse(dateKey)
+            Date effectiveDate = isCurrentRateKey(dateKey) ? transactionDate : YYYYMMDD_DATE_FORMAT.parse(dateKey)
             sorted[effectiveDate] = rates
         }
         sorted
+    }
+
+    private Map<String, Number> getCurrentInterestRates() {
+        interestRatesByAccountTypeAndDate.find { String dateKey, Map<String, Number> rates ->
+            isCurrentRateKey(dateKey)
+        }?.value
+    }
+
+    private static boolean isCurrentRateKey(String dateKey) {
+        dateKey?.equalsIgnoreCase('Current')
     }
 }

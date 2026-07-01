@@ -210,6 +210,21 @@ interestRatesByAccountTypeAndDate:
         ex.message.contains("must include a 'Current' rate table")
     }
 
+    def "validate accepts Current rate table regardless of key casing"() {
+        given:
+        def raw = validConfigMap()
+        raw.interestRatesByAccountTypeAndDate = [
+            'current': ['Bronze': 0.1, 'Silver': 0.15, 'Gold CD 2-Month': 0.25],
+            '2025-06-01': ['Bronze': 0.1, 'Silver': 0.5, 'Gold CD 2-Month': 0.75]
+        ]
+
+        when:
+        def config = RuntimeConfig.fromMap(raw)
+
+        then:
+        config.interestRatesByAccountTypeAndDate['current']['Silver'] == 0.15
+    }
+
     private static Map validConfigMap() {
         [
             budgetName: 'Demo Family Budget',

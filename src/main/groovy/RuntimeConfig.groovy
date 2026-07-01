@@ -67,7 +67,7 @@ class RuntimeConfig {
                 throw new IllegalArgumentException("allowanceRates key '${suffix}' must also appear in bankSuffixes")
             }
         }
-        if (!interestRatesByAccountTypeAndDate.containsKey('Current')) {
+        if (!interestRatesByAccountTypeAndDate.keySet().any { it?.equalsIgnoreCase('Current') }) {
             throw new IllegalArgumentException("interestRatesByAccountTypeAndDate must include a 'Current' rate table")
         }
     }
