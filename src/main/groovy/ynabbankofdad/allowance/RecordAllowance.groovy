@@ -1,3 +1,9 @@
+package ynabbankofdad.allowance
+
+import ynabbankofdad.config.RuntimeConfig
+import ynabbankofdad.model.*
+import ynabbankofdad.ynab.*
+
 import groovy.json.JsonOutput
 import groovy.cli.picocli.CliBuilder
 import groovy.util.logging.Slf4j

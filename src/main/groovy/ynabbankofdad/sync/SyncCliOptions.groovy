@@ -1,3 +1,5 @@
+package ynabbankofdad.sync
+
 class SyncCliOptions {
     boolean help = false
     boolean dryRun = false

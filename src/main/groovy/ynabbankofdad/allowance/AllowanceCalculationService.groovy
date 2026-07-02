@@ -1,3 +1,5 @@
+package ynabbankofdad.allowance
+
 import java.math.MathContext
 import java.text.SimpleDateFormat
 

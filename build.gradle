@@ -8,14 +8,14 @@ repositories {
 }
 
 application {
-    mainClass = 'RecordAllowance'
+    mainClass = 'ynabbankofdad.allowance.RecordAllowance'
 }
 
 tasks.register('runSyncer', JavaExec) {
     group = 'application'
     description = 'Runs the standalone parent-child budget syncer.'
     classpath = sourceSets.main.runtimeClasspath
-    mainClass = 'ParentChildBudgetSyncer'
+    mainClass = 'ynabbankofdad.sync.ParentChildBudgetSyncer'
 }
 
 def integrationTestPatterns = ['**/*WireMockSpec.class', '**/*IntegrationSpec.class']
@@ -53,7 +53,6 @@ tasks.withType(Test).configureEach {
 tasks.named('test', Test) {
     group = LifecycleBasePlugin.VERIFICATION_GROUP
     description = 'Runs unit tests only.'
-    enabled = false
     exclude(unitTestExcludes)
 }
 

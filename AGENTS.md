@@ -12,8 +12,8 @@ This repo is hosted on GitHub and uses a branch + PR workflow.
 
 ## Project Overview
 - This is a small Gradle + Groovy command-line application.
-- The entry point is `RecordAllowance` in `src/main/groovy/RecordAllowance.groovy`.
-- The Gradle `application` plugin is enabled, and `mainClassName` is `RecordAllowance`.
+- The allowance entry point is `ynabbankofdad.allowance.RecordAllowance` in `src/main/groovy/ynabbankofdad/allowance/RecordAllowance.groovy`; the sync entry point is `ynabbankofdad.sync.ParentChildBudgetSyncer`.
+- The Gradle `application` plugin is enabled with `mainClass = ynabbankofdad.allowance.RecordAllowance`; `runSyncer` uses `ynabbankofdad.sync.ParentChildBudgetSyncer`.
 - The tool talks directly to the YNAB REST API at `https://api.youneedabudget.com` using the repo-local `YnabHttpClient` wrapper over JDK `java.net.http.HttpClient`.
 - The main workflow computes weekly allowance and interest transactions, then posts them in bulk to the most recently modified YNAB budget whose name is configured in `config.yaml`.
 
@@ -73,7 +73,7 @@ For CDs, category names are expected to end with a maturity date formatted as `M
 - Money is converted between YNAB milliunits and dollars using helper methods:
   - `toDollars(milliunits)`
   - `toMilliUnits(dollars)`
-- Transactions are posted with `/v1/budgets/$budgetId/transactions/bulk`.
+- Transactions are posted with `/v1/plans/$budgetId/transactions/bulk`.
 - Budget selection is based on the newest `last_modified_on` timestamp among budgets whose name matches `budgetName` in `config.yaml`.
 - The script should not log the raw access token.
 - Helper scripts should remain repo-relative and rely on the caller's environment rather than checked-in secrets or machine-specific Java paths.
@@ -90,8 +90,8 @@ For CDs, category names are expected to end with a maturity date formatted as `M
 - Verified build commands on this host:
   - `./gradlew tasks --all`
   - `./gradlew installDist`
-  - `./gradlew test`
-- Tests are part of apply completion for code changes: feature, bug-fix, and other non-doc-only changes should add/update automated tests and must pass `./gradlew test` before considering `openspec-apply` complete.
+  - `./gradlew testAll`
+- Tests are part of apply completion for code changes: feature, bug-fix, and other non-doc-only changes should add/update automated tests and must pass `./gradlew testAll` before considering `openspec-apply` complete.
 - Doc-only changes do not require running the test suite.
 - Test reports are written in both JUnit XML and HTML formats under `build/test-results/` and `build/reports/tests/`.
 - Typical safe first run pattern on Linux/macOS:
@@ -102,7 +102,7 @@ For CDs, category names are expected to end with a maturity date formatted as `M
 - Example:
   - `JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 YNAB_ACCESS_TOKEN=... ./gradlew run --args='--dry-run --date 2025-08-03 --config config.yaml'`
 - Run tests with:
-  - `export JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 && ./gradlew test`
+  - `export JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 && ./gradlew testAll`
 
 ## HTTP client migration note
 - `http-builder-ng-apache` was removed during the Java 25 / Gradle 9 / Groovy 5 modernization because it is archived and failed under the upgraded Groovy runtime.
@@ -129,8 +129,7 @@ For CDs, category names are expected to end with a maturity date formatted as `M
 - Before modifying the default branch (`master`), pull latest changes from remote first.
 
 ## Known issues / tech debt observed during inspection
-- No README existed prior to this documentation pass.
 - Automated tests are present and should remain authoritative on the upgraded toolchain.
-- Sensitive token material appears in the checked-in Windows batch helper scripts and should be rotated/removed if those values are real.
-- The script currently logs the access token, which should likely be removed or masked.
+- Token values should stay in environment variables and must not be checked into helper scripts or config files.
+- The scripts should log that tokens were loaded without printing raw token values.
 - Most business rules are hard-coded inside one large script; future refactors may benefit from extracting configuration and calculation logic.

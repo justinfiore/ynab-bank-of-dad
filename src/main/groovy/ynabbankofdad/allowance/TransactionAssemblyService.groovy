@@ -1,3 +1,7 @@
+package ynabbankofdad.allowance
+
+import ynabbankofdad.model.*
+
 class TransactionAssemblyService {
     private final String transactionDate
     private final AllowanceCalculationService calculationService

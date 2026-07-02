@@ -1,3 +1,8 @@
+package ynabbankofdad.ynab
+
+import ynabbankofdad.model.*
+import ynabbankofdad.sync.model.*
+
 import java.text.SimpleDateFormat
 import java.time.LocalDate
 
@@ -10,7 +15,7 @@ class YnabBudgetRepository {
     }
 
     List<BudgetSummary> getBudgets() {
-        def response = ynabClient.getJson('/v1/budgets')
+        def response = ynabClient.getJson('/v1/plans')
         response.data.budgets.collect { budget ->
             new BudgetSummary(
                 budget.id as String,
@@ -30,7 +35,7 @@ class YnabBudgetRepository {
     }
 
     String getAccountId(String budgetId, String accountName) {
-        def response = ynabClient.getJson("/v1/budgets/${budgetId}/accounts")
+        def response = ynabClient.getJson("/v1/plans/${budgetId}/accounts")
         def account = response.data.accounts.find { it.name == accountName }
         if (account == null) {
             throw new IllegalStateException("Could not find account named '${accountName}' in budget '${budgetId}'")
@@ -39,7 +44,7 @@ class YnabBudgetRepository {
     }
 
     Map<String, CategorySnapshot> getCategoryInfoByCategoryName(String budgetId) {
-        def response = ynabClient.getJson("/v1/budgets/${budgetId}/categories")
+        def response = ynabClient.getJson("/v1/plans/${budgetId}/categories")
         Map<String, CategorySnapshot> categoriesByName = [:]
         response.data.category_groups.each { group ->
             group.categories.each { category ->
@@ -55,7 +60,7 @@ class YnabBudgetRepository {
 
     List<ParentTransactionEvent> getTransactions(String budgetId, int lookbackDays, Integer lastServerKnowledge = null) {
         String sinceDate = LocalDate.now().minusDays(lookbackDays as long).toString()
-        String path = "/v1/budgets/${budgetId}/transactions?since_date=${sinceDate}"
+        String path = "/v1/plans/${budgetId}/transactions?since_date=${sinceDate}"
         if (lastServerKnowledge != null) {
             path += "&last_knowledge_of_server=${lastServerKnowledge}"
         }
@@ -86,7 +91,7 @@ class YnabBudgetRepository {
     }
 
     List<MoneyMovementEvent> getMoneyMovements(String budgetId, int lookbackDays) {
-        def response = ynabClient.getJson("/v1/budgets/${budgetId}/money_movements")
+        def response = ynabClient.getJson("/v1/plans/${budgetId}/money_movements")
         LocalDate threshold = LocalDate.now().minusDays(lookbackDays as long)
         List movements = (response?.data?.money_movements ?: []) as List
         movements.collect { movement ->
@@ -104,7 +109,7 @@ class YnabBudgetRepository {
     }
 
     Integer getLatestServerKnowledge(String budgetId) {
-        def response = ynabClient.getJson("/v1/budgets/${budgetId}")
+        def response = ynabClient.getJson("/v1/plans/${budgetId}")
         (response?.data?.budget?.server_knowledge ?: response?.data?.server_knowledge) as Integer
     }
 
@@ -114,7 +119,7 @@ class YnabBudgetRepository {
     }
 
     def postTransactions(String budgetId, List<Map<String, Object>> transactions) {
-        ynabClient.postJson("/v1/budgets/${budgetId}/transactions/bulk", [transactions: transactions])
+        ynabClient.postJson("/v1/plans/${budgetId}/transactions/bulk", [transactions: transactions])
     }
 
     def getUser() {

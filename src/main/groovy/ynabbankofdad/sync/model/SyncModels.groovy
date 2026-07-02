@@ -1,3 +1,9 @@
+package ynabbankofdad.sync.model
+
+import groovy.transform.Immutable
+import ynabbankofdad.config.ChildBudgetSyncTarget
+import ynabbankofdad.ynab.YnabBudgetRepository
+
 import groovy.transform.Immutable
 
 class ChildSyncContext {

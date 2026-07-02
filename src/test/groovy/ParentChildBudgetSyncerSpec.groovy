@@ -1,3 +1,10 @@
+import ynabbankofdad.allowance.*
+import ynabbankofdad.config.*
+import ynabbankofdad.model.*
+import ynabbankofdad.ynab.*
+import ynabbankofdad.sync.*
+import ynabbankofdad.sync.model.*
+import ynabbankofdad.sync.state.*
 import spock.lang.Specification
 import spock.lang.TempDir
 
@@ -34,7 +41,7 @@ class ParentChildBudgetSyncerSpec extends Specification {
         when:
         long runId = store.startRun(false, 300, 'parent-budget')
         long sourceEventId = store.recordSourceEvent(plan)
-        long mappingId = store.recordMapping(sourceEventId, plan, 'acct-1')
+        long mappingId = store.recordMapping(sourceEventId, plan, 'child-budget-id', 'acct-1')
         store.recordAppliedTransaction(mappingId, runId, 'child-budget-id', 'child-txn-1', 'applied', null, false)
         store.finishRun(runId, 'succeeded', null)
 
@@ -121,6 +128,38 @@ class ParentChildBudgetSyncerSpec extends Specification {
         then:
         !store.hasAppliedIdempotencyKey('idem-1')
         childRepository.postCallCount == 0
+    }
+
+    def "fromConfig validates required token environment and honors state override"() {
+        given:
+        def config = new RuntimeConfig(sync: sampleSyncConfig(tempDir.resolve('config-state.db').toString()))
+        def options = SyncCliOptions.parse(['--dry-run', '--sync-state-db-path', tempDir.resolve('override-state.db').toString()] as String[])
+
+        when:
+        def syncer = ParentChildBudgetSyncer.fromConfig(config, options, [PARENT_TOKEN: 'parent-token', CHILD_ONE_TOKEN: 'one-token', CHILD_TWO_TOKEN: 'two-token'])
+
+        then:
+        syncer.stateDbPath.endsWith('override-state.db')
+        syncer.childContexts.size() == 2
+    }
+
+    def "fromConfig throws when required token environment value is missing or blank"() {
+        given:
+        def config = new RuntimeConfig(sync: sampleSyncConfig(tempDir.resolve('config-state.db').toString()))
+        def options = SyncCliOptions.parse(['--dry-run'] as String[])
+
+        when:
+        ParentChildBudgetSyncer.fromConfig(config, options, environment)
+
+        then:
+        def ex = thrown(IllegalArgumentException)
+        ex.message.contains(expected)
+
+        where:
+        environment                                                | expected
+        [CHILD_ONE_TOKEN: 'one-token', CHILD_TWO_TOKEN: 'two-token'] | "Environment variable 'PARENT_TOKEN'"
+        [PARENT_TOKEN: ' ', CHILD_ONE_TOKEN: 'one-token', CHILD_TWO_TOKEN: 'two-token'] | "Environment variable 'PARENT_TOKEN'"
+        [PARENT_TOKEN: 'parent-token', CHILD_TWO_TOKEN: 'two-token'] | "Environment variable 'CHILD_ONE_TOKEN'"
     }
 
     private static SyncConfig sampleSyncConfig(String dbPath) {

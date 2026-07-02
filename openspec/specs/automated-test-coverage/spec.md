@@ -19,15 +19,15 @@ The project SHALL include automated Spock specifications that run under the supp
 The project SHALL include automated integration-style tests that simulate the YNAB REST API through WireMock HTTP fixtures so the CLI's current API interaction paths can be verified without live YNAB credentials or real transaction posting.
 
 #### Scenario: Missing or invalid budget data is validated without live API access
-- **WHEN** the integration suite simulates `/v1/budgets` responses that omit any budget matching the configured runtime `budgetName` or include malformed budget metadata
+- **WHEN** the integration suite simulates `/v1/plans` responses that omit any budget matching the configured runtime `budgetName` or include malformed budget metadata
 - **THEN** the suite SHALL verify the application’s explicit failure behavior rather than allowing a silent null path or unhelpful collection error
 
 #### Scenario: Missing account or category data is validated through simulated API responses
-- **WHEN** the integration tests simulate `/v1/budgets/{budgetId}/accounts` or `/v1/budgets/{budgetId}/categories` responses that omit required application data
+- **WHEN** the integration tests simulate `/v1/plans/{budgetId}/accounts` or `/v1/plans/{budgetId}/categories` responses that omit required application data
 - **THEN** the suite SHALL verify the current observable behavior for unresolved `Allowance Escrow`, `Allowance`, or other required categories/accounts
 
 #### Scenario: Failed bulk transaction posting is validated without posting to YNAB
-- **WHEN** the integration tests simulate `/v1/budgets/{budgetId}/transactions/bulk` failure responses
+- **WHEN** the integration tests simulate `/v1/plans/{budgetId}/transactions/bulk` failure responses
 - **THEN** they SHALL verify that the application surfaces the YNAB client failure rather than masking it
 
 ### Requirement: Automated tests SHALL remain compatible with the supported repo toolchain

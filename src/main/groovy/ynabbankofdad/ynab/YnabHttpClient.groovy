@@ -1,3 +1,5 @@
+package ynabbankofdad.ynab
+
 import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
 import groovy.util.logging.Slf4j

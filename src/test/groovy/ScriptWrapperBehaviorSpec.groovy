@@ -1,3 +1,10 @@
+import ynabbankofdad.allowance.*
+import ynabbankofdad.config.*
+import ynabbankofdad.model.*
+import ynabbankofdad.ynab.*
+import ynabbankofdad.sync.*
+import ynabbankofdad.sync.model.*
+import ynabbankofdad.sync.state.*
 import spock.lang.Specification
 
 class ScriptWrapperBehaviorSpec extends Specification {

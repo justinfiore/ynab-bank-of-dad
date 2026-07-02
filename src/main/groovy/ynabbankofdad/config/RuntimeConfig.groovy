@@ -1,3 +1,7 @@
+package ynabbankofdad.config
+
+import groovy.transform.Immutable
+import org.yaml.snakeyaml.Yaml
 import groovy.transform.Immutable
 import org.yaml.snakeyaml.Yaml
 

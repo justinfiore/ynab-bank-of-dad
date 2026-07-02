@@ -1,3 +1,10 @@
+import ynabbankofdad.allowance.*
+import ynabbankofdad.config.*
+import ynabbankofdad.model.*
+import ynabbankofdad.ynab.*
+import ynabbankofdad.sync.*
+import ynabbankofdad.sync.model.*
+import ynabbankofdad.sync.state.*
 import groovy.json.JsonSlurper
 import com.github.tomakehurst.wiremock.WireMockServer
 import spock.lang.Specification
@@ -81,7 +88,7 @@ class RecordAllowanceWireMockSpec extends Specification {
 
     def "constructor selects newest Configured Budget budget using simulated YNAB budgets response"() {
         given:
-        stubFor(get(urlEqualTo('/v1/budgets'))
+        stubFor(get(urlEqualTo('/v1/plans'))
             .willReturn(aResponse()
                 .withStatus(200)
                 .withHeader('Content-Type', 'application/json')
@@ -106,7 +113,7 @@ class RecordAllowanceWireMockSpec extends Specification {
 
     def "getAccountId and getCategoryInfoByCategoryName use simulated YNAB responses"() {
         given:
-        stubFor(get(urlEqualTo('/v1/budgets'))
+        stubFor(get(urlEqualTo('/v1/plans'))
             .willReturn(aResponse()
                 .withStatus(200)
                 .withHeader('Content-Type', 'application/json')
@@ -119,7 +126,7 @@ class RecordAllowanceWireMockSpec extends Specification {
   }
 }
 ''')))
-        stubFor(get(urlEqualTo('/v1/budgets/budget-new/accounts'))
+        stubFor(get(urlEqualTo('/v1/plans/budget-new/accounts'))
             .willReturn(aResponse()
                 .withStatus(200)
                 .withHeader('Content-Type', 'application/json')
@@ -133,7 +140,7 @@ class RecordAllowanceWireMockSpec extends Specification {
   }
 }
 ''')))
-        stubFor(get(urlEqualTo('/v1/budgets/budget-new/categories'))
+        stubFor(get(urlEqualTo('/v1/plans/budget-new/categories'))
             .willReturn(aResponse()
                 .withStatus(200)
                 .withHeader('Content-Type', 'application/json')
@@ -166,7 +173,7 @@ class RecordAllowanceWireMockSpec extends Specification {
 
     def "constructor throws clear error when no Configured Budget budget exists"() {
         given:
-        stubFor(get(urlEqualTo('/v1/budgets'))
+        stubFor(get(urlEqualTo('/v1/plans'))
             .willReturn(aResponse()
                 .withStatus(200)
                 .withHeader('Content-Type', 'application/json')
@@ -190,7 +197,7 @@ class RecordAllowanceWireMockSpec extends Specification {
 
     def "getAccountId throws clear error when required account is missing"() {
         given:
-        stubFor(get(urlEqualTo('/v1/budgets'))
+        stubFor(get(urlEqualTo('/v1/plans'))
             .willReturn(aResponse()
                 .withStatus(200)
                 .withHeader('Content-Type', 'application/json')
@@ -203,7 +210,7 @@ class RecordAllowanceWireMockSpec extends Specification {
   }
 }
 ''')))
-        stubFor(get(urlEqualTo('/v1/budgets/budget-new/accounts'))
+        stubFor(get(urlEqualTo('/v1/plans/budget-new/accounts'))
             .willReturn(aResponse()
                 .withStatus(200)
                 .withHeader('Content-Type', 'application/json')
@@ -228,7 +235,7 @@ class RecordAllowanceWireMockSpec extends Specification {
 
     def "getCategoryInfoByCategoryName can reveal missing required categories from simulated YNAB responses"() {
         given:
-        stubFor(get(urlEqualTo('/v1/budgets'))
+        stubFor(get(urlEqualTo('/v1/plans'))
             .willReturn(aResponse()
                 .withStatus(200)
                 .withHeader('Content-Type', 'application/json')
@@ -241,7 +248,7 @@ class RecordAllowanceWireMockSpec extends Specification {
   }
 }
 ''')))
-        stubFor(get(urlEqualTo('/v1/budgets/budget-new/categories'))
+        stubFor(get(urlEqualTo('/v1/plans/budget-new/categories'))
             .willReturn(aResponse()
                 .withStatus(200)
                 .withHeader('Content-Type', 'application/json')
@@ -271,7 +278,7 @@ class RecordAllowanceWireMockSpec extends Specification {
 
     def "getCategoryInfoByCategoryName flattens multiple category groups and defaults missing balances to zero"() {
         given:
-        stubFor(get(urlEqualTo('/v1/budgets'))
+        stubFor(get(urlEqualTo('/v1/plans'))
             .willReturn(aResponse()
                 .withStatus(200)
                 .withHeader('Content-Type', 'application/json')
@@ -284,7 +291,7 @@ class RecordAllowanceWireMockSpec extends Specification {
   }
 }
 ''')))
-        stubFor(get(urlEqualTo('/v1/budgets/budget-new/categories'))
+        stubFor(get(urlEqualTo('/v1/plans/budget-new/categories'))
             .willReturn(aResponse()
                 .withStatus(200)
                 .withHeader('Content-Type', 'application/json')
@@ -323,7 +330,7 @@ class RecordAllowanceWireMockSpec extends Specification {
 
     def "constructor surfaces budget endpoint failures from YNAB"() {
         given:
-        stubFor(get(urlEqualTo('/v1/budgets'))
+        stubFor(get(urlEqualTo('/v1/plans'))
             .willReturn(aResponse()
                 .withStatus(503)
                 .withHeader('Content-Type', 'application/json')
@@ -334,7 +341,7 @@ class RecordAllowanceWireMockSpec extends Specification {
 
         then:
         def ex = thrown(IllegalStateException)
-        ex.message.contains('YNAB GET /v1/budgets failed with status 503')
+        ex.message.contains('YNAB GET /v1/plans failed with status 503')
         ex.message.contains('try later')
     }
 
@@ -369,7 +376,7 @@ class RecordAllowanceWireMockSpec extends Specification {
 
     def "full allowance flow assembles transactions and posts the expected bulk payload"() {
         given:
-        stubFor(get(urlEqualTo('/v1/budgets'))
+        stubFor(get(urlEqualTo('/v1/plans'))
             .willReturn(aResponse()
                 .withStatus(200)
                 .withHeader('Content-Type', 'application/json')
@@ -382,7 +389,7 @@ class RecordAllowanceWireMockSpec extends Specification {
   }
 }
 ''')))
-        stubFor(get(urlEqualTo('/v1/budgets/budget-new/accounts'))
+        stubFor(get(urlEqualTo('/v1/plans/budget-new/accounts'))
             .willReturn(aResponse()
                 .withStatus(200)
                 .withHeader('Content-Type', 'application/json')
@@ -395,7 +402,7 @@ class RecordAllowanceWireMockSpec extends Specification {
   }
 }
 ''')))
-        stubFor(get(urlEqualTo('/v1/budgets/budget-new/categories'))
+        stubFor(get(urlEqualTo('/v1/plans/budget-new/categories'))
             .willReturn(aResponse()
                 .withStatus(200)
                 .withHeader('Content-Type', 'application/json')
@@ -428,7 +435,7 @@ class RecordAllowanceWireMockSpec extends Specification {
   }
 }
 ''')))
-        stubFor(post(urlEqualTo('/v1/budgets/budget-new/transactions/bulk'))
+        stubFor(post(urlEqualTo('/v1/plans/budget-new/transactions/bulk'))
             .willReturn(aResponse()
                 .withStatus(200)
                 .withHeader('Content-Type', 'application/json')
@@ -458,7 +465,7 @@ class RecordAllowanceWireMockSpec extends Specification {
         transactions.addAll(recordAllowance.generateNonInterestBearingTransactions(allowanceEscrowAccountId, categoryInfo))
 
         def response = recordAllowance.postTransactions(transactions)
-        def requests = wireMockServer.findAll(postRequestedFor(urlEqualTo('/v1/budgets/budget-new/transactions/bulk')))
+        def requests = wireMockServer.findAll(postRequestedFor(urlEqualTo('/v1/plans/budget-new/transactions/bulk')))
         def body = new JsonSlurper().parseText(requests[0].bodyAsString)
 
         then:
@@ -493,7 +500,7 @@ class RecordAllowanceWireMockSpec extends Specification {
 
     def "postTransactions sends bulk transaction request to simulated YNAB endpoint"() {
         given:
-        stubFor(get(urlEqualTo('/v1/budgets'))
+        stubFor(get(urlEqualTo('/v1/plans'))
             .willReturn(aResponse()
                 .withStatus(200)
                 .withHeader('Content-Type', 'application/json')
@@ -506,7 +513,7 @@ class RecordAllowanceWireMockSpec extends Specification {
   }
 }
 ''')))
-        stubFor(post(urlEqualTo('/v1/budgets/budget-new/transactions/bulk'))
+        stubFor(post(urlEqualTo('/v1/plans/budget-new/transactions/bulk'))
             .withRequestBody(containing('Test Transaction'))
             .willReturn(aResponse()
                 .withStatus(200)
@@ -533,7 +540,7 @@ class RecordAllowanceWireMockSpec extends Specification {
 
         when:
         def response = recordAllowance.postTransactions(transactions)
-        def requests = wireMockServer.findAll(postRequestedFor(urlEqualTo('/v1/budgets/budget-new/transactions/bulk')))
+        def requests = wireMockServer.findAll(postRequestedFor(urlEqualTo('/v1/plans/budget-new/transactions/bulk')))
         def body = new JsonSlurper().parseText(requests[0].bodyAsString)
 
         then:
@@ -545,7 +552,7 @@ class RecordAllowanceWireMockSpec extends Specification {
 
     def "postTransactions throws explicit YNAB failure details"() {
         given:
-        stubFor(get(urlEqualTo('/v1/budgets'))
+        stubFor(get(urlEqualTo('/v1/plans'))
             .willReturn(aResponse()
                 .withStatus(200)
                 .withHeader('Content-Type', 'application/json')
@@ -558,7 +565,7 @@ class RecordAllowanceWireMockSpec extends Specification {
   }
 }
 ''')))
-        stubFor(post(urlEqualTo('/v1/budgets/budget-new/transactions/bulk'))
+        stubFor(post(urlEqualTo('/v1/plans/budget-new/transactions/bulk'))
             .willReturn(aResponse()
                 .withStatus(500)
                 .withHeader('Content-Type', 'application/json')
@@ -570,7 +577,7 @@ class RecordAllowanceWireMockSpec extends Specification {
 
         then:
         def ex = thrown(IllegalStateException)
-        ex.message.contains('YNAB POST /v1/budgets/budget-new/transactions/bulk failed with status 500')
+        ex.message.contains('YNAB POST /v1/plans/budget-new/transactions/bulk failed with status 500')
         ex.message.contains('boom')
     }
 

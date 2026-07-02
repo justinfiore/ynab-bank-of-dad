@@ -1,3 +1,10 @@
+import ynabbankofdad.allowance.*
+import ynabbankofdad.config.*
+import ynabbankofdad.model.*
+import ynabbankofdad.ynab.*
+import ynabbankofdad.sync.*
+import ynabbankofdad.sync.model.*
+import ynabbankofdad.sync.state.*
 import groovy.json.JsonSlurper
 import spock.lang.Specification
 import spock.lang.TempDir
@@ -125,12 +132,12 @@ class SyncStateStoreIntegrationSpec extends Specification {
         long sourceEventId = store.recordSourceEvent(plan)
 
         when:
-        long firstId = store.recordMapping(sourceEventId, plan, 'acct-1')
-        long secondId = store.recordMapping(sourceEventId, plan, 'acct-2')
+        long firstId = store.recordMapping(sourceEventId, plan, 'child-budget-id', 'acct-1')
+        long secondId = store.recordMapping(sourceEventId, plan, 'child-budget-id', 'acct-2')
 
         then:
         firstId == secondId
-        store.hasAppliedIdempotencyKey('mapping-idem')
+        !store.hasAppliedIdempotencyKey('mapping-idem')
 
         and:
         def row = querySingleRow(store.databasePath, '''
@@ -140,7 +147,7 @@ class SyncStateStoreIntegrationSpec extends Specification {
             FROM sync_mappings WHERE id = ?
         ''', firstId)
         row.source_event_id == sourceEventId
-        row.target_budget_id == 'Child One Budget'
+        row.target_budget_id == 'child-budget-id'
         row.target_child_key == 'child-one'
         row.target_account_id == 'acct-1'
         row.direction == 'outflow'
@@ -158,7 +165,7 @@ class SyncStateStoreIntegrationSpec extends Specification {
         def store = initializedStore()
         def plan = transactionPlan('applied-idem')
         long sourceEventId = store.recordSourceEvent(plan)
-        long mappingId = store.recordMapping(sourceEventId, plan, 'acct-1')
+        long mappingId = store.recordMapping(sourceEventId, plan, 'child-budget-id', 'acct-1')
         long runId = store.startRun(true, 120, 'parent-budget-id')
 
         when:
@@ -188,6 +195,35 @@ class SyncStateStoreIntegrationSpec extends Specification {
         rows[1].status == 'failed'
         rows[1].failure_reason == 'bad request'
         rows[1].dry_run == 0
+    }
+
+    def "sqlite constraints reject invalid state"() {
+        given:
+        def store = initializedStore()
+
+        when:
+        executeSql(store.databasePath, "INSERT INTO sync_runs(started_at, dry_run, status, source_budget_id) VALUES ('now', 0, 'bogus', 'parent')")
+
+        then:
+        thrown(Exception)
+
+        when:
+        executeSql(store.databasePath, '''
+            INSERT INTO source_events(source_budget_id, event_type, parent_transaction_id, fingerprint, created_at)
+            VALUES ('parent', 'bogus', 'txn-1', 'bad-event', 'now')
+        ''')
+
+        then:
+        thrown(Exception)
+
+        when:
+        executeSql(store.databasePath, '''
+            INSERT INTO sync_mappings(source_event_id, target_budget_id, target_child_key, direction, planned_amount, planned_date, idempotency_key, last_planned_at)
+            VALUES (999, 'child-budget-id', 'child-one', 'sideways', 100, '2026-07-01', 'bad-mapping', 'now')
+        ''')
+
+        then:
+        thrown(Exception)
     }
 
     def "cursor reads null before set and upserts integer values"() {
@@ -268,6 +304,16 @@ class SyncStateStoreIntegrationSpec extends Specification {
                 rows << row
             }
             rows
+        } finally {
+            connection.close()
+        }
+    }
+
+    private static void executeSql(String dbPath, String sql) {
+        Connection connection = DriverManager.getConnection("jdbc:sqlite:${dbPath}")
+        try {
+            connection.createStatement().execute('PRAGMA foreign_keys = ON')
+            connection.createStatement().execute(sql)
         } finally {
             connection.close()
         }

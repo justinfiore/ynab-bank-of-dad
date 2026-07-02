@@ -1,3 +1,6 @@
+package ynabbankofdad.model
+
+import groovy.transform.Immutable
 import groovy.transform.Immutable
 
 @Immutable(knownImmutableClasses = [Date])

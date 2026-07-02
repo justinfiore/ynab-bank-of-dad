@@ -1,3 +1,8 @@
+package ynabbankofdad.sync.state
+
+import groovy.json.JsonOutput
+import ynabbankofdad.sync.model.ChildTransactionPlan
+
 import groovy.json.JsonOutput
 
 import java.nio.file.Files
@@ -8,7 +13,19 @@ import java.sql.DriverManager
 import java.time.OffsetDateTime
 import java.time.ZoneOffset
 
-class SyncStateStore {
+interface SyncStateRepository {
+    void initialize()
+    long startRun(boolean dryRun, int pollingIntervalSeconds, String sourceBudgetId)
+    void finishRun(long runId, String status, String errorSummary)
+    long recordSourceEvent(ChildTransactionPlan plan)
+    long recordMapping(long sourceEventId, ChildTransactionPlan plan, String targetBudgetId, String accountId)
+    void recordAppliedTransaction(long mappingId, long runId, String targetBudgetId, String createdChildTransactionId, String status, String failureReason, boolean dryRun)
+    boolean hasAppliedIdempotencyKey(String idempotencyKey)
+    Integer getCursor(String key)
+    void setCursor(String key, Integer value)
+}
+
+class SyncStateStore implements SyncStateRepository {
     final String databasePath
 
     SyncStateStore(String databasePath) {
@@ -27,7 +44,7 @@ class SyncStateStore {
                     started_at TEXT NOT NULL,
                     completed_at TEXT NULL,
                     dry_run INTEGER NOT NULL,
-                    status TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK(status IN ('running', 'succeeded', 'partial', 'failed')),
                     error_summary TEXT NULL,
                     polling_interval_seconds INTEGER NULL,
                     source_budget_id TEXT NOT NULL
@@ -37,7 +54,7 @@ class SyncStateStore {
                 CREATE TABLE IF NOT EXISTS source_events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     source_budget_id TEXT NOT NULL,
-                    event_type TEXT NOT NULL,
+                    event_type TEXT NOT NULL CHECK(event_type IN ('transaction', 'subtransaction', 'money_movement')),
                     parent_transaction_id TEXT NULL,
                     parent_subtransaction_id TEXT NULL,
                     money_movement_id TEXT NULL,
@@ -46,7 +63,12 @@ class SyncStateStore {
                     ynab_server_knowledge INTEGER NULL,
                     fingerprint TEXT NOT NULL UNIQUE,
                     raw_summary_json TEXT NULL,
-                    created_at TEXT NOT NULL
+                    created_at TEXT NOT NULL,
+                    CHECK(
+                        (event_type = 'transaction' AND parent_transaction_id IS NOT NULL AND parent_subtransaction_id IS NULL AND money_movement_id IS NULL)
+                        OR (event_type = 'subtransaction' AND parent_transaction_id IS NOT NULL AND parent_subtransaction_id IS NOT NULL AND money_movement_id IS NULL)
+                        OR (event_type = 'money_movement' AND parent_transaction_id IS NULL AND parent_subtransaction_id IS NULL AND money_movement_id IS NOT NULL)
+                    )
                 )
             ''')
             connection.createStatement().execute('''
@@ -56,7 +78,7 @@ class SyncStateStore {
                     target_budget_id TEXT NOT NULL,
                     target_child_key TEXT NOT NULL,
                     target_account_id TEXT NULL,
-                    direction TEXT NOT NULL,
+                    direction TEXT NOT NULL CHECK(direction IN ('inflow', 'outflow')),
                     planned_amount INTEGER NOT NULL,
                     planned_date TEXT NOT NULL,
                     planned_payee_name TEXT NULL,
@@ -64,7 +86,7 @@ class SyncStateStore {
                     planned_category_id TEXT NULL,
                     idempotency_key TEXT NOT NULL UNIQUE,
                     last_planned_at TEXT NOT NULL,
-                    FOREIGN KEY(source_event_id) REFERENCES source_events(id)
+                    FOREIGN KEY(source_event_id) REFERENCES source_events(id) ON DELETE CASCADE
                 )
             ''')
             connection.createStatement().execute('''
@@ -75,11 +97,11 @@ class SyncStateStore {
                     target_budget_id TEXT NOT NULL,
                     created_child_transaction_id TEXT NULL,
                     applied_at TEXT NULL,
-                    status TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK(status IN ('applied', 'failed')),
                     failure_reason TEXT NULL,
                     dry_run INTEGER NOT NULL,
-                    FOREIGN KEY(sync_mapping_id) REFERENCES sync_mappings(id),
-                    FOREIGN KEY(sync_run_id) REFERENCES sync_runs(id)
+                    FOREIGN KEY(sync_mapping_id) REFERENCES sync_mappings(id) ON DELETE CASCADE,
+                    FOREIGN KEY(sync_run_id) REFERENCES sync_runs(id) ON DELETE CASCADE
                 )
             ''')
             connection.createStatement().execute('''
@@ -155,7 +177,7 @@ class SyncStateStore {
         }
     }
 
-    long recordMapping(long sourceEventId, ChildTransactionPlan plan, String accountId) {
+    long recordMapping(long sourceEventId, ChildTransactionPlan plan, String targetBudgetId, String accountId) {
         Long existingId = findMappingIdByIdempotencyKey(plan.idempotencyKey)
         if (existingId != null) {
             return existingId
@@ -166,7 +188,7 @@ class SyncStateStore {
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', java.sql.Statement.RETURN_GENERATED_KEYS)
             statement.setLong(1, sourceEventId)
-            statement.setString(2, plan.targetBudgetName)
+            statement.setString(2, targetBudgetId)
             statement.setString(3, plan.targetChildKey)
             statement.setString(4, accountId)
             statement.setString(5, plan.amount >= 0 ? 'inflow' : 'outflow')
@@ -203,7 +225,18 @@ class SyncStateStore {
     }
 
     boolean hasAppliedIdempotencyKey(String idempotencyKey) {
-        findMappingIdByIdempotencyKey(idempotencyKey) != null
+        withConnection { Connection connection ->
+            def statement = connection.prepareStatement('''
+                SELECT 1
+                FROM sync_mappings mapping
+                JOIN applied_transactions applied ON applied.sync_mapping_id = mapping.id
+                WHERE mapping.idempotency_key = ?
+                  AND applied.status = 'applied'
+                LIMIT 1
+            ''')
+            statement.setString(1, idempotencyKey)
+            statement.executeQuery().next()
+        }
     }
 
     Integer getCursor(String key) {
@@ -253,6 +286,7 @@ class SyncStateStore {
     private <T> T withConnection(Closure<T> closure) {
         Connection connection = DriverManager.getConnection("jdbc:sqlite:${databasePath}")
         try {
+            connection.createStatement().execute('PRAGMA foreign_keys = ON')
             closure.call(connection)
         } finally {
             connection.close()

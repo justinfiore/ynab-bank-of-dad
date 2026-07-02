@@ -258,17 +258,14 @@ GitHub Actions runs and artifacts:
 ├── src/
 │   └── main/
 │       ├── groovy/
-│       │   ├── AllowanceCalculationService.groovy
-│       │   ├── ParentChildBudgetSyncer.groovy
-│       │   ├── RecordAllowance.groovy
-│       │   ├── RuntimeConfig.groovy
-│       │   ├── SyncCliOptions.groovy
-│       │   ├── SyncLoggingBootstrap.groovy
-│       │   ├── SyncModels.groovy
-│       │   ├── SyncStateStore.groovy
-│       │   ├── TransactionAssemblyService.groovy
-│       │   ├── TransactionModels.groovy
-│       │   └── YnabBudgetRepository.groovy
+│       │   └── ynabbankofdad/
+│       │       ├── allowance/
+│       │       ├── config/
+│       │       ├── model/
+│       │       ├── sync/
+│       │       │   ├── model/
+│       │       │   └── state/
+│       │       └── ynab/
 │       └── resources/
 │           └── logback.groovy
 └── gradle/
@@ -279,7 +276,7 @@ GitHub Actions runs and artifacts:
 
 A few current design choices matter if you plan to adapt the tool:
 - the code talks directly to the YNAB REST API
-- transaction posting uses `/v1/budgets/$budgetId/transactions/bulk`
+- transaction posting uses `/v1/plans/$budgetId/transactions/bulk`
 - the parent/child syncer uses a separate polling loop and SQLite-backed replay-protection state store
 - the project uses a small in-repo `YnabHttpClient` wrapper over JDK `java.net.http.HttpClient`
 - account/category naming still matters, but those names now belong in config rather than source code

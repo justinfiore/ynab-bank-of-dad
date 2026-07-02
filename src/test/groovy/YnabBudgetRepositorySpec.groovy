@@ -1,3 +1,10 @@
+import ynabbankofdad.allowance.*
+import ynabbankofdad.config.*
+import ynabbankofdad.model.*
+import ynabbankofdad.ynab.*
+import ynabbankofdad.sync.*
+import ynabbankofdad.sync.model.*
+import ynabbankofdad.sync.state.*
 import groovy.json.JsonSlurper
 import com.github.tomakehurst.wiremock.WireMockServer
 import spock.lang.Specification
@@ -20,7 +27,7 @@ class YnabBudgetRepositorySpec extends Specification {
 
     def "getBudgets maps budget payloads into summaries"() {
         given:
-        stubFor(get(urlEqualTo('/v1/budgets'))
+        stubFor(get(urlEqualTo('/v1/plans'))
             .willReturn(aResponse()
                 .withStatus(200)
                 .withHeader('Content-Type', 'application/json')
@@ -49,7 +56,7 @@ class YnabBudgetRepositorySpec extends Specification {
 
     def "getLatestBudgetId returns the newest matching budget and ignores other names"() {
         given:
-        stubFor(get(urlEqualTo('/v1/budgets'))
+        stubFor(get(urlEqualTo('/v1/plans'))
             .willReturn(aResponse()
                 .withStatus(200)
                 .withHeader('Content-Type', 'application/json')
@@ -71,7 +78,7 @@ class YnabBudgetRepositorySpec extends Specification {
 
     def "getCategoryInfoByCategoryName preserves names and defaults missing balances to zero"() {
         given:
-        stubFor(get(urlEqualTo('/v1/budgets/budget-new/categories'))
+        stubFor(get(urlEqualTo('/v1/plans/budget-new/categories'))
             .willReturn(aResponse()
                 .withStatus(200)
                 .withHeader('Content-Type', 'application/json')
@@ -101,7 +108,7 @@ class YnabBudgetRepositorySpec extends Specification {
 
     def "getTransactions maps top-level and subtransaction payloads"() {
         given:
-        stubFor(get(urlPathEqualTo('/v1/budgets/budget-new/transactions'))
+        stubFor(get(urlPathEqualTo('/v1/plans/budget-new/transactions'))
             .withQueryParam('since_date', matching('.*'))
             .willReturn(aResponse()
                 .withStatus(200)
@@ -149,7 +156,7 @@ class YnabBudgetRepositorySpec extends Specification {
         given:
         def recentDate = java.time.LocalDate.now().minusDays(5).toString()
         def staleDate = java.time.LocalDate.now().minusDays(80).toString()
-        stubFor(get(urlEqualTo('/v1/budgets/budget-new/money_movements'))
+        stubFor(get(urlEqualTo('/v1/plans/budget-new/money_movements'))
             .willReturn(aResponse()
                 .withStatus(200)
                 .withHeader('Content-Type', 'application/json')
@@ -173,9 +180,35 @@ class YnabBudgetRepositorySpec extends Specification {
         movements[0].eventDate == recentDate
     }
 
+    def "getMoneyMovements supports month and current-date fallbacks"() {
+        given:
+        stubFor(get(urlEqualTo('/v1/plans/budget-new/money_movements'))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader('Content-Type', 'application/json')
+                .withBody('''
+{
+  "data": {
+    "money_movements": [
+      {"id": "mm-month", "money_movement_group_id": "group-month", "month": "2026-07", "from_category_id": "cat-a", "to_category_id": "cat-b", "amount": 500},
+      {"id": "mm-now", "money_movement_group_id": "group-now", "from_category_id": "cat-c", "to_category_id": "cat-d", "amount": 900}
+    ]
+  }
+}
+''')))
+
+        when:
+        def movements = buildRepository().getMoneyMovements('budget-new', 5000)
+
+        then:
+        movements*.id == ['mm-month', 'mm-now']
+        movements[0].eventDate == '2026-07-01'
+        movements[1].eventDate == java.time.LocalDate.now().toString()
+    }
+
     def "postTransactions sends the expected bulk payload to YNAB"() {
         given:
-        stubFor(post(urlEqualTo('/v1/budgets/budget-new/transactions/bulk'))
+        stubFor(post(urlEqualTo('/v1/plans/budget-new/transactions/bulk'))
             .willReturn(aResponse()
                 .withStatus(200)
                 .withHeader('Content-Type', 'application/json')
@@ -196,7 +229,7 @@ class YnabBudgetRepositorySpec extends Specification {
 
         when:
         def response = repository.postTransactions('budget-new', transactions)
-        def requests = wireMockServer.findAll(postRequestedFor(urlEqualTo('/v1/budgets/budget-new/transactions/bulk')))
+        def requests = wireMockServer.findAll(postRequestedFor(urlEqualTo('/v1/plans/budget-new/transactions/bulk')))
         def body = new JsonSlurper().parseText(requests[0].bodyAsString)
 
         then:

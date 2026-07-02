@@ -1,3 +1,10 @@
+import ynabbankofdad.allowance.*
+import ynabbankofdad.config.*
+import ynabbankofdad.model.*
+import ynabbankofdad.ynab.*
+import ynabbankofdad.sync.*
+import ynabbankofdad.sync.model.*
+import ynabbankofdad.sync.state.*
 import groovy.json.JsonSlurper
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -37,13 +44,13 @@ class YnabHttpClientSpec extends Specification {
         def client = buildClient()
 
         when:
-        def response = client.getJson('/v1/budgets')
+        def response = client.getJson('/v1/plans')
         def request = server.takeRequest()
 
         then:
         response.data.budgets[0].id == 'budget-1'
         request.method == 'GET'
-        request.path == '/v1/budgets'
+        request.path == '/v1/plans'
         request.getHeader('Authorization') == 'Bearer token'
         request.getHeader('Accept') == 'application/json'
     }
@@ -58,14 +65,14 @@ class YnabHttpClientSpec extends Specification {
         def payload = [transactions: [[payee_name: 'Test Transaction', amount: 1000]]]
 
         when:
-        def response = client.postJson('/v1/budgets/budget-1/transactions/bulk', payload)
+        def response = client.postJson('/v1/plans/budget-1/transactions/bulk', payload)
         def request = server.takeRequest()
         def body = new JsonSlurper().parseText(request.body.readUtf8())
 
         then:
         response.data.bulk.transaction_ids == ['txn-1']
         request.method == 'POST'
-        request.path == '/v1/budgets/budget-1/transactions/bulk'
+        request.path == '/v1/plans/budget-1/transactions/bulk'
         request.getHeader('Authorization') == 'Bearer token'
         request.getHeader('Content-Type').startsWith('application/json')
         body == payload
@@ -78,7 +85,7 @@ class YnabHttpClientSpec extends Specification {
         def client = buildClient()
 
         when:
-        def response = client.postJson('/v1/budgets/budget-1/transactions/bulk', [transactions: []])
+        def response = client.postJson('/v1/plans/budget-1/transactions/bulk', [transactions: []])
 
         then:
         response == null
@@ -93,7 +100,7 @@ class YnabHttpClientSpec extends Specification {
         def client = buildClient()
 
         when:
-        def response = client.getJson('/v1/budgets')
+        def response = client.getJson('/v1/plans')
 
         then:
         response == null
@@ -108,11 +115,11 @@ class YnabHttpClientSpec extends Specification {
         def client = buildClient()
 
         when:
-        client.postJson('/v1/budgets/budget-1/transactions/bulk', [transactions: []])
+        client.postJson('/v1/plans/budget-1/transactions/bulk', [transactions: []])
 
         then:
         def ex = thrown(IllegalStateException)
-        ex.message.contains('YNAB POST /v1/budgets/budget-1/transactions/bulk failed with status 500')
+        ex.message.contains('YNAB POST /v1/plans/budget-1/transactions/bulk failed with status 500')
         ex.message.contains('boom')
     }
 
@@ -122,11 +129,11 @@ class YnabHttpClientSpec extends Specification {
         def client = new YnabHttpClient('https://api.youneedabudget.com', 'token', new TimeoutThrowingHttpClient(), timeout)
 
         when:
-        client.getJson('/v1/budgets')
+        client.getJson('/v1/plans')
 
         then:
         def ex = thrown(IllegalStateException)
-        ex.message == 'YNAB GET /v1/budgets timed out after PT7S'
+        ex.message == 'YNAB GET /v1/plans timed out after PT7S'
         ex.cause instanceof HttpTimeoutException
     }
 
@@ -135,11 +142,11 @@ class YnabHttpClientSpec extends Specification {
         def client = new YnabHttpClient('https://api.youneedabudget.com', 'token', new InterruptingHttpClient())
 
         when:
-        client.getJson('/v1/budgets')
+        client.getJson('/v1/plans')
 
         then:
         def ex = thrown(IllegalStateException)
-        ex.message == 'YNAB GET /v1/budgets interrupted'
+        ex.message == 'YNAB GET /v1/plans interrupted'
         ex.cause instanceof InterruptedException
         Thread.currentThread().isInterrupted()
 

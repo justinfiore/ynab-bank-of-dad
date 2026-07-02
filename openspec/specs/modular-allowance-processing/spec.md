@@ -38,6 +38,6 @@ Allowance, interest, and transaction-building logic SHALL be organized so that c
 
 #### Scenario: Posting remains an explicit orchestration decision
 - **WHEN** the application runs without `--dry-run`
-- **THEN** the actual bulk transaction post to `/v1/budgets/{budgetId}/transactions/bulk` SHALL still occur only from an explicit top-level execution path
+- **THEN** the actual bulk transaction post to `/v1/plans/{budgetId}/transactions/bulk` SHALL still occur only from an explicit top-level execution path
 - **AND** extracted helpers SHALL not perform hidden posting as a side effect of data lookup or calculation
 
