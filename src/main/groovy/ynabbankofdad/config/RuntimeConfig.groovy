@@ -2,8 +2,6 @@ package ynabbankofdad.config
 
 import groovy.transform.Immutable
 import org.yaml.snakeyaml.Yaml
-import groovy.transform.Immutable
-import org.yaml.snakeyaml.Yaml
 
 class RuntimeConfig {
     String budgetName

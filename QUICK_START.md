@@ -6,7 +6,7 @@ This repo now has **two** safe-first flows:
 1. the original allowance/interest workflow
 2. the standalone parent/child syncer workflow
 
-For the full field-by-field configuration reference, Simple vs. Advanced account modeling, and syncer-specific YAML guidance, see [CONFIGURATION.md](CONFIGURATION.md).
+For the full field-by-field configuration reference, active allowance modeling, and syncer-specific YAML guidance, see [CONFIGURATION.md](CONFIGURATION.md).
 
 ## 1. Install prerequisites
 
@@ -42,13 +42,14 @@ export YNAB_CHILD_TWO_TOKEN='child-two-token-here'
 cp config.yaml.example config.yaml
 ```
 
-2. Read [CONFIGURATION.md](CONFIGURATION.md) before editing if you need help choosing between Simple and Advanced account modeling.
+2. Read [CONFIGURATION.md](CONFIGURATION.md) before editing if you need help with allowance and syncer configuration.
 3. Edit `config.yaml` and replace the example values with your real setup.
 4. Update at least these allowance fields if you will run the allowance CLI:
    - `budgetName`
    - `allowanceEscrowAccountName`
    - `allowanceCategoryName`
-   - your Simple-account settings and/or Advanced-account settings
+   - your Advanced-account settings and/or non-interest kid settings
+   - leave `kidsWithSimpleAccounts: []` unless you are intentionally working on the currently inactive Simple-account generation path
    - any category names, memo text, or rate tables that differ in your budget
 5. Update at least these syncer fields if you will run the parent/child syncer:
    - `sync.parentBudget.budgetName`

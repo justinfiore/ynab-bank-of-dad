@@ -78,7 +78,7 @@ For the full configuration guide, see [CONFIGURATION.md](CONFIGURATION.md).
 
 Use these files together:
 - `config.yaml.example` — commented example template for both allowance and syncer workflows
-- `CONFIGURATION.md` — detailed field-by-field documentation, examples, and Simple vs. Advanced account guidance
+- `CONFIGURATION.md` — detailed field-by-field documentation, examples, and active allowance/syncer configuration guidance
 - `config.yaml` — your personal local file (gitignored)
 
 ## Supported toolchain

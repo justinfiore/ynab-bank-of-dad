@@ -1,6 +1,6 @@
 # Configuration Reference
 
-This document explains every property in `config.yaml` / `config.yaml.example`, how the tool uses it, and how to decide whether a kid/account setup should be modeled as **Simple** or **Advanced**.
+This document explains every property in `config.yaml` / `config.yaml.example`, how the tool uses it, and how the currently active allowance models work.
 
 It also documents the standalone **parent/child syncer** configuration that mirrors approved parent-budget activity into child budgets with SQLite-backed replay protection.
 
@@ -87,13 +87,12 @@ If live syncing has already started, do not delete the SQLite file casually; doi
 
 ---
 
-## Simple vs. Advanced accounts
+## Allowance account models
 
-The configuration supports two patterns for kid accounts.
+The configuration supports three account-modeling sections. The currently active generated allowance/interest logic is concentrated in the Advanced-account and Non-interest paths; Simple-account fields are still parsed and validated for compatibility, but the current implementation does not generate Simple-account transactions.
 
-### Simple accounts
-
-Use **Simple** accounts when a kid follows a standard naming pattern and receives weekly allowance according to common suffix-based rules.
+### Simple-account compatibility fields
+Simple-account fields remain in the config schema for compatibility and for future reactivation of suffix-driven account generation.
 
 Example category pattern:
 
@@ -101,19 +100,16 @@ Example category pattern:
 - `Sam Save Bank`
 - `Sam Give Bank`
 
-For simple accounts, the tool combines:
+The related fields are:
 
 - `kidsWithSimpleAccounts`
 - `bankSuffixes`
 - `allowanceRates`
 
-That means you do **not** list every category name individually. Instead, the tool derives them by combining each kid name with each suffix.
-
-Use simple accounts when:
-
-- category names are predictable from a kid name plus suffix
-- each kid gets the same suffix set
-- weekly amounts are standardized by suffix
+Current behavior:
+- the config loader validates that `allowanceRates` keys appear in `bankSuffixes`
+- the allowance CLI does **not** currently generate Simple-account interest or allowance transactions from `kidsWithSimpleAccounts`
+- keep `kidsWithSimpleAccounts: []` unless you are intentionally working on the Simple-account implementation path
 
 ### Advanced accounts
 
@@ -158,8 +154,8 @@ This is useful when you want a simplified non-interest flow rather than per-acco
 The example file is organized into:
 
 1. global allowance budget/account/memo settings
-2. simple-account configuration
-3. advanced-account configuration
+2. simple-account compatibility fields
+3. active advanced-account and non-interest allowance configuration
 4. parent/child syncer configuration
 
 ---
@@ -267,10 +263,10 @@ To Sam Piggy Banks
 
 ---
 
-## Simple-account configuration
+## Simple-account compatibility fields
 
 ### `bankSuffixes`
-Ordered list of suffixes used to derive simple-account category names.
+Ordered list of suffixes retained for compatibility with the Simple-account config schema.
 
 Example:
 
@@ -281,7 +277,7 @@ bankSuffixes:
   - " Give Bank"
 ```
 
-If `kidsWithSimpleAccounts` contains `Sam`, the tool will look for categories such as:
+If `kidsWithSimpleAccounts` contains `Sam`, these suffixes describe category names such as:
 
 - `Sam Spend Bank`
 - `Sam Save Bank`
@@ -309,34 +305,22 @@ allowanceRates:
 Guidance:
 - keys should match `bankSuffixes`
 - values are dollar amounts, not milliunits
-- used for simple-account allowance generation
+- retained for Simple-account compatibility; the current allowance CLI does not generate Simple-account allowance transactions
 
 ---
 
 ### `kidsWithSimpleAccounts`
-Kids whose simple-account categories are derived from `bankSuffixes` and `allowanceRates`.
+Kids retained in the Simple-account compatibility list.
 
 Example:
 
 ```yaml
-kidsWithSimpleAccounts:
-  - Sam
-  - Taylor
+kidsWithSimpleAccounts: []
 ```
 
-This would make the tool look for categories such as:
-
-- `Sam Spend Bank`
-- `Sam Save Bank`
-- `Sam Give Bank`
-- `Taylor Spend Bank`
-- `Taylor Save Bank`
-- `Taylor Give Bank`
-
-Guidance:
-- use plain kid display names here
-- each derived category must exist in YNAB
-- do not put a kid here if they need explicit per-category advanced deposits instead
+Current guidance:
+- keep this empty for normal use unless you are intentionally reactivating or extending Simple-account generation
+- active generated allowance/interest transactions currently come from `kidsWithAdvancedAccounts`, `advancedAllowanceDeposits`, and `kidsWithoutInterest`
 
 ---
 
@@ -351,7 +335,7 @@ kidsWithoutInterest:
 ```
 
 Guidance:
-- this is separate from simple-account interest-bearing flows
+- this is separate from the advanced-account interest-bearing flow
 - useful for simplified setups or non-interest-bearing children’s buckets
 
 ---
@@ -388,6 +372,7 @@ kidsWithAdvancedAccounts:
 
 Guidance:
 - every kid listed here should also have a matching top-level key in `advancedAllowanceDeposits`
+- use this section for the currently active per-category allowance and interest-bearing account flow
 - do not list a kid here unless you want explicit category-by-category control
 
 ---
@@ -600,7 +585,7 @@ Operational guidance:
 
 ## Example patterns
 
-## Example 1: Simple-account-only setup
+## Example 1: Minimal compatibility setup with one sync target
 
 ```yaml
 budgetName: Demo Family Budget
@@ -621,9 +606,7 @@ allowanceRates:
   " Save Bank": 0.5
   " Give Bank": 0.5
 
-kidsWithSimpleAccounts:
-  - Sam
-  - Taylor
+kidsWithSimpleAccounts: []
 
 kidsWithoutInterest: []
 giveBankRate: 0.5
