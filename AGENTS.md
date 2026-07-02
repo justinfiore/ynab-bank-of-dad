@@ -19,4 +19,8 @@ Small Gradle + Groovy CLI for Bank of Dad workflows on YNAB.
 - Preserve configured YNAB names unless a change explicitly updates config and lookup logic together.
 - Use `--dry-run` first for changes that could create transactions.
 - Non-doc changes should include/update tests and pass `./gradlew testAll` before being considered done.
-- Before committing, make sure the relevant Gradle tests are passing. Typical commands are `./gradlew test`, `./gradlew integrationTest`, and `./gradlew testAll`.
+- Before committing, make sure the relevant Gradle tests are passing.
+  - Typical commands are
+    - Unit Tests: `./gradlew test`
+    - Integration Tests: `./gradlew integrationTest`
+    - All Tests: `./gradlew testAll`.
