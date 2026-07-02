@@ -121,7 +121,10 @@ class ParentChildBudgetSyncer {
             applyPlans(runId, plans)
             if (!dryRun) {
                 stateStore.finishRun(runId, 'succeeded', null)
-                parentRepository.updateTransactionCursor(parentBudgetId, transactionEvents)
+                Integer latestServerKnowledge = parentRepository.latestServerKnowledge(transactionEvents)
+                if (latestServerKnowledge != null) {
+                    stateStore.setCursor('transactions.last_server_knowledge', latestServerKnowledge)
+                }
             }
         } catch (Exception ex) {
             if (!dryRun && runId > 0) {

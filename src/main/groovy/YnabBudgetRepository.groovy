@@ -108,8 +108,9 @@ class YnabBudgetRepository {
         (response?.data?.budget?.server_knowledge ?: response?.data?.server_knowledge) as Integer
     }
 
-    void updateTransactionCursor(String budgetId, List<ParentTransactionEvent> transactions) {
-        // Cursor persistence is handled by the sync state store; repository exposure kept for API symmetry.
+    Integer latestServerKnowledge(List<ParentTransactionEvent> transactions) {
+        List<Integer> knowledgeValues = transactions.collect { it.serverKnowledge }.findAll { it != null }
+        knowledgeValues ? knowledgeValues.max() : null
     }
 
     def postTransactions(String budgetId, List<Map<String, Object>> transactions) {
