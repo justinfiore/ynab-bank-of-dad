@@ -2,6 +2,8 @@
 
 This document explains every property in `config.yaml` / `config.yaml.example`, how the tool uses it, and how to decide whether a kid/account setup should be modeled as **Simple** or **Advanced**.
 
+It also documents the standalone **parent/child syncer** configuration that mirrors approved parent-budget activity into child budgets with SQLite-backed replay protection.
+
 If you only want the shortest path to a safe first run, start with [QUICK_START.md](QUICK_START.md). If you want the full runtime overview, examples, and field-by-field reference, use this document together with `config.yaml.example`.
 
 ---
@@ -19,13 +21,17 @@ Create your personal file like this:
 cp config.yaml.example config.yaml
 ```
 
-Then edit `config.yaml` with the exact names and rules from your own YNAB budget.
+Then edit `config.yaml` with the exact names and rules from your own YNAB budget(s).
 
 ---
 
 ## How the tool uses configuration
 
-At runtime, the tool:
+This repository now contains two related but distinct runtime flows.
+
+### Allowance CLI flow
+
+At runtime, the allowance tool:
 
 1. reads your YAML config
 2. authenticates to YNAB using `YNAB_ACCESS_TOKEN`
@@ -36,6 +42,48 @@ At runtime, the tool:
 7. posts them in bulk, unless `--dry-run` is enabled
 
 Because of this, **exact names matter** for many fields. If a configured budget/account/category name does not match what exists in YNAB, the run will fail.
+
+### Parent/child syncer flow
+
+At runtime, the syncer:
+
+1. reads the same YAML file but uses the nested `sync:` section
+2. authenticates the parent and each child budget using separate environment variables named in config
+3. finds the latest parent budget matching `sync.parentBudget.budgetName`
+4. polls approved parent-budget transactions and recent parent money movements
+5. maps configured parent categories to one or more child targets
+6. derives child transaction plans with idempotency keys
+7. posts child-budget transactions unless `--dry-run` is enabled
+8. writes replay-protection and run-history state into SQLite unless `--dry-run` is enabled
+
+Because of this, exact names also matter for:
+- `sync.parentBudget.budgetName`
+- each `sync.childBudgets[*].budgetName`
+- each `sync.childBudgets[*].parentCategoryNames`
+- each `sync.childBudgets[*].childAccountName`
+
+---
+
+## Syncer safety model
+
+The parent/child syncer is intended to be rolled out in this order:
+
+1. configure parent and child budget references in YAML
+2. export the separate token environment variables named in YAML
+3. run `./gradlew testAll`
+4. run a **single-cycle dry run** with `--dry-run --max-cycles 1`
+5. inspect the planned child mutations and logging/bootstrap behavior
+6. optionally run a **single-cycle live** verification with `--max-cycles 1`
+7. only then allow continuous polling
+
+The syncer uses SQLite state for:
+- `sync_runs` — run lifecycle/audit trail
+- `source_events` — parent-event fingerprints
+- `sync_mappings` — planned parent→child mapping records
+- `applied_transactions` — child-transaction application records
+- `sync_cursors` — incremental-read cursors such as transaction server knowledge
+
+If live syncing has already started, do not delete the SQLite file casually; doing so removes replay-protection history and cursors.
 
 ---
 
@@ -109,9 +157,10 @@ This is useful when you want a simplified non-interest flow rather than per-acco
 
 The example file is organized into:
 
-1. global budget/account/memo settings
+1. global allowance budget/account/memo settings
 2. simple-account configuration
 3. advanced-account configuration
+4. parent/child syncer configuration
 
 ---
 
@@ -202,7 +251,7 @@ combinedMemo: Allowance and Interest combined
 ---
 
 ### `nonInterestMemoSuffix`
-Suffix appended to memos for kids in `kidsWithoutInterest`.
+Suffix appended in memos for kids in `kidsWithoutInterest`.
 
 Example:
 
@@ -439,6 +488,116 @@ interestRatesByAccountTypeAndDate:
 
 ---
 
+## Parent/child syncer configuration
+
+All syncer-specific settings live under the top-level `sync:` key.
+
+### `sync.parentBudget`
+Identifies the source parent budget and the environment variable that contains its token.
+
+Example:
+
+```yaml
+sync:
+  parentBudget:
+    budgetName: Demo Parent Budget
+    tokenEnvVarName: YNAB_PARENT_TOKEN
+```
+
+Guidance:
+- `budgetName` must exactly match the parent budget name in YNAB
+- `tokenEnvVarName` is the **name** of the env var, not the token value itself
+- do not put raw tokens in YAML
+
+### `sync.childBudgets`
+List of child-target mappings.
+
+Example:
+
+```yaml
+sync:
+  childBudgets:
+    - childKey: child-one
+      budgetName: Demo Child One Budget
+      tokenEnvVarName: YNAB_CHILD_ONE_TOKEN
+      parentCategoryNames:
+        - "Child One Spend Bank"
+        - "Child One Save Bank"
+      childAccountName: Child One Checking
+```
+
+Field guidance:
+- `childKey` — stable internal identifier used for grouping and replay protection; must be unique
+- `budgetName` — exact YNAB child budget name
+- `tokenEnvVarName` — env var name that holds this child budget’s token
+- `parentCategoryNames` — exact parent-budget category names that should mirror into this child
+- `childAccountName` — exact child-budget account name that receives mirrored transactions
+
+Notes:
+- one parent category can map to exactly the child targets that include it in `parentCategoryNames`
+- money movements can fan out when both the source and destination categories belong to different configured child targets
+- each `budgetName + childAccountName` pairing must be unique
+
+### `sync.pollingIntervalSeconds`
+How often the continuous syncer wakes up between cycles.
+
+Example:
+
+```yaml
+sync:
+  pollingIntervalSeconds: 300
+```
+
+Guidance:
+- value must be a positive integer
+- lower values increase API polling frequency and log volume
+- start conservatively unless you need near-real-time mirroring
+
+### `sync.logging`
+File-based logging settings for the continuously running syncer.
+
+Example:
+
+```yaml
+sync:
+  logging:
+    filePath: logs/parent-child-sync.log
+    level: INFO
+    maxHistory: 7
+    maxFileSizeMb: 10
+```
+
+Field guidance:
+- `filePath` — rolling log output path; parent directories are created if needed
+- `level` — one of `TRACE`, `DEBUG`, `INFO`, `WARN`, `ERROR`
+- `maxHistory` — positive integer number of history files to retain
+- `maxFileSizeMb` — positive integer maximum file size in MB before roll
+
+### `sync.state`
+SQLite replay-protection and lookback settings.
+
+Example:
+
+```yaml
+sync:
+  state:
+    sqlitePath: syncstate.db
+    transactionLookbackDays: 45
+    moneyMovementLookbackDays: 45
+```
+
+Field guidance:
+- `sqlitePath` — default SQLite file location used unless overridden by `--sync-state-db-path`
+- `transactionLookbackDays` — how far back to re-read parent transactions safely
+- `moneyMovementLookbackDays` — how far back to re-read money movements before YNAB ages them out
+
+Operational guidance:
+- keep this file on persistent storage if you want long-lived replay protection
+- treat deleting or relocating the file as an operational reset
+- dry-run mode does not persist mutable sync state
+
+---
+
 ## Example patterns
 
 ## Example 1: Simple-account-only setup
@@ -480,6 +639,29 @@ interestRatesByAccountTypeAndDate:
   Current:
     Bronze: 0.1
     Silver: 0.15
+
+sync:
+  parentBudget:
+    budgetName: Demo Parent Budget
+    tokenEnvVarName: YNAB_PARENT_TOKEN
+  childBudgets:
+    - childKey: sam
+      budgetName: Sam Budget
+      tokenEnvVarName: YNAB_CHILD_SAM_TOKEN
+      parentCategoryNames:
+        - "Sam Spend Bank"
+        - "Sam Save Bank"
+      childAccountName: Sam Checking
+  pollingIntervalSeconds: 300
+  logging:
+    filePath: logs/parent-child-sync.log
+    level: INFO
+    maxHistory: 7
+    maxFileSizeMb: 10
+  state:
+    sqlitePath: syncstate.db
+    transactionLookbackDays: 45
+    moneyMovementLookbackDays: 45
 ```
 
 ---
@@ -500,11 +682,7 @@ bankSuffixes:
   - " Save Bank"
   - " Give Bank"
 
-allowanceRates:
-  " Spend Bank": 1.0
-  " Save Bank": 0.5
-  " Give Bank": 0.5
-
+allowanceRates: {}
 kidsWithSimpleAccounts: []
 kidsWithoutInterest: []
 giveBankRate: 0.5
@@ -531,53 +709,49 @@ interestRatesByAccountTypeAndDate:
     Bronze: 0.1
     Silver: 0.15
     Gold CD 2-Month: 0.25
+
+sync:
+  parentBudget:
+    budgetName: Demo Parent Budget
+    tokenEnvVarName: YNAB_PARENT_TOKEN
+  childBudgets:
+    - childKey: child-one
+      budgetName: Demo Child One Budget
+      tokenEnvVarName: YNAB_CHILD_ONE_TOKEN
+      parentCategoryNames:
+        - "Child One Silver Account"
+        - "Child One Give Bank"
+      childAccountName: Child One Checking
+    - childKey: child-two
+      budgetName: Demo Child Two Budget
+      tokenEnvVarName: YNAB_CHILD_TWO_TOKEN
+      parentCategoryNames:
+        - "Child Two Silver Account"
+        - "Child Two Give Bank"
+      childAccountName: Child Two Checking
+  pollingIntervalSeconds: 300
+  logging:
+    filePath: logs/parent-child-sync.log
+    level: INFO
+    maxHistory: 7
+    maxFileSizeMb: 10
+  state:
+    sqlitePath: syncstate.db
+    transactionLookbackDays: 45
+    moneyMovementLookbackDays: 45
 ```
 
 ---
 
-## Example 3: Mixed setup
+## Safe rollout checklist
 
-```yaml
-kidsWithSimpleAccounts:
-  - Sam
-
-kidsWithAdvancedAccounts:
-  - Child One
-
-kidsWithoutInterest:
-  - Max
-```
-
-This means:
-- `Sam` uses suffix-derived simple categories
-- `Child One` uses explicit advanced deposit mappings
-- `Max` gets one combined non-interest transaction
-
----
-
-## Editing checklist
-
-Before running the tool, verify that you updated:
-
-- `budgetName`
-- `allowanceEscrowAccountName`
-- `allowanceCategoryName`
-- simple-account kid names and suffix/rate mappings, if used
-- advanced-account kid names and explicit category mappings, if used
-- interest account types and rate tables, if used
-- memo fields, if you want different generated transaction text
-
----
-
-## Safe validation workflow
-
-After editing `config.yaml`:
-
-1. run tests
-2. run a dry run
-3. inspect the selected budget/account/category behavior
-4. inspect generated transactions carefully
-5. only then run without `--dry-run`
+Before a live allowance run:
+1. validate your YAML edits
+2. run `./gradlew testAll`
+3. run the allowance CLI with `--dry-run`
+4. inspect the selected budget/account/category behavior
+5. inspect generated transactions carefully
+6. only then run without `--dry-run`
 
 Example:
 
@@ -586,4 +760,21 @@ Example:
 ./gradlew run --args='--dry-run --config config.yaml'
 ```
 
-For the overall first-run procedure, see [QUICK_START.md](QUICK_START.md).
+Before a live syncer rollout:
+1. validate the `sync:` section and env-var names
+2. run `./gradlew testAll`
+3. run `./gradlew installDist`
+4. run the syncer in a single-cycle dry run
+5. inspect the planned child mutations, log path, and SQLite path
+6. optionally run a single-cycle live verification
+7. only then allow continuous polling
+
+Example:
+
+```bash
+export YNAB_PARENT_TOKEN='***'
+export YNAB_CHILD_ONE_TOKEN='***'
+export YNAB_CHILD_TWO_TOKEN='***'
+./gradlew installDist
+./gradlew runSyncer --args='--dry-run --config config.yaml --sync-state-db-path syncstate.db --max-cycles 1'
+```

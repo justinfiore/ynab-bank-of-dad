@@ -2,7 +2,10 @@
 
 [![CI](https://github.com/justinfiore/ynab-bank-of-dad/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/justinfiore/ynab-bank-of-dad/actions/workflows/ci.yml)
 
-YNABBankOfDad is a Groovy/Gradle command-line tool for running a family "Bank of Dad" workflow inside [YNAB](https://www.ynab.com/). It calculates weekly allowance and interest transactions from a YAML configuration file, then posts them to YNAB in a single bulk API request.
+YNABBankOfDad is a Groovy/Gradle command-line tool for running a family "Bank of Dad" workflow inside [YNAB](https://www.ynab.com/). It now supports two separate command-line workflows:
+
+1. the original allowance/interest calculator that posts one bulk transaction set into a single budget
+2. a standalone parent/child syncer that mirrors approved parent-budget activity into one or more child budgets using configurable category mappings and SQLite-backed replay protection
 
 This project is inspired by the book [*The First National Bank of Dad*](https://a.co/d/0iDelQff).
 
@@ -16,7 +19,8 @@ This repository is best suited to people who:
 
 ## What the tool does
 
-The current CLI:
+### Allowance CLI
+The original CLI:
 - connects to the YNAB API using `YNAB_ACCESS_TOKEN`
 - loads budget/account/category/rate rules from a YAML config file
 - finds the most recently modified budget matching the configured `budgetName`
@@ -27,6 +31,17 @@ The current CLI:
 - supports `--dry-run` so you can inspect proposed transactions before posting anything live
 - supports `-c` / `--config` so you can choose a config file path explicitly
 
+### Parent/child syncer
+The standalone syncer:
+- loads the `sync:` section from the same YAML config file
+- authenticates parent and child budgets with separate environment variables
+- polls the configured parent budget on an interval
+- reads approved parent transactions plus recent money movements
+- maps configured parent categories to child-budget targets
+- creates child-budget transactions with copied date/memo/amount, no child category, and derived payee/memo text for money movements
+- writes SQLite state to track sync runs, source fingerprints, idempotency mappings, applied child transactions, and cursors
+- supports `--dry-run`, `--sync-state-db-path`, `--max-cycles`, and explicit `--config` handling
+
 ## Safety first
 
 This tool can create **real YNAB transactions** when you do not use `--dry-run`.
@@ -36,22 +51,33 @@ Before any live run:
 - verify your configured budget/account/category names match your actual YNAB setup
 - run a dry run first
 - inspect the generated transactions carefully
+- for the syncer, verify every parent/child token environment variable and category mapping before allowing continuous live polling
 
 If you only want the shortest safe path to a first run, start with [QUICK_START.md](QUICK_START.md).
 For the full configuration guide, see [CONFIGURATION.md](CONFIGURATION.md).
 
 ## Required runtime inputs
 
+### Allowance CLI
 - Java JDK 25
 - `JAVA_HOME` pointing at your JDK 25 installation
 - `YNAB_ACCESS_TOKEN`
 - a config file in the repository format (`config.yaml.example` is the starting template)
 - network access to `https://api.youneedabudget.com`
 
+### Parent/child syncer
+- Java JDK 25
+- `JAVA_HOME` pointing at your JDK 25 installation
+- `YNAB_PARENT_TOKEN`
+- one token env var per configured child budget (for example `YNAB_CHILD_ONE_TOKEN`, `YNAB_CHILD_TWO_TOKEN`)
+- a config file containing a valid `sync:` section
+- network access to `https://api.youneedabudget.com`
+- a writable SQLite state path such as `syncstate.db`
+
 ## Configuration
 
 Use these files together:
-- `config.yaml.example` — commented example template
+- `config.yaml.example` — commented example template for both allowance and syncer workflows
 - `CONFIGURATION.md` — detailed field-by-field documentation, examples, and Simple vs. Advanced account guidance
 - `config.yaml` — your personal local file (gitignored)
 
@@ -87,7 +113,7 @@ javac -version
 echo "$JAVA_HOME"
 ```
 
-## Running the tool
+## Running the allowance tool
 
 ### Dry run with the default local config
 
@@ -101,20 +127,53 @@ echo "$JAVA_HOME"
 ./gradlew run --args='--dry-run --date 2025-08-03 --config config.yaml'
 ```
 
-### Build a distributable install
-
-```bash
-./gradlew installDist
-```
-
-### CLI options
+### Allowance CLI options
 - `--date YYYY-MM-DD` — run calculations for a specific date
 - `-c`, `--config PATH` — use a specific YAML config file
 - `--dry-run` — print what would be posted without creating YNAB transactions
 - `--help` — show usage information
 
+## Running the parent/child syncer
+
+### Recommended dry-run-first invocation
+
+```bash
+export YNAB_PARENT_TOKEN='parent-token'
+export YNAB_CHILD_ONE_TOKEN='child-one-token'
+export YNAB_CHILD_TWO_TOKEN='child-two-token'
+./gradlew runSyncer --args='--dry-run --config config.yaml --sync-state-db-path syncstate.db --max-cycles 1'
+```
+
+### One-cycle live verification after dry run
+
+```bash
+./gradlew runSyncer --args='--config config.yaml --sync-state-db-path syncstate.db --max-cycles 1'
+```
+
+### Continuous live polling
+
+```bash
+./gradlew runSyncer --args='--config config.yaml --sync-state-db-path syncstate.db'
+```
+
+### Syncer CLI options
+- `-c`, `--config PATH` — use a specific YAML config file
+- `--sync-state-db-path PATH` — override the SQLite replay-protection database path
+- `--dry-run` — read and plan only; do not post child transactions or persist mutable sync state
+- `--max-cycles N` — run N polling cycles, then exit
+- `--help` — show usage information
+
+### Syncer state and logging behavior
+- the default SQLite state path comes from `sync.state.sqlitePath` and defaults to `syncstate.db` in the example config
+- `sync_runs` records each live run lifecycle
+- `source_events`, `sync_mappings`, and `applied_transactions` provide replay protection and auditability for mirrored child transactions
+- `sync_cursors` stores incremental read cursors such as transaction server knowledge
+- the syncer bootstrap writes to the configured rolling log file path such as `logs/parent-child-sync.log`
+- dry-run mode intentionally suppresses live YNAB writes and SQLite mutation while still exercising config loading, planning, and logging/bootstrap behavior
+
 ## Helper scripts
 
+### Allowance wrappers
 Windows:
 - `RunWeeklyAllowance.bat`
 - `RunSpecificAllowance.bat YYYY-MM-DD [config-path]`
@@ -124,6 +183,23 @@ Linux/macOS:
 - `./run-specific-allowance.sh YYYY-MM-DD [config-path]`
 
 These wrappers are repo-relative and expect `YNAB_ACCESS_TOKEN` to already be set in your environment.
+
+### Syncer wrappers
+Windows:
+- `RunParentChildSync.bat [config-path] [state-db-path]`
+
+Linux/macOS:
+- `./run-parent-child-sync.sh [config-path] [state-db-path]`
+
+These wrappers intentionally run a **single dry-run cycle** with `--max-cycles 1` so you can validate config, logging bootstrap, and planned child mutations safely before any live continuous run.
+
+## Building a distributable install
+
+```bash
+./gradlew installDist
+```
+
+Installed launchers are written under `build/install/YNABBankOfDad/`.
 
 ## Testing
 
@@ -137,7 +213,9 @@ export JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64
 The test suite currently uses:
 - Spock for unit/spec-style testing
 - WireMock for simulated YNAB HTTP integration testing
+- real throwaway SQLite integration tests for sync-state persistence behavior
 - focused tests around the repo-local JDK `HttpClient` wrapper
+- script-contract tests for wrapper behavior
 
 Test outputs are written to:
 - `build/test-results/`
@@ -171,16 +249,23 @@ GitHub Actions runs and artifacts:
 ├── gradlew
 ├── gradlew.bat
 ├── QUICK_START.md
+├── RunParentChildSync.bat
 ├── RunSpecificAllowance.bat
 ├── RunWeeklyAllowance.bat
+├── run-parent-child-sync.sh
 ├── run-specific-allowance.sh
 ├── run-weekly-allowance.sh
 ├── src/
 │   └── main/
 │       ├── groovy/
 │       │   ├── AllowanceCalculationService.groovy
+│       │   ├── ParentChildBudgetSyncer.groovy
 │       │   ├── RecordAllowance.groovy
 │       │   ├── RuntimeConfig.groovy
+│       │   ├── SyncCliOptions.groovy
+│       │   ├── SyncLoggingBootstrap.groovy
+│       │   ├── SyncModels.groovy
+│       │   ├── SyncStateStore.groovy
 │       │   ├── TransactionAssemblyService.groovy
 │       │   ├── TransactionModels.groovy
 │       │   └── YnabBudgetRepository.groovy
@@ -195,6 +280,7 @@ GitHub Actions runs and artifacts:
 A few current design choices matter if you plan to adapt the tool:
 - the code talks directly to the YNAB REST API
 - transaction posting uses `/v1/budgets/$budgetId/transactions/bulk`
+- the parent/child syncer uses a separate polling loop and SQLite-backed replay-protection state store
 - the project uses a small in-repo `YnabHttpClient` wrapper over JDK `java.net.http.HttpClient`
 - account/category naming still matters, but those names now belong in config rather than source code
 

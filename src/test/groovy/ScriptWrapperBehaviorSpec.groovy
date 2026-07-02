@@ -2,6 +2,26 @@ import spock.lang.Specification
 
 class ScriptWrapperBehaviorSpec extends Specification {
 
+    def "parent-child sync bash wrapper enforces one-cycle dry-run bootstrap"() {
+        given:
+        def script = new File('run-parent-child-sync.sh').text
+
+        expect:
+        script.contains('STATE_DB_PATH="${2:-syncstate.db}"')
+        script.contains('JAVA_HOME must be set before running the syncer.')
+        script.contains('exec ./gradlew runSyncer --args="--dry-run --config ${CONFIG_PATH} --sync-state-db-path ${STATE_DB_PATH} --max-cycles 1"')
+    }
+
+    def "parent-child sync batch wrapper enforces one-cycle dry-run bootstrap"() {
+        given:
+        def script = new File('RunParentChildSync.bat').text
+
+        expect:
+        script.contains('if "%STATE_DB_PATH%"=="" set STATE_DB_PATH=syncstate.db')
+        script.contains('JAVA_HOME must be set before running the syncer.')
+        script.contains('call gradlew.bat runSyncer --args="--dry-run --config %CONFIG_PATH% --sync-state-db-path %STATE_DB_PATH% --max-cycles 1"')
+    }
+
     def "weekly bash wrapper runs normally after Java 25 gate"() {
         given:
         def script = new File('run-weekly-allowance.sh').text

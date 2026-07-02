@@ -29,13 +29,14 @@
 
 ## 5. Verify and document safe rollout
 
-- [ ] 5.1 Update `README.md` and `QUICK_START.md` with syncer setup, separate token guidance, polling/logging behavior, SQLite state behavior, and dry-run-first rollout instructions.
+- [x] 5.1 Update `README.md` and `QUICK_START.md` with syncer setup, separate token guidance, polling/logging behavior, SQLite state behavior, and dry-run-first rollout instructions.
 - [x] 5.2 Run `export JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 && ./gradlew test` and confirm the sync-related automated coverage passes on the supported toolchain.
-- [ ] 5.3 Run `export JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 && ./gradlew installDist` and a documented sync `--dry-run` invocation that exercises config loading, SQLite bootstrap, and planned child-budget mutations without posting real transactions.
+- [x] 5.3 Run `export JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 && ./gradlew installDist` and a documented sync `--dry-run` invocation that exercises config loading, SQLite bootstrap, and planned child-budget mutations without posting real transactions.
 
 ## Notes
 
 - `./gradlew testAll` passed on Java 25 after implementation.
 - `./gradlew installDist` passed on Java 25 after implementation.
+- `./gradlew runSyncer --args='--dry-run --config config.yaml.example --sync-state-db-path build/tmp/syncstate-docs-check.db --max-cycles 1'` now reaches config/log bootstrap and SQLite path handling, but it still cannot complete an end-to-end YNAB read without valid parent/child credentials because the syncer intentionally makes real authenticated budget reads even in dry-run mode.
 - The syncer dry-run reaches startup/config/log/bootstrap successfully, but end-to-end dry-run verification against the live YNAB API is still blocked without valid parent/child YNAB credentials and accessible demo budgets; a run with placeholder/demo tokens failed at the first real `/v1/budgets` call with HTTP 401.
-- Follow-up requested after initial PR: ignore local `logs/` output in `.gitignore` and expand SQLite state-store coverage into full real-SQLite integration tests that exercise every table interaction against a throwaway database.
+- Follow-up requested after initial PR: ignore local `logs/` output in `.gitignore`, expand SQLite state-store coverage into full real-SQLite integration tests that exercise every table interaction against a throwaway database, modularize the syncer internals, and update rollout documentation in `README.md`, `QUICK_START.md`, and `CONFIGURATION.md`.
