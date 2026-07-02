@@ -43,8 +43,26 @@
 
 ## 7. Reassess and complete tests after implementation
 
-- [ ] 7.1 Redo test coverage analysis after findings 1–12 are implemented and the package/service boundaries are final.
-- [ ] 7.2 Add the missing unit tests identified by the post-refactor coverage analysis.
-- [ ] 7.3 Add the missing WireMock integration tests identified by the post-refactor coverage analysis, especially retry, partial failure, child auth failure, parent API failure, no-work, and single-child money-movement scenarios if still applicable.
-- [ ] 7.4 Add the missing SQLite integration tests identified by the post-refactor coverage analysis.
-- [ ] 7.5 Record the final coverage analysis and verification results in this change’s notes before applying or archiving.
+- [ ] 7.1 Create a post-refactor test-gap analysis document after findings 1–12 are implemented and package/service boundaries are final. The analysis SHALL map each known gap below to the final class/service that should own the test, classify it as unit, WireMock integration, SQLite integration, or build/documentation verification, and identify any obsolete or superseded gaps.
+- [ ] 7.2 Turn the post-refactor analysis into a concrete test plan before writing the tests. The plan SHALL list test names, target files, fixture/state setup, expected assertions, and whether each test should be written before or after any remaining code changes.
+- [ ] 7.3 Known critical gaps to analyze and plan:
+  - [ ] 7.3.1 Failed child transaction post is retried on a later run instead of being skipped as already mapped.
+  - [ ] 7.3.2 Parent transaction cursor does not advance when a child target partially fails.
+  - [ ] 7.3.3 Missing child account is retried after the account becomes available.
+- [ ] 7.4 Known high-priority WireMock integration gaps to analyze and plan:
+  - [ ] 7.4.1 Child auth failure scenarios, including 401/403 during child plan discovery, child account lookup, or child transaction posting.
+  - [ ] 7.4.2 Parent API failure scenarios, including parent plan list, parent transaction read, parent category read, and parent money-movement read failures.
+  - [ ] 7.4.3 No qualifying work scenario where only unapproved, unmapped, or outside-lookback events are returned and no child post/state mapping is created.
+  - [ ] 7.4.4 Single-child money movement scenarios for movement into and out of one mapped child category.
+- [ ] 7.5 Known medium-priority behavior gaps to analyze and plan:
+  - [ ] 7.5.1 Money movement date fallback and lookback behavior, including `moved_at`, `month`, fallback date, and outside-lookback filtering.
+  - [ ] 7.5.2 Child post response variants, including `data.bulk.transaction_ids` and `data.transactions` response shapes.
+  - [ ] 7.5.3 Import ID determinism, uniqueness, sanitization, and length/format constraints.
+  - [ ] 7.5.4 `fromConfig` environment-variable validation for missing/blank parent and child token variables plus CLI sync-state override behavior.
+  - [ ] 7.5.5 Actual logging behavior after the logging implementation, including configured file output, level application, and invalid path/config failure behavior.
+  - [ ] 7.5.6 Default Gradle `test` task behavior, either proving it runs the intended suite or documenting/validating `testAll` as the required command.
+- [ ] 7.6 Implement the approved missing unit tests identified by the post-refactor test plan.
+- [ ] 7.7 Implement the approved missing WireMock integration tests identified by the post-refactor test plan.
+- [ ] 7.8 Implement the approved missing SQLite integration tests identified by the post-refactor test plan.
+- [ ] 7.9 Implement the approved build/documentation verification tests identified by the post-refactor test plan.
+- [ ] 7.10 Record the final coverage analysis, test plan, implemented tests, intentionally deferred gaps, and verification results in this change’s notes before applying or archiving.
