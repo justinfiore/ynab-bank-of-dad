@@ -18,7 +18,7 @@ tasks.register('runSyncer', JavaExec) {
     mainClass = 'ParentChildBudgetSyncer'
 }
 
-def integrationTestPatterns = ['**/*WireMockSpec.class']
+def integrationTestPatterns = ['**/*WireMockSpec.class', '**/*IntegrationSpec.class']
 def unitTestExcludes = integrationTestPatterns
 
 dependencies {

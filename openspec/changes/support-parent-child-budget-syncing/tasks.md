@@ -38,3 +38,4 @@
 - `./gradlew testAll` passed on Java 25 after implementation.
 - `./gradlew installDist` passed on Java 25 after implementation.
 - The syncer dry-run reaches startup/config/log/bootstrap successfully, but end-to-end dry-run verification against the live YNAB API is still blocked without valid parent/child YNAB credentials and accessible demo budgets; a run with placeholder/demo tokens failed at the first real `/v1/budgets` call with HTTP 401.
+- Follow-up requested after initial PR: ignore local `logs/` output in `.gitignore` and expand SQLite state-store coverage into full real-SQLite integration tests that exercise every table interaction against a throwaway database.
