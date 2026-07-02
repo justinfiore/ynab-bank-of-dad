@@ -19,7 +19,7 @@ tasks.register('runSyncer', JavaExec) {
 }
 
 def integrationTestPatterns = ['**/*WireMockSpec.class', '**/*IntegrationSpec.class']
-def unitTestExcludes = integrationTestPatterns
+def nonIntegrationTestExcludes = integrationTestPatterns
 
 dependencies {
     implementation 'org.apache.groovy:groovy:5.0.6'
@@ -53,15 +53,7 @@ tasks.withType(Test).configureEach {
 tasks.named('test', Test) {
     group = LifecycleBasePlugin.VERIFICATION_GROUP
     description = 'Runs unit tests only.'
-    exclude(unitTestExcludes)
-}
-
-def unitTestTask = tasks.register('unitTest', Test) {
-    group = LifecycleBasePlugin.VERIFICATION_GROUP
-    description = 'Runs unit tests only.'
-    testClassesDirs = sourceSets.test.output.classesDirs
-    classpath = sourceSets.test.runtimeClasspath
-    exclude(unitTestExcludes)
+    exclude(nonIntegrationTestExcludes)
 }
 
 def integrationTestTask = tasks.register('integrationTest', Test) {
@@ -70,13 +62,13 @@ def integrationTestTask = tasks.register('integrationTest', Test) {
     testClassesDirs = sourceSets.test.output.classesDirs
     classpath = sourceSets.test.runtimeClasspath
     include(integrationTestPatterns)
-    mustRunAfter(unitTestTask)
+    mustRunAfter(tasks.named('test'))
 }
 
 def combinedTestTask = tasks.register('testAll') {
     group = LifecycleBasePlugin.VERIFICATION_GROUP
     description = 'Runs unit tests first, then integration tests if unit tests pass.'
-    dependsOn(unitTestTask)
+    dependsOn(tasks.named('test'))
     dependsOn(integrationTestTask)
 }
 

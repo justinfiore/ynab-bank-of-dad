@@ -31,6 +31,16 @@ class ChildTransactionPayloadFactorySpec extends Specification {
             factory.buildImportId(plan('parent|child-two|transaction|txn-1||||cat-1|-1200'))
     }
 
+    def "import ids are sanitized and bounded"() {
+        given:
+        def importId = factory.buildImportId(plan('parent|child one|transaction|txn/with:punctuation and lots of extra characters !@#$%^&*()'))
+
+        expect:
+        importId ==~ /PCBS:20260701:1200:[A-Za-z0-9]+/
+        importId.split(':')[-1].size() <= 28
+        importId.size() <= 64
+    }
+
     def "extractCreatedTransactionId supports bulk and transaction list response shapes"() {
         expect:
         factory.extractCreatedTransactionId([data: [bulk: [transaction_ids: ['bulk-id']]]]) == 'bulk-id'

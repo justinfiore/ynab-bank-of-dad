@@ -255,6 +255,72 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         cursorValue('transactions.last_server_knowledge') == null
     }
 
+    def "child plan discovery auth failure records failed state isolates other child and does not advance cursor"() {
+        given:
+        stubCommonBudgetDiscoveryFailureThenSuccess('child-one-budget-id', 403, 'forbidden child plan discovery')
+        stubParentCategories()
+        stubParentTransactions([
+            [id: 'txn-child-one-discovery-auth', date: '2026-07-01', amount: -1200, memo: 'Shoes', approved: true, category_id: 'cat-child-one-spend', category_name: 'Child One Spend Bank', subtransactions: []],
+            [id: 'txn-child-two-discovery-auth', date: '2026-07-01', amount: -2200, memo: 'Book', approved: true, category_id: 'cat-child-two-spend', category_name: 'Child Two Spend Bank', subtransactions: []]
+        ], 72)
+        stubMoneyMovements([])
+        stubChildAccounts('child-two-budget-id', 'child-two-account-id', 'Child Two Checking')
+        stubChildPost('child-two-budget-id', ['child-two-created-discovery-auth'])
+        def syncer = syncer(false)
+
+        when:
+        syncer.runOnce(1)
+
+        then:
+        postedTransactions('child-two-budget-id').size() == 1
+        appliedRows()*.status.sort() == ['applied', 'failed']
+        appliedRows().find { it.status == 'failed' }.failure_reason.contains('YNAB GET /v1/plans failed with status 403')
+        cursorValue('transactions.last_server_knowledge') == null
+    }
+
+    def "child transaction post auth failure records failed state isolates other child and does not advance cursor"() {
+        given:
+        stubCommonBudgetDiscovery()
+        stubParentCategories()
+        stubParentTransactions([
+            [id: 'txn-child-one-post-auth', date: '2026-07-01', amount: -1200, memo: 'Shoes', approved: true, category_id: 'cat-child-one-spend', category_name: 'Child One Spend Bank', subtransactions: []],
+            [id: 'txn-child-two-post-auth', date: '2026-07-01', amount: -2200, memo: 'Book', approved: true, category_id: 'cat-child-two-spend', category_name: 'Child Two Spend Bank', subtransactions: []]
+        ], 73)
+        stubMoneyMovements([])
+        stubChildAccounts('child-one-budget-id', 'child-one-account-id', 'Child One Checking')
+        stubChildAccounts('child-two-budget-id', 'child-two-account-id', 'Child Two Checking')
+        stubChildPostFailure('child-one-budget-id', 403, 'forbidden child transaction post')
+        stubChildPost('child-two-budget-id', ['child-two-created-post-auth'])
+        def syncer = syncer(false)
+
+        when:
+        syncer.runOnce(1)
+
+        then:
+        postedTransactions('child-two-budget-id').size() == 1
+        appliedRows()*.status.sort() == ['applied', 'failed']
+        appliedRows().find { it.status == 'failed' }.failure_reason.contains('YNAB POST /v1/plans/child-one-budget-id/transactions/bulk failed with status 403')
+        cursorValue('transactions.last_server_knowledge') == null
+    }
+
+    def "parent plan discovery failure stops before run state child reads or cursor updates"() {
+        given:
+        stubFor(get(urlEqualTo('/v1/plans'))
+            .willReturn(errorResponse(503, 'parent plan list outage')))
+        def syncer = syncer(false)
+
+        when:
+        syncer.runOnce(1)
+
+        then:
+        def ex = thrown(IllegalStateException)
+        ex.message.contains('YNAB GET /v1/plans failed with status 503')
+        verify(0, getRequestedFor(urlMatching('/v1/plans/.*/accounts')))
+        verify(0, postRequestedFor(urlMatching('/v1/plans/.*/transactions/bulk')))
+        tableCount('sync_runs') == 0
+        cursorValue('transactions.last_server_knowledge') == null
+    }
+
     def "parent category failure stops before child posts and cursor updates"() {
         given:
         stubCommonBudgetDiscovery()
@@ -397,13 +463,29 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
 
     private void stubCommonBudgetDiscovery() {
         stubFor(get(urlEqualTo('/v1/plans'))
-            .willReturn(jsonResponse([
-                data: [budgets: [
-                    [id: 'parent-budget-id', name: 'Parent Budget', last_modified_on: '2026-07-01T12:00:00Z'],
-                    [id: 'child-one-budget-id', name: 'Child One Budget', last_modified_on: '2026-07-01T12:00:00Z'],
-                    [id: 'child-two-budget-id', name: 'Child Two Budget', last_modified_on: '2026-07-01T12:00:00Z']
-                ]]
-            ])))
+            .willReturn(commonBudgetDiscoveryResponse()))
+    }
+
+    private void stubCommonBudgetDiscoveryFailureThenSuccess(String failingBudgetId, int status, String detail) {
+        int childFailurePriority = failingBudgetId == 'child-one-budget-id' ? 1 : 2
+        int successPriority = childFailurePriority == 1 ? 2 : 1
+        stubFor(get(urlEqualTo('/v1/plans'))
+            .atPriority(childFailurePriority)
+            .withHeader('Authorization', equalTo("Bearer ${failingBudgetId == 'child-one-budget-id' ? 'child-one-token' : 'child-two-token'}"))
+            .willReturn(errorResponse(status, detail)))
+        stubFor(get(urlEqualTo('/v1/plans'))
+            .atPriority(successPriority)
+            .willReturn(commonBudgetDiscoveryResponse()))
+    }
+
+    private static def commonBudgetDiscoveryResponse() {
+        jsonResponse([
+            data: [budgets: [
+                [id: 'parent-budget-id', name: 'Parent Budget', last_modified_on: '2026-07-01T12:00:00Z'],
+                [id: 'child-one-budget-id', name: 'Child One Budget', last_modified_on: '2026-07-01T12:00:00Z'],
+                [id: 'child-two-budget-id', name: 'Child Two Budget', last_modified_on: '2026-07-01T12:00:00Z']
+            ]]
+        ])
     }
 
     private void stubParentCategories() {
@@ -448,11 +530,12 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
     }
 
     private void stubChildPostFailure(String budgetId) {
+        stubChildPostFailure(budgetId, 500, 'simulated child failure')
+    }
+
+    private void stubChildPostFailure(String budgetId, int status, String detail) {
         stubFor(post(urlEqualTo("/v1/plans/${budgetId}/transactions/bulk"))
-            .willReturn(aResponse()
-                .withStatus(500)
-                .withHeader('Content-Type', 'application/json')
-                .withBody(JsonOutput.toJson([error: [id: '500', detail: 'simulated child failure']]))))
+            .willReturn(errorResponse(status, detail)))
     }
 
     private void stubChildPostFailureThenSuccess(String budgetId, List<String> transactionIds) {

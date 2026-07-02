@@ -94,6 +94,8 @@ Verified commands on the Hermes Linux host used during recent maintenance:
 ```bash
 export JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64
 ./gradlew tasks --all
+./gradlew test
+./gradlew integrationTest
 ./gradlew testAll
 ./gradlew installDist
 ```
@@ -203,12 +205,15 @@ Installed launchers are written under `build/install/YNABBankOfDad/`.
 
 ## Testing
 
-Run tests with:
+Run unit tests with the standard Gradle `test` task, or run the full unit + integration suite with `testAll`:
 
 ```bash
 export JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64
+./gradlew test
 ./gradlew testAll
 ```
+
+`./gradlew test` runs the unit/spec suite only. The old custom `unitTest` task has intentionally been removed. `./gradlew integrationTest` runs the WireMock-backed and SQLite integration specs directly when you need that slice.
 
 The test suite currently uses:
 - Spock for unit/spec-style testing
@@ -228,7 +233,7 @@ GitHub Actions runs CI on pushes and pull requests targeting `master`.
 The workflow currently:
 - runs on GitHub-hosted Ubuntu runners
 - provisions Temurin JDK 25
-- runs `./gradlew testAll`
+- runs `./gradlew testAll`, which invokes `test` for unit/spec tests and then `integrationTest`
 - runs `./gradlew installDist`
 - uploads `build/test-results/`, `build/reports/tests/`, and `build/install/`
 - publishes an inline GitHub job summary with suite counts and failing test names when applicable

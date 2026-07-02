@@ -89,8 +89,13 @@ For CDs, category names are expected to end with a maturity date formatted as `M
 - Java JDK 25 is now installed and verified on this Hermes host at `/usr/lib/jvm/java-25-openjdk-amd64`.
 - Verified build commands on this host:
   - `./gradlew tasks --all`
-  - `./gradlew installDist`
+  - `./gradlew test`
+  - `./gradlew integrationTest`
   - `./gradlew testAll`
+  - `./gradlew installDist`
+- `./gradlew test` runs the unit/spec suite only; the old custom `unitTest` task has intentionally been removed.
+- `./gradlew integrationTest` runs WireMock-backed and SQLite integration specs.
+- `./gradlew testAll` runs `test` first, then `integrationTest` if unit tests pass.
 - Tests are part of apply completion for code changes: feature, bug-fix, and other non-doc-only changes should add/update automated tests and must pass `./gradlew testAll` before considering `openspec-apply` complete.
 - Doc-only changes do not require running the test suite.
 - Test reports are written in both JUnit XML and HTML formats under `build/test-results/` and `build/reports/tests/`.
