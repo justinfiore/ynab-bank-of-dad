@@ -51,6 +51,28 @@ interestRatesByAccountTypeAndDate:
     Bronze: 0.1
     Silver: 0.5
     Gold CD 2-Month: 0.75
+sync:
+  parentBudget:
+    budgetName: Parent Budget
+    tokenEnvVarName: YNAB_PARENT_TOKEN
+  childBudgets:
+    - childKey: child-one
+      budgetName: Child One Budget
+      tokenEnvVarName: YNAB_CHILD_ONE_TOKEN
+      parentCategoryNames:
+        - "Child One Spend Bank"
+        - "Child One Save Bank"
+      childAccountName: Child One Checking
+  pollingIntervalSeconds: 300
+  logging:
+    filePath: logs/sync.log
+    level: INFO
+    maxHistory: 7
+    maxFileSizeMb: 10
+  state:
+    sqlitePath: syncstate.db
+    transactionLookbackDays: 45
+    moneyMovementLookbackDays: 45
 '''
 
         when:
@@ -74,6 +96,9 @@ interestRatesByAccountTypeAndDate:
         config.accountTypes == ['Bronze', 'Silver', 'Gold CD 2-Month']
         config.interestRatesByAccountTypeAndDate['Current']['Silver'] == 0.15
         config.interestRatesByAccountTypeAndDate['2025-06-01']['Gold CD 2-Month'] == 0.75
+        config.sync.parentBudget.budgetName == 'Parent Budget'
+        config.sync.childBudgets*.childKey == ['child-one']
+        config.sync.state.sqlitePath == 'syncstate.db'
     }
 
     def "load throws when config file does not exist"() {
@@ -225,6 +250,63 @@ interestRatesByAccountTypeAndDate:
         config.interestRatesByAccountTypeAndDate['current']['Silver'] == 0.15
     }
 
+    def "validate throws when child sync target is missing required mapping field"() {
+        given:
+        def raw = validConfigMap()
+        raw.sync.childBudgets = [[
+            childKey: 'child-one',
+            budgetName: 'Child Budget',
+            tokenEnvVarName: 'YNAB_CHILD_ONE_TOKEN',
+            parentCategoryNames: ['Child One Spend Bank']
+        ]]
+
+        when:
+        RuntimeConfig.fromMap(raw)
+
+        then:
+        def ex = thrown(IllegalArgumentException)
+        ex.message.contains("sync.childBudgets[0].childAccountName")
+    }
+
+    def "validate throws when sync logging level is invalid"() {
+        given:
+        def raw = validConfigMap()
+        raw.sync.logging.level = 'VERBOSE'
+
+        when:
+        RuntimeConfig.fromMap(raw).sync.logging.validate()
+
+        then:
+        def ex = thrown(IllegalArgumentException)
+        ex.message.contains("sync.logging.level")
+    }
+
+    def "validate throws when polling interval is non-positive"() {
+        given:
+        def raw = validConfigMap()
+        raw.sync.pollingIntervalSeconds = 0
+
+        when:
+        RuntimeConfig.fromMap(raw)
+
+        then:
+        def ex = thrown(IllegalArgumentException)
+        ex.message.contains("sync.pollingIntervalSeconds")
+    }
+
+    def "validate throws when replay protection setting is non-positive"() {
+        given:
+        def raw = validConfigMap()
+        raw.sync.state.moneyMovementLookbackDays = -1
+
+        when:
+        RuntimeConfig.fromMap(raw)
+
+        then:
+        def ex = thrown(IllegalArgumentException)
+        ex.message.contains("sync.state.moneyMovementLookbackDays")
+    }
+
     private static Map validConfigMap() {
         [
             budgetName: 'Demo Family Budget',
@@ -247,6 +329,19 @@ interestRatesByAccountTypeAndDate:
             interestRatesByAccountTypeAndDate: [
                 'Current': ['Bronze': 0.1, 'Silver': 0.15, 'Gold CD 2-Month': 0.25],
                 '2025-06-01': ['Bronze': 0.1, 'Silver': 0.5, 'Gold CD 2-Month': 0.75]
+            ],
+            sync: [
+                parentBudget: [budgetName: 'Parent Budget', tokenEnvVarName: 'YNAB_PARENT_TOKEN'],
+                childBudgets: [[
+                    childKey: 'child-one',
+                    budgetName: 'Child Budget',
+                    tokenEnvVarName: 'YNAB_CHILD_ONE_TOKEN',
+                    parentCategoryNames: ['Child One Spend Bank'],
+                    childAccountName: 'Child Checking'
+                ]],
+                pollingIntervalSeconds: 300,
+                logging: [filePath: 'logs/sync.log', level: 'INFO', maxHistory: 7, maxFileSizeMb: 10],
+                state: [sqlitePath: 'syncstate.db', transactionLookbackDays: 45, moneyMovementLookbackDays: 45]
             ]
         ]
     }

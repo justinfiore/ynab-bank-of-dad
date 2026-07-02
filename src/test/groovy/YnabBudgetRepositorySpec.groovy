@@ -99,6 +99,80 @@ class YnabBudgetRepositorySpec extends Specification {
         categories['Child One Silver Account'] == new CategorySnapshot('cat-jack', 'Child One Silver Account', 0)
     }
 
+    def "getTransactions maps top-level and subtransaction payloads"() {
+        given:
+        stubFor(get(urlPathEqualTo('/v1/budgets/budget-new/transactions'))
+            .withQueryParam('since_date', matching('.*'))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader('Content-Type', 'application/json')
+                .withBody('''
+{
+  "data": {
+    "server_knowledge": 77,
+    "transactions": [
+      {
+        "id": "txn-1",
+        "date": "2026-07-01",
+        "amount": -1200,
+        "memo": "Shoes",
+        "approved": true,
+        "category_id": "cat-shoes",
+        "category_name": "Child One Spend Bank",
+        "subtransactions": [
+          {
+            "id": "sub-1",
+            "transaction_id": "txn-1",
+            "amount": -700,
+            "memo": "Split one",
+            "category_id": "cat-split",
+            "category_name": "Child One Save Bank"
+          }
+        ]
+      }
+    ]
+  }
+}
+''')))
+
+        when:
+        def transactions = buildRepository().getTransactions('budget-new', 30)
+
+        then:
+        transactions*.id == ['txn-1']
+        transactions[0].serverKnowledge == 77
+        transactions[0].subtransactions*.id == ['sub-1']
+        transactions[0].subtransactions[0].categoryName == 'Child One Save Bank'
+    }
+
+    def "getMoneyMovements filters to recent events and maps payloads"() {
+        given:
+        def recentDate = java.time.LocalDate.now().minusDays(5).toString()
+        def staleDate = java.time.LocalDate.now().minusDays(80).toString()
+        stubFor(get(urlEqualTo('/v1/budgets/budget-new/money_movements'))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader('Content-Type', 'application/json')
+                .withBody("""
+{
+  \"data\": {
+    \"money_movements\": [
+      {\"id\": \"mm-1\", \"money_movement_group_id\": \"group-1\", \"moved_at\": \"${recentDate}T12:00:00Z\", \"from_category_id\": \"cat-a\", \"to_category_id\": \"cat-b\", \"amount\": 500},
+      {\"id\": \"mm-2\", \"money_movement_group_id\": \"group-2\", \"moved_at\": \"${staleDate}T12:00:00Z\", \"from_category_id\": \"cat-c\", \"to_category_id\": \"cat-d\", \"amount\": 900}
+    ]
+  }
+}
+""")))
+
+        when:
+        def movements = buildRepository().getMoneyMovements('budget-new', 30)
+
+        then:
+        movements*.id == ['mm-1']
+        movements[0].groupId == 'group-1'
+        movements[0].eventDate == recentDate
+    }
+
     def "postTransactions sends the expected bulk payload to YNAB"() {
         given:
         stubFor(post(urlEqualTo('/v1/budgets/budget-new/transactions/bulk'))

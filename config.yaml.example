@@ -34,162 +34,134 @@ nonInterestMemoSuffix: Piggy Banks
 # Category-name suffixes for simple-account kids. These are appended to each
 # kid name to locate the matching YNAB categories.
 bankSuffixes:
-  # Spending bucket suffix.
   - " Spend Bank"
-  # Savings bucket suffix.
   - " Save Bank"
-  # Giving bucket suffix.
   - " Give Bank"
 
 # Weekly allowance amounts, in dollars, for simple-account categories keyed by
 # the matching bank suffix.
 allowanceRates:
-  # Weekly spend amount for simple accounts.
   " Spend Bank": 1.0
-  # Weekly save amount for simple accounts.
   " Save Bank": 0.5
-  # Weekly give amount for simple accounts.
   " Give Bank": 0.5
 
-# Kids whose allowance is generated from bankSuffixes + allowanceRates. For
-# each name here, the script expects categories like "<Kid> Spend Bank".
+# Kids whose allowance is generated from bankSuffixes + allowanceRates.
 kidsWithSimpleAccounts: []
 
 # Kids who receive one combined weekly allowance transaction and no interest
-# transactions. The script uses this list to build memos/payees only; exact
-# category names are not derived from these names.
+# transactions.
 kidsWithoutInterest: []
 
 # Weekly give-bank amount, in dollars, used when generating a single combined
-# non-interest-bearing transaction for a kid in kidsWithoutInterest.
+# non-interest-bearing transaction.
 giveBankRate: 0.5
 
 # -----------------------------------------------------------------------------
 # Advanced-account configuration
 # -----------------------------------------------------------------------------
-# Use this section for kids whose weekly deposits are configured explicitly by
-# exact category name instead of being inferred from bank suffixes.
-
-# Kids whose weekly allowance is generated from the explicit per-category map
-# in advancedAllowanceDeposits.
 kidsWithAdvancedAccounts:
-  # Example advanced-account kid name.
   - Child One
-  # Example advanced-account kid name.
   - Child Two
-  # Example advanced-account kid name.
   - Child Three
-  # Example advanced-account kid name.
   - Child Four
 
-# Weekly allowance deposits, in dollars, for advanced-account kids. Each top-
-# level key must match a kid listed in kidsWithAdvancedAccounts. Each nested
-# key must match an exact YNAB category name.
 advancedAllowanceDeposits:
-  # Example deposit map for Child One.
   Child One:
-    # Exact category name and weekly deposit amount.
     "Child One Silver Account": 3.0
-    # Exact category name and weekly deposit amount.
     "Child One Give Bank": 0.5
-  # Example deposit map for Child Two.
   Child Two:
-    # Exact category name and weekly deposit amount.
     "Child Two Silver Account": 3.0
-    # Exact category name and weekly deposit amount.
     "Child Two Give Bank": 0.5
-  # Example deposit map for Child Three.
   Child Three:
-    # Exact category name and weekly deposit amount.
     "Child Three Silver Account": 1.0
-    # Exact category name and weekly deposit amount.
     "Child Three Give Bank": 0.5
-  # Example deposit map for Child Four.
   Child Four:
-    # Exact category name and weekly deposit amount.
     "Child Four Silver Account": 1.0
-    # Exact category name and weekly deposit amount.
     "Child Four Bronze Account": 0.5
-    # Exact category name and weekly deposit amount.
     "Child Four Give Bank": 0.5
 
-# Ordered list of account-type labels used to detect which interest-rate table
-# entry applies to a category name. Longer/more-specific strings should appear
-# before shorter overlapping ones when relevant.
 accountTypes:
-  # Bronze account type label.
   - Bronze
-  # Silver account type label.
   - Silver
-  # Two-month CD account type label.
   - Gold CD 2-Month
-  # Three-month CD account type label.
   - Gold CD 3-Month
-  # Six-month CD account type label.
   - Gold CD 6-Month
-  # Non-CD long-term savings account type label.
   - First Car Fund
 
-# Interest rates, in percent, keyed first by the effective date of the rate
-# table and then by account type. The special key `Current` is the default for
-# non-CD accounts and for any date after the latest historical table. Dated
-# tables are used for CD origination-date lookups.
 interestRatesByAccountTypeAndDate:
-  # Default/current rate table.
   Current:
-    # Current bronze weekly interest percent.
     Bronze: 0.1
-    # Current silver weekly interest percent.
     Silver: 0.15
-    # Current 2-month CD weekly interest percent.
     Gold CD 2-Month: 0.25
-    # Current 3-month CD weekly interest percent.
     Gold CD 3-Month: 0.35
-    # Current 6-month CD weekly interest percent.
     Gold CD 6-Month: 0.65
-    # Current first-car-fund weekly interest percent.
     First Car Fund: 0.65
-  # Historical table effective on 2025-06-01.
   "2025-06-01":
-    # Bronze weekly interest percent effective on this date.
     Bronze: 0.1
-    # Silver weekly interest percent effective on this date.
     Silver: 0.5
-    # 2-month CD weekly interest percent effective on this date.
     Gold CD 2-Month: 0.75
-    # 3-month CD weekly interest percent effective on this date.
     Gold CD 3-Month: 1.0
-    # 6-month CD weekly interest percent effective on this date.
     Gold CD 6-Month: 1.25
-    # First-car-fund weekly interest percent effective on this date.
     First Car Fund: 1.25
-  # Historical table effective on 2025-04-14.
   "2025-04-14":
-    # Bronze weekly interest percent effective on this date.
     Bronze: 0.25
-    # Silver weekly interest percent effective on this date.
     Silver: 0.75
-    # 2-month CD weekly interest percent effective on this date.
     Gold CD 2-Month: 1.5
-    # 3-month CD weekly interest percent effective on this date.
     Gold CD 3-Month: 1.75
-    # 6-month CD weekly interest percent effective on this date.
     Gold CD 6-Month: 2.0
-    # First-car-fund weekly interest percent effective on this date.
     First Car Fund: 2.0
-  # Historical table effective on 2024-12-25.
   "2024-12-25":
-    # 2-month CD weekly interest percent effective on this date.
     Gold CD 2-Month: 1.75
-    # 3-month CD weekly interest percent effective on this date.
     Gold CD 3-Month: 2.0
-    # 6-month CD weekly interest percent effective on this date.
     Gold CD 6-Month: 2.25
-  # Historical table effective on 2024-11-23.
   "2024-11-23":
-    # 2-month CD weekly interest percent effective on this date.
     Gold CD 2-Month: 2.25
-    # 3-month CD weekly interest percent effective on this date.
     Gold CD 3-Month: 2.5
-    # 6-month CD weekly interest percent effective on this date.
     Gold CD 6-Month: 2.75
+
+# -----------------------------------------------------------------------------
+# Parent/child syncer configuration
+# -----------------------------------------------------------------------------
+# This section is used only by the standalone ParentChildBudgetSyncer entry point.
+# Tokens stay out of YAML; each budget names the environment variable that holds
+# its YNAB access token.
+sync:
+  parentBudget:
+    budgetName: Demo Parent Budget
+    tokenEnvVarName: YNAB_PARENT_TOKEN
+
+  childBudgets:
+    - childKey: child-one
+      budgetName: Demo Child One Budget
+      tokenEnvVarName: YNAB_CHILD_ONE_TOKEN
+      parentCategoryNames:
+        - "Child One Spend Bank"
+        - "Child One Save Bank"
+      childAccountName: Child One Checking
+    - childKey: child-two
+      budgetName: Demo Child Two Budget
+      tokenEnvVarName: YNAB_CHILD_TWO_TOKEN
+      parentCategoryNames:
+        - "Child Two Spend Bank"
+      childAccountName: Child Two Checking
+
+  # Continuous polling interval in seconds.
+  pollingIntervalSeconds: 300
+
+  logging:
+    # Rolling file target for sync runs.
+    filePath: logs/parent-child-sync.log
+    # Allowed values: TRACE, DEBUG, INFO, WARN, ERROR.
+    level: INFO
+    # Number of historical log files to retain.
+    maxHistory: 7
+    # Maximum file size, in MB, before rolling.
+    maxFileSizeMb: 10
+
+  state:
+    # Default SQLite replay-protection database path.
+    sqlitePath: syncstate.db
+    # How many days of parent transactions to reread safely.
+    transactionLookbackDays: 45
+    # How many days of money movements to reread before YNAB ages them out.
+    moneyMovementLookbackDays: 45

@@ -11,6 +11,13 @@ application {
     mainClass = 'RecordAllowance'
 }
 
+tasks.register('runSyncer', JavaExec) {
+    group = 'application'
+    description = 'Runs the standalone parent-child budget syncer.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'ParentChildBudgetSyncer'
+}
+
 def integrationTestPatterns = ['**/*WireMockSpec.class']
 def unitTestExcludes = integrationTestPatterns
 
@@ -25,6 +32,7 @@ dependencies {
     implementation 'commons-cli:commons-cli:1.4'
     implementation 'org.slf4j:slf4j-api:1.7.36'
     implementation 'ch.qos.logback:logback-classic:1.5.20'
+    implementation 'org.xerial:sqlite-jdbc:3.50.3.0'
     testImplementation 'org.spockframework:spock-core:2.4-groovy-5.0'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.14.1'
     testImplementation 'com.squareup.okhttp3:mockwebserver:4.12.0'
