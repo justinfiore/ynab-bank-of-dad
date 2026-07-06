@@ -84,6 +84,106 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         cursorValue('transactions.last_server_knowledge') == 41
     }
 
+    def "four child budgets route literals regex split and money movements across multiple child accounts"() {
+        given:
+        stubCommonBudgetDiscovery()
+        stubParentCategories()
+        stubParentTransactions([
+            [id: 'txn-child-one-spend', date: '2026-07-01', amount: -1100, memo: 'Child one shoes', approved: true, category_id: 'cat-child-one-spend', category_name: 'Child One Spend Bank', subtransactions: []],
+            [id: 'txn-child-one-bonus', date: '2026-07-01', amount: -1200, memo: 'Child one bonus', approved: true, category_id: 'cat-child-one-bonus', category_name: 'Child One Bonus Bank', subtransactions: []],
+            [id: 'txn-child-two-cd', date: '2026-07-01', amount: -1300, memo: 'Child two CD', approved: true, category_id: 'cat-child-two-cd-0726', category_name: 'Child Two Gold CD 07/31/26', subtransactions: []],
+            [id: 'txn-child-three-give', date: '2026-07-01', amount: -1400, memo: 'Child three give', approved: true, category_id: 'cat-child-three-give', category_name: 'Child Three Give Bank', subtransactions: []],
+            [id: 'txn-child-four-bonus', date: '2026-07-01', amount: -1500, memo: 'Child four bonus', approved: true, category_id: 'cat-child-four-bonus', category_name: 'Child Four Bonus Bank', subtransactions: []],
+            [id: 'txn-unapproved-four-child', date: '2026-07-01', amount: -9999, memo: 'Ignore unapproved', approved: false, category_id: 'cat-child-two-spend', category_name: 'Child Two Spend Bank', subtransactions: []],
+            [id: 'txn-split-four-child', date: '2026-07-02', amount: -4500, memo: 'Four child split memo', approved: true, category_id: null, category_name: null, subtransactions: [
+                [id: 'sub-child-one-save', transaction_id: 'txn-split-four-child', amount: -600, memo: 'Child one split save', category_id: 'cat-child-one-save', category_name: 'Child One Save Bank'],
+                [id: 'sub-child-two-give', transaction_id: 'txn-split-four-child', amount: -700, memo: 'Child two split give', category_id: 'cat-child-two-give', category_name: 'Child Two Give Bank'],
+                [id: 'sub-child-three-spend', transaction_id: 'txn-split-four-child', amount: -800, memo: null, category_id: 'cat-child-three-spend', category_name: 'Child Three Spend Bank'],
+                [id: 'sub-child-four-cd', transaction_id: 'txn-split-four-child', amount: -900, memo: 'Child four split CD', category_id: 'cat-child-four-cd-0826', category_name: 'Child Four Gold CD 08/31/26'],
+                [id: 'sub-four-unmapped', transaction_id: 'txn-split-four-child', amount: -1000, memo: 'Ignore unmapped split', category_id: 'cat-parent-only', category_name: 'Parent Only']
+            ]]
+        ], 101)
+        stubMoneyMovements([
+            [id: 'mm-one-to-two', money_movement_group_id: 'group-one-two', moved_at: '2026-07-03T12:00:00Z', from_category_id: 'cat-child-one-save', to_category_id: 'cat-child-two-spend', amount: 250],
+            [id: 'mm-three-cd-to-four-give', money_movement_group_id: 'group-three-four', moved_at: '2026-07-04T12:00:00Z', from_category_id: 'cat-child-three-cd-0726', to_category_id: 'cat-child-four-give', amount: 350],
+            [id: 'mm-parent-only-four-child', money_movement_group_id: 'group-parent-only', moved_at: '2026-07-05T12:00:00Z', from_category_id: 'cat-parent-only', to_category_id: 'cat-parent-only', amount: 450]
+        ])
+        stubChildAccounts('child-one-budget-id', [
+            [id: 'child-one-spend-account-id', name: 'Child One Spend Account'],
+            [id: 'child-one-save-account-id', name: 'Child One Save Account'],
+            [id: 'child-one-cd-account-id', name: 'Child One CD Account']
+        ])
+        stubChildAccounts('child-two-budget-id', [
+            [id: 'child-two-spend-account-id', name: 'Child Two Spend Account'],
+            [id: 'child-two-give-account-id', name: 'Child Two Give Account'],
+            [id: 'child-two-cd-account-id', name: 'Child Two CD Account']
+        ])
+        stubChildAccounts('child-three-budget-id', [
+            [id: 'child-three-spend-account-id', name: 'Child Three Spend Account'],
+            [id: 'child-three-give-account-id', name: 'Child Three Give Account'],
+            [id: 'child-three-cd-account-id', name: 'Child Three CD Account']
+        ])
+        stubChildAccounts('child-four-budget-id', [
+            [id: 'child-four-spend-account-id', name: 'Child Four Spend Account'],
+            [id: 'child-four-give-account-id', name: 'Child Four Give Account'],
+            [id: 'child-four-cd-account-id', name: 'Child Four CD Account']
+        ])
+        stubChildPost('child-one-budget-id', ['child-one-created-1', 'child-one-created-2', 'child-one-created-3', 'child-one-created-4'])
+        stubChildPost('child-two-budget-id', ['child-two-created-1', 'child-two-created-2', 'child-two-created-3', 'child-two-created-4'])
+        stubChildPost('child-three-budget-id', ['child-three-created-1', 'child-three-created-2', 'child-three-created-3'])
+        stubChildPost('child-four-budget-id', ['child-four-created-1', 'child-four-created-2', 'child-four-created-3', 'child-four-created-4'])
+        def syncer = syncer(false, fourChildSyncConfig())
+
+        when:
+        syncer.runOnce(1)
+
+        then:
+        List childOnePosts = postedTransactions('child-one-budget-id')
+        childOnePosts.size() == 4
+        childOnePosts.find { it.memo == 'Child one shoes' && it.account_id == 'child-one-spend-account-id' && it.amount == -1100 && it.category_id == null }
+        childOnePosts.find { it.memo == 'Child one bonus' && it.account_id == 'child-one-save-account-id' && it.amount == -1200 && it.category_id == null }
+        childOnePosts.find { it.memo == 'Child one split save' && it.account_id == 'child-one-save-account-id' && it.amount == -600 && it.category_id == null }
+        childOnePosts.find { it.memo == 'From Child One Save Bank to Child Two Spend Bank' && it.account_id == 'child-one-save-account-id' && it.amount == -250 && it.payee_name == 'To Child Two Spend Bank' && it.category_id == null }
+
+        and:
+        List childTwoPosts = postedTransactions('child-two-budget-id')
+        childTwoPosts.size() == 3
+        childTwoPosts.find { it.memo == 'Child two CD' && it.account_id == 'child-two-cd-account-id' && it.amount == -1300 && it.category_id == null }
+        childTwoPosts.find { it.memo == 'Child two split give' && it.account_id == 'child-two-give-account-id' && it.amount == -700 && it.category_id == null }
+        childTwoPosts.find { it.memo == 'From Child One Save Bank to Child Two Spend Bank' && it.account_id == 'child-two-spend-account-id' && it.amount == 250 && it.payee_name == 'From Child One Save Bank' && it.category_id == null }
+        !childTwoPosts.find { it.memo == 'Ignore unapproved' }
+
+        and:
+        List childThreePosts = postedTransactions('child-three-budget-id')
+        childThreePosts.size() == 3
+        childThreePosts.find { it.memo == 'Child three give' && it.account_id == 'child-three-give-account-id' && it.amount == -1400 && it.category_id == null }
+        childThreePosts.find { it.memo == 'Four child split memo' && it.account_id == 'child-three-spend-account-id' && it.amount == -800 && it.category_id == null }
+        childThreePosts.find { it.memo == 'From Child Three Gold CD 07/31/26 to Child Four Give Bank' && it.account_id == 'child-three-cd-account-id' && it.amount == -350 && it.payee_name == 'To Child Four Give Bank' && it.category_id == null }
+
+        and:
+        List childFourPosts = postedTransactions('child-four-budget-id')
+        childFourPosts.size() == 3
+        childFourPosts.find { it.memo == 'Child four bonus' && it.account_id == 'child-four-spend-account-id' && it.amount == -1500 && it.category_id == null }
+        childFourPosts.find { it.memo == 'Child four split CD' && it.account_id == 'child-four-cd-account-id' && it.amount == -900 && it.category_id == null }
+        childFourPosts.find { it.memo == 'From Child Three Gold CD 07/31/26 to Child Four Give Bank' && it.account_id == 'child-four-give-account-id' && it.amount == 350 && it.payee_name == 'From Child Three Gold CD 07/31/26' && it.category_id == null }
+
+        and:
+        verify(2, getRequestedFor(urlEqualTo('/v1/plans/child-one-budget-id/accounts')))
+        verify(3, getRequestedFor(urlEqualTo('/v1/plans/child-two-budget-id/accounts')))
+        verify(3, getRequestedFor(urlEqualTo('/v1/plans/child-three-budget-id/accounts')))
+        verify(3, getRequestedFor(urlEqualTo('/v1/plans/child-four-budget-id/accounts')))
+        tableCount('sync_runs') == 1
+        tableCount('source_events') == 13
+        tableCount('sync_mappings') == 13
+        tableCount('applied_transactions') == 13
+        mappingRows()*.target_child_key.toSet() == ['child-one', 'child-two', 'child-three', 'child-four'] as Set
+        mappingRows().find { it.target_child_key == 'child-one' && it.target_mapping_key == 'save-shared' && it.target_account_name == 'Child One Save Account' }
+        mappingRows().find { it.target_child_key == 'child-two' && it.target_mapping_key == 'cd-regex' && it.target_account_name == 'Child Two CD Account' }
+        mappingRows().find { it.target_child_key == 'child-three' && it.target_mapping_key == 'cd-regex' && it.target_account_name == 'Child Three CD Account' }
+        mappingRows().find { it.target_child_key == 'child-four' && it.target_mapping_key == 'spend-shared' && it.target_account_name == 'Child Four Spend Account' }
+        cursorValue('transactions.last_server_knowledge') == 101
+    }
+
     def "second live cycle uses saved transaction cursor and duplicate idempotency state prevents reposting"() {
         given:
         stubCommonBudgetDiscovery()
@@ -430,7 +530,7 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
 
     private ParentChildBudgetSyncer syncer(boolean dryRun) {
         String dbPath = tempDir.resolve('syncstate-wiremock.db').toString()
-        SyncConfig syncConfig = new SyncConfig(
+        syncer(dryRun, new SyncConfig(
             new BudgetRef('Parent Budget', 'YNAB_PARENT_TOKEN'),
             [
                 childTarget('child-one', 'Child One Budget', 'YNAB_CHILD_ONE_TOKEN', [['spend-save', ['Child One Spend Bank', 'Child One Save Bank'], 'Child One Checking']]),
@@ -439,7 +539,11 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
             300,
             new SyncLoggingConfig(tempDir.resolve('parent-child-sync.log').toString(), 'INFO', 7, 10),
             new SyncStateConfig(dbPath, 45, 45)
-        )
+        ))
+    }
+
+    private ParentChildBudgetSyncer syncer(boolean dryRun, SyncConfig syncConfig) {
+        String dbPath = syncConfig.state.sqlitePath
         SyncStateStore stateStore = new SyncStateStore(dbPath)
         stateStore.initialize()
         new ParentChildBudgetSyncer(
@@ -450,10 +554,9 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
             1,
             new YnabBudgetRepository(buildClient('parent-token')),
             stateStore,
-            [
-                new ChildSyncContext(syncConfig.childBudgets[0], new YnabBudgetRepository(buildClient('child-one-token'))),
-                new ChildSyncContext(syncConfig.childBudgets[1], new YnabBudgetRepository(buildClient('child-two-token')))
-            ]
+            syncConfig.childBudgets.collect { ChildBudgetSyncTarget target ->
+                new ChildSyncContext(target, new YnabBudgetRepository(buildClient(tokenForChild(target.childKey))))
+            }
         )
     }
 
@@ -463,9 +566,49 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
             budgetName,
             tokenEnvVarName,
             mappingRows.collect { row ->
-                new ChildAccountMapping(row[0] as String, (row[1] as List<String>).collect { new ParentCategoryNameMatcher(it, false) }, row[2] as String)
+                new ChildAccountMapping(row[0] as String, (row[1] as List).collect { matcher ->
+                    if (matcher instanceof Map) {
+                        return new ParentCategoryNameMatcher(matcher.name as String, (matcher.regex ?: false) as Boolean)
+                    }
+                    new ParentCategoryNameMatcher(matcher as String, false)
+                }, row[2] as String)
             }
         )
+    }
+
+    private SyncConfig fourChildSyncConfig() {
+        new SyncConfig(
+            new BudgetRef('Parent Budget', 'YNAB_PARENT_TOKEN'),
+            [
+                childTarget('child-one', 'Child One Budget', 'YNAB_CHILD_ONE_TOKEN', [
+                    ['spend-literal', ['Child One Spend Bank'], 'Child One Spend Account'],
+                    ['save-shared', ['Child One Save Bank', [name: 'Child One Bonus.*', regex: true]], 'Child One Save Account'],
+                    ['cd-regex', [[name: 'Child One Gold CD.*', regex: true]], 'Child One CD Account']
+                ]),
+                childTarget('child-two', 'Child Two Budget', 'YNAB_CHILD_TWO_TOKEN', [
+                    ['spend-literal', ['Child Two Spend Bank'], 'Child Two Spend Account'],
+                    ['give-shared', ['Child Two Give Bank', 'Child Two Charity Bank'], 'Child Two Give Account'],
+                    ['cd-regex', [[name: 'Child Two Gold CD.*', regex: true]], 'Child Two CD Account']
+                ]),
+                childTarget('child-three', 'Child Three Budget', 'YNAB_CHILD_THREE_TOKEN', [
+                    ['spend-literal', ['Child Three Spend Bank'], 'Child Three Spend Account'],
+                    ['give-literal', ['Child Three Give Bank'], 'Child Three Give Account'],
+                    ['cd-regex', [[name: 'Child Three Gold CD.*', regex: true]], 'Child Three CD Account']
+                ]),
+                childTarget('child-four', 'Child Four Budget', 'YNAB_CHILD_FOUR_TOKEN', [
+                    ['spend-shared', ['Child Four Spend Bank', [name: 'Child Four Bonus.*', regex: true]], 'Child Four Spend Account'],
+                    ['give-literal', ['Child Four Give Bank'], 'Child Four Give Account'],
+                    ['cd-regex', [[name: 'Child Four Gold CD.*', regex: true]], 'Child Four CD Account']
+                ])
+            ],
+            300,
+            new SyncLoggingConfig(tempDir.resolve('parent-child-sync.log').toString(), 'INFO', 7, 10),
+            new SyncStateConfig(tempDir.resolve('syncstate-wiremock.db').toString(), 45, 45)
+        )
+    }
+
+    private static String tokenForChild(String childKey) {
+        "${childKey}-token"
     }
 
     private YnabHttpClient buildClient(String token) {
@@ -494,7 +637,9 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
             data: [budgets: [
                 [id: 'parent-budget-id', name: 'Parent Budget', last_modified_on: '2026-07-01T12:00:00Z'],
                 [id: 'child-one-budget-id', name: 'Child One Budget', last_modified_on: '2026-07-01T12:00:00Z'],
-                [id: 'child-two-budget-id', name: 'Child Two Budget', last_modified_on: '2026-07-01T12:00:00Z']
+                [id: 'child-two-budget-id', name: 'Child Two Budget', last_modified_on: '2026-07-01T12:00:00Z'],
+                [id: 'child-three-budget-id', name: 'Child Three Budget', last_modified_on: '2026-07-01T12:00:00Z'],
+                [id: 'child-four-budget-id', name: 'Child Four Budget', last_modified_on: '2026-07-01T12:00:00Z']
             ]]
         ])
     }
@@ -507,7 +652,16 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
                     categories: [
                         [id: 'cat-child-one-spend', name: 'Child One Spend Bank', balance: 0],
                         [id: 'cat-child-one-save', name: 'Child One Save Bank', balance: 0],
+                        [id: 'cat-child-one-bonus', name: 'Child One Bonus Bank', balance: 0],
                         [id: 'cat-child-two-spend', name: 'Child Two Spend Bank', balance: 0],
+                        [id: 'cat-child-two-give', name: 'Child Two Give Bank', balance: 0],
+                        [id: 'cat-child-two-cd-0726', name: 'Child Two Gold CD 07/31/26', balance: 0],
+                        [id: 'cat-child-three-spend', name: 'Child Three Spend Bank', balance: 0],
+                        [id: 'cat-child-three-give', name: 'Child Three Give Bank', balance: 0],
+                        [id: 'cat-child-three-cd-0726', name: 'Child Three Gold CD 07/31/26', balance: 0],
+                        [id: 'cat-child-four-bonus', name: 'Child Four Bonus Bank', balance: 0],
+                        [id: 'cat-child-four-give', name: 'Child Four Give Bank', balance: 0],
+                        [id: 'cat-child-four-cd-0826', name: 'Child Four Gold CD 08/31/26', balance: 0],
                         [id: 'cat-parent-only', name: 'Parent Only', balance: 0]
                     ]
                 ]]]
@@ -531,8 +685,12 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
     }
 
     private void stubChildAccounts(String budgetId, String accountId, String accountName) {
+        stubChildAccounts(budgetId, [[id: accountId, name: accountName]])
+    }
+
+    private void stubChildAccounts(String budgetId, List<Map> accounts) {
         stubFor(get(urlEqualTo("/v1/plans/${budgetId}/accounts"))
-            .willReturn(jsonResponse([data: [accounts: [[id: accountId, name: accountName]]]])))
+            .willReturn(jsonResponse([data: [accounts: accounts]])))
     }
 
     private void stubChildPost(String budgetId, List<String> transactionIds) {
@@ -597,7 +755,7 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
     }
 
     private List<String> allPostedImportIds() {
-        ['child-one-budget-id', 'child-two-budget-id'].collectMany { postedTransactions(it) }*.import_id
+        ['child-one-budget-id', 'child-two-budget-id', 'child-three-budget-id', 'child-four-budget-id'].collectMany { postedTransactions(it) }*.import_id
     }
 
     private int tableCount(String tableName) {
@@ -623,6 +781,27 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
             List rows = []
             while (rs.next()) {
                 rows << [status: rs.getString('status'), failure_reason: rs.getString('failure_reason')]
+            }
+            rows
+        }
+    }
+
+    private List<Map> mappingRows() {
+        withDb { connection ->
+            def rs = connection.createStatement().executeQuery('''
+                SELECT target_child_key, target_mapping_key, target_account_name, target_account_id, idempotency_key
+                FROM sync_mappings
+                ORDER BY id
+            ''')
+            List rows = []
+            while (rs.next()) {
+                rows << [
+                    target_child_key : rs.getString('target_child_key'),
+                    target_mapping_key: rs.getString('target_mapping_key'),
+                    target_account_name: rs.getString('target_account_name'),
+                    target_account_id: rs.getString('target_account_id'),
+                    idempotency_key: rs.getString('idempotency_key')
+                ]
             }
             rows
         }
