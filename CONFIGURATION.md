@@ -59,8 +59,8 @@ At runtime, the syncer:
 Because of this, exact names also matter for:
 - `sync.parentBudget.budgetName`
 - each `sync.childBudgets[*].budgetName`
-- each `sync.childBudgets[*].parentCategoryNames`
-- each `sync.childBudgets[*].childAccountName`
+- each `sync.childBudgets[*].accountMappings[*].parentCategoryNames[*].name`
+- each `sync.childBudgets[*].accountMappings[*].childAccountName`
 
 ---
 
@@ -505,23 +505,35 @@ sync:
     - childKey: child-one
       budgetName: Demo Child One Budget
       tokenEnvVarName: YNAB_CHILD_ONE_TOKEN
-      parentCategoryNames:
-        - "Child One Spend Bank"
-        - "Child One Save Bank"
-      childAccountName: Child One Checking
+      accountMappings:
+        - mappingKey: spend
+          parentCategoryNames:
+            - name: "Child One Spend Bank"
+          childAccountName: Spend Account
+        - mappingKey: save
+          parentCategoryNames:
+            - name: "Child One Save Bank"
+            - name: "Child One Gold CD.*"
+              regex: true
+          childAccountName: Save Account
 ```
 
 Field guidance:
 - `childKey` — stable internal identifier used for grouping and replay protection; must be unique
 - `budgetName` — exact YNAB child budget name
 - `tokenEnvVarName` — env var name that holds this child budget’s token
-- `parentCategoryNames` — exact parent-budget category names that should mirror into this child
-- `childAccountName` — exact child-budget account name that receives mirrored transactions
+- `accountMappings` — non-empty list of parent-category-to-child-account mappings for this child budget
+- `accountMappings[*].mappingKey` — stable unique key within the child target, used in logs/state/idempotency
+- `accountMappings[*].parentCategoryNames[*].name` — parent-budget category matcher; literal exact match by default
+- `accountMappings[*].parentCategoryNames[*].regex` — optional boolean; set `true` only when `name` is a regex pattern
+- `accountMappings[*].childAccountName` — exact child-budget account name that receives mirrored transactions for that mapping
 
 Notes:
-- one parent category can map to exactly the child targets that include it in `parentCategoryNames`
-- money movements can fan out when both the source and destination categories belong to different configured child targets
-- each `budgetName + childAccountName` pairing must be unique
+- literal matchers are evaluated first and win over overlapping regex mappings, even if the regex appears earlier
+- without a literal exact match, the first matching mapping in config order wins
+- one mapping can list multiple literal and/or regex parent category matchers for the same child account
+- one child budget can define multiple mappings to different child accounts
+- money movements can fan out when both the source and destination categories belong to configured mappings
 
 ### `sync.pollingIntervalSeconds`
 How often the continuous syncer wakes up between cycles.
@@ -631,10 +643,12 @@ sync:
     - childKey: sam
       budgetName: Sam Budget
       tokenEnvVarName: YNAB_CHILD_SAM_TOKEN
-      parentCategoryNames:
-        - "Sam Spend Bank"
-        - "Sam Save Bank"
-      childAccountName: Sam Checking
+      accountMappings:
+        - mappingKey: spend-save
+          parentCategoryNames:
+            - name: "Sam Spend Bank"
+            - name: "Sam Save Bank"
+          childAccountName: Sam Checking
   pollingIntervalSeconds: 300
   logging:
     filePath: logs/parent-child-sync.log
@@ -701,17 +715,21 @@ sync:
     - childKey: child-one
       budgetName: Demo Child One Budget
       tokenEnvVarName: YNAB_CHILD_ONE_TOKEN
-      parentCategoryNames:
-        - "Child One Silver Account"
-        - "Child One Give Bank"
-      childAccountName: Child One Checking
+      accountMappings:
+        - mappingKey: silver-give
+          parentCategoryNames:
+            - name: "Child One Silver Account"
+            - name: "Child One Give Bank"
+          childAccountName: Child One Checking
     - childKey: child-two
       budgetName: Demo Child Two Budget
       tokenEnvVarName: YNAB_CHILD_TWO_TOKEN
-      parentCategoryNames:
-        - "Child Two Silver Account"
-        - "Child Two Give Bank"
-      childAccountName: Child Two Checking
+      accountMappings:
+        - mappingKey: silver-give
+          parentCategoryNames:
+            - name: "Child Two Silver Account"
+            - name: "Child Two Give Bank"
+          childAccountName: Child Two Checking
   pollingIntervalSeconds: 300
   logging:
     filePath: logs/parent-child-sync.log

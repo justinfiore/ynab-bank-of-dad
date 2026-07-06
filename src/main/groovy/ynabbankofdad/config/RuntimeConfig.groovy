@@ -3,6 +3,9 @@ package ynabbankofdad.config
 import groovy.transform.Immutable
 import org.yaml.snakeyaml.Yaml
 
+import java.util.regex.Pattern
+import java.util.regex.PatternSyntaxException
+
 class RuntimeConfig {
     String budgetName
     String allowanceEscrowAccountName
@@ -114,12 +117,53 @@ class RuntimeConfig {
                 throw new IllegalArgumentException("Config key '${parentKey}.${childKey}[${index}]' must be a map")
             }
             Map item = entry as Map
+            String itemKey = "${parentKey}.${childKey}[${index}]"
             new ChildBudgetSyncTarget(
-                childKey: requireString(item, 'childKey', "${parentKey}.${childKey}[${index}]"),
-                budgetName: requireString(item, 'budgetName', "${parentKey}.${childKey}[${index}]"),
-                tokenEnvVarName: requireString(item, 'tokenEnvVarName', "${parentKey}.${childKey}[${index}]"),
-                parentCategoryNames: requireStringList(item, 'parentCategoryNames', "${parentKey}.${childKey}[${index}]"),
-                childAccountName: requireString(item, 'childAccountName', "${parentKey}.${childKey}[${index}]")
+                childKey: requireString(item, 'childKey', itemKey),
+                budgetName: requireString(item, 'budgetName', itemKey),
+                tokenEnvVarName: requireString(item, 'tokenEnvVarName', itemKey),
+                accountMappings: requireAccountMappings(item, 'accountMappings', itemKey)
+            )
+        }
+    }
+
+    private static List<ChildAccountMapping> requireAccountMappings(Map raw, String key, String parentKey) {
+        def value = raw[key]
+        if (!(value instanceof List) || value.isEmpty()) {
+            throw new IllegalArgumentException("Config key '${formatKey(parentKey, key)}' must be a non-empty list")
+        }
+        (value as List).withIndex().collect { def entry, int index ->
+            if (!(entry instanceof Map)) {
+                throw new IllegalArgumentException("Config key '${formatKey(parentKey, key)}[${index}]' must be a map")
+            }
+            Map item = entry as Map
+            String itemKey = "${formatKey(parentKey, key)}[${index}]"
+            new ChildAccountMapping(
+                mappingKey: requireString(item, 'mappingKey', itemKey),
+                parentCategoryNames: requireParentCategoryNameMatchers(item, 'parentCategoryNames', itemKey),
+                childAccountName: requireString(item, 'childAccountName', itemKey)
+            )
+        }
+    }
+
+    private static List<ParentCategoryNameMatcher> requireParentCategoryNameMatchers(Map raw, String key, String parentKey) {
+        def value = raw[key]
+        if (!(value instanceof List) || value.isEmpty()) {
+            throw new IllegalArgumentException("Config key '${formatKey(parentKey, key)}' must be a non-empty list")
+        }
+        (value as List).withIndex().collect { def entry, int index ->
+            String itemKey = "${formatKey(parentKey, key)}[${index}]"
+            if (!(entry instanceof Map)) {
+                throw new IllegalArgumentException("Config key '${itemKey}' must be a map with a non-empty name and optional boolean regex")
+            }
+            Map item = entry as Map
+            def regexValue = item.containsKey('regex') ? item.regex : false
+            if (!(regexValue instanceof Boolean)) {
+                throw new IllegalArgumentException("Config key '${itemKey}.regex' must be boolean when provided")
+            }
+            new ParentCategoryNameMatcher(
+                name: requireString(item, 'name', itemKey),
+                regex: regexValue as Boolean
             )
         }
     }
@@ -246,14 +290,11 @@ class SyncConfig {
             throw new IllegalArgumentException("Config key 'sync.childBudgets' must be a non-empty list")
         }
         def seenChildKeys = [] as Set
-        def seenBudgetAndAccount = [] as Set
         childBudgets.each { ChildBudgetSyncTarget target ->
             if (!seenChildKeys.add(target.childKey)) {
                 throw new IllegalArgumentException("sync.childBudgets childKey '${target.childKey}' must be unique")
             }
-            if (!seenBudgetAndAccount.add("${target.budgetName}::${target.childAccountName}")) {
-                throw new IllegalArgumentException("sync.childBudgets budget/account pairing '${target.budgetName} / ${target.childAccountName}' must be unique")
-            }
+            target.validate()
         }
     }
 }
@@ -269,8 +310,48 @@ class ChildBudgetSyncTarget {
     String childKey
     String budgetName
     String tokenEnvVarName
-    List<String> parentCategoryNames
+    List<ChildAccountMapping> accountMappings
+
+    void validate() {
+        if (accountMappings == null || accountMappings.isEmpty()) {
+            throw new IllegalArgumentException("sync.childBudgets childKey '${childKey}' must define at least one accountMapping")
+        }
+        def seenMappingKeys = [] as Set
+        accountMappings.each { ChildAccountMapping mapping ->
+            if (!seenMappingKeys.add(mapping.mappingKey)) {
+                throw new IllegalArgumentException("sync.childBudgets childKey '${childKey}' has duplicate mappingKey '${mapping.mappingKey}'")
+            }
+            mapping.validate(childKey)
+        }
+    }
+}
+
+@Immutable
+class ChildAccountMapping {
+    String mappingKey
+    List<ParentCategoryNameMatcher> parentCategoryNames
     String childAccountName
+
+    void validate(String childKey) {
+        if (parentCategoryNames == null || parentCategoryNames.isEmpty()) {
+            throw new IllegalArgumentException("sync.childBudgets childKey '${childKey}' mappingKey '${mappingKey}' must define at least one parentCategoryNames matcher")
+        }
+        parentCategoryNames.each { ParentCategoryNameMatcher matcher ->
+            if (matcher.regex) {
+                try {
+                    Pattern.compile(matcher.name)
+                } catch (PatternSyntaxException ex) {
+                    throw new IllegalArgumentException("sync.childBudgets childKey '${childKey}' mappingKey '${mappingKey}' has invalid regex parentCategoryNames pattern '${matcher.name}': ${ex.message}")
+                }
+            }
+        }
+    }
+}
+
+@Immutable
+class ParentCategoryNameMatcher {
+    String name
+    Boolean regex = false
 }
 
 @Immutable

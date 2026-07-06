@@ -65,10 +65,17 @@ sync:
     - childKey: child-one
       budgetName: Your Child One Budget Name
       tokenEnvVarName: YNAB_CHILD_ONE_TOKEN
-      parentCategoryNames:
-        - "Exact Parent Category For Child One Spend/Bank"
-        - "Exact Parent Category For Child One Save/Bank"
-      childAccountName: Exact Child One Account Name
+      accountMappings:
+        - mappingKey: spend
+          parentCategoryNames:
+            - name: "Exact Parent Category For Child One Spend/Bank"
+          childAccountName: Exact Child One Spend Account Name
+        - mappingKey: save
+          parentCategoryNames:
+            - name: "Exact Parent Category For Child One Save/Bank"
+            - name: "Child One Gold CD.*"
+              regex: true
+          childAccountName: Exact Child One Save/CD Account Name
 
   pollingIntervalSeconds: 300
 
@@ -89,8 +96,10 @@ For every child, check:
 - `childKey` is stable and unique, such as `sam`, `alex`, or `child-one`.
 - `budgetName` exactly matches the YNAB child budget name.
 - `tokenEnvVarName` is the **name** of the env var that will hold that child's token.
-- `parentCategoryNames` exactly match categories in the parent budget that should mirror to that child.
-- `childAccountName` exactly matches the account in the child budget where mirrored transactions should be created.
+- `accountMappings[*].mappingKey` values are stable and unique within that child.
+- `accountMappings[*].parentCategoryNames[*].name` entries exactly match parent categories unless `regex: true` is set.
+- `accountMappings[*].childAccountName` exactly matches the child account that should receive that mapping's mirrored transactions.
+- Literal mappings should be listed for normal category names; use `regex: true` only for intentional pattern matching. Exact literal matches win before regex matches, then first matching mapping wins.
 
 ### 0.3 Export real tokens
 
@@ -173,21 +182,21 @@ Pass criteria:
 - The run reaches YNAB successfully; no HTTP 401/403 errors.
 - The configured parent budget is found.
 - Every configured child budget is found if there is qualifying work for that child.
-- Every configured `childAccountName` is found if there is qualifying work for that child.
+- Every configured `accountMappings[*].childAccountName` is found if there is qualifying work for that child.
 - The run exits by itself because of `--max-cycles 1`.
 
 If it fails:
 
 - HTTP 401/403 usually means a missing/wrong token env var or token permission issue.
 - Budget lookup failure usually means `budgetName` does not exactly match YNAB.
-- Account lookup failure usually means `childAccountName` does not exactly match the child budget account.
-- Category mismatch usually means `parentCategoryNames` does not exactly match parent budget category names.
+- Account lookup failure usually means `accountMappings[*].childAccountName` does not exactly match the child budget account.
+- Category mismatch usually means `accountMappings[*].parentCategoryNames[*].name` does not exactly match parent budget category names.
 
 ### 1.2 No-op dry run: no qualifying parent activity
 
 Purpose: prove unrelated or unmapped parent activity is ignored.
 
-1. In the parent budget, make sure there are no recent approved transactions or money movements in the configured `parentCategoryNames`, or temporarily choose a child mapping category with no recent activity.
+1. In the parent budget, make sure there are no recent approved transactions or money movements in the configured account mapping category matchers, or temporarily choose a child mapping category with no recent activity.
 2. Run the dry-run command.
 
 Pass criteria:
@@ -240,7 +249,7 @@ Pass criteria after approval:
 
 Purpose: prove only configured parent categories mirror into child budgets.
 
-1. In the parent budget, create and approve a small transaction in a category **not** listed in any `sync.childBudgets[*].parentCategoryNames`.
+1. In the parent budget, create and approve a small transaction in a category **not** listed in any `sync.childBudgets[*].accountMappings[*].parentCategoryNames[*].name`.
 2. Use memo `SYNC TEST - unmapped should not sync`.
 3. Run the dry-run command.
 
@@ -302,7 +311,45 @@ Pass criteria:
 - Amount direction makes sense for each child.
 - No child-budget transactions are created.
 
-### 1.9 Dry-run replay check: rerun the same dry run
+### 1.9 Multi-child, multi-account mapping matrix dry run
+
+Purpose: validate the new `accountMappings` behavior end to end before live posting. This is the most important manual coverage for the account-mapping change because it exercises multiple child budgets, multiple child accounts inside each budget, exact literals, regex matchers, multiple parent categories mapped to a single child account, top-level transactions, split transactions, and money movements in one run.
+
+Recommended setup:
+
+1. Configure at least four child budgets, each with at least two child accounts and preferably three account mappings, for example:
+   - spend/checking account
+   - save/give account
+   - CD or long-term savings account
+2. For at least two children, map multiple parent categories to the same child account, for example:
+   - `Child One Save Bank` and regex `Child One Bonus.*` -> `Child One Save Account`
+   - `Child Four Spend Bank` and regex `Child Four Bonus.*` -> `Child Four Spend Account`
+3. Include at least one `regex: true` matcher that should match a date-like or suffix-like category, for example `Child Two Gold CD.*` or `Child Four Gold CD.*`.
+4. Include at least one literal category whose name contains punctuation or text that could be confused with regex so you can confirm literal entries still match literally when `regex` is omitted.
+5. Run the dry-run command once after creating all test parent activity below.
+
+Create parent activity:
+
+1. Create approved top-level transactions in mapped parent categories for all four children.
+2. Create at least one approved split transaction with mapped subtransactions for multiple children and multiple destination child accounts.
+3. Include one unmapped split line to prove it is ignored.
+4. Create one money movement from a mapped category for one child to a mapped category for another child.
+5. Create one money movement involving a regex-matched CD/long-term category and another child's literal mapped category.
+6. Leave one mapped-category transaction unapproved to prove it is ignored until approval.
+
+Pass criteria:
+
+- Logs show planned child transactions for all four child targets.
+- Every planned child transaction lands on the configured child account for the selected mapping, not just the first account configured for that child.
+- Literal-only categories match exactly with `regex` omitted/defaulted to `false`.
+- Regex categories match only where `regex: true` is configured.
+- Multiple parent categories mapped to one child account all plan against that same child account.
+- Split transaction subtransactions fan out by each subtransaction category and amount.
+- Money movements produce the expected inflow/outflow effects, memo, and payee on each affected child side.
+- The unapproved mapped transaction and unmapped split line do not create planned child transactions.
+- No actual child-budget transactions are created in dry-run mode.
+
+### 1.10 Dry-run replay check: rerun the same dry run
 
 Purpose: confirm dry-run does not mark source events as processed.
 
@@ -477,7 +524,45 @@ Pass criteria:
 - The idempotency/replay behavior is independent per child target.
 - Rerunning does not duplicate either transaction.
 
-### 2.8 Live child failure isolation
+### 2.8 Live multi-child, multi-account mapping matrix
+
+Only run this after the dry-run matrix in scenario 1.9 looks exactly right.
+
+1. Back up `$LIVE_STATE_DB`.
+2. Create a fresh, small set of parent test activity using unique `SYNC LIVE TEST - mapping matrix` memo text:
+   - one approved top-level transaction for each of four children
+   - one approved split transaction with mapped subtransactions across multiple children/accounts
+   - one mapped-to-mapped money movement across two children
+   - one money movement involving a regex-matched CD/long-term category
+   - one unapproved mapped transaction that should not sync
+3. Dry run once and verify every planned child budget/account destination.
+4. Run one live cycle.
+5. Inspect all four child budgets.
+6. Run the same live cycle command again to verify idempotency.
+
+Pass criteria:
+
+- All four child budgets receive only their expected child transactions.
+- Each child transaction appears in the account named by the selected `accountMappings[*].childAccountName`.
+- Multiple parent categories configured under one mapping create child transactions in the same target account.
+- Regex-matched parent categories route to the expected regex mapping account.
+- Split subtransactions create separate child transactions using subtransaction amounts.
+- Money movements create the expected positive/negative child-side effects with the expected memo/payee.
+- The unapproved transaction is still absent until it is approved.
+- The second live run creates no duplicate child transactions.
+- SQLite `sync_mappings` rows include enough mapping/account context to audit the routing.
+
+Helpful SQLite audit query after the live matrix:
+
+```bash
+sqlite3 "$LIVE_STATE_DB" \
+  "select target_child_key, target_mapping_key, target_account_name, target_account_id, count(*)
+   from sync_mappings
+   group by target_child_key, target_mapping_key, target_account_name, target_account_id
+   order by target_child_key, target_mapping_key;"
+```
+
+### 2.9 Live child failure isolation
 
 Use this only after the happy-path tests pass.
 
@@ -530,6 +615,26 @@ sqlite3 "$LIVE_STATE_DB" \
 ```
 
 Do **not** manually edit this DB to force a test to pass. If you need to reset a test, use new unique parent test transactions/memos instead.
+
+### 3.1 Inspect mapping/account routing
+
+For mapped-account scenarios, inspect routing context directly:
+
+```bash
+sqlite3 "$LIVE_STATE_DB" \
+  "select target_child_key, target_mapping_key, target_account_name, target_account_id, idempotency_key
+   from sync_mappings
+   order by id desc
+   limit 30;"
+```
+
+Pass criteria:
+
+- `target_child_key` matches the child budget that received the transaction.
+- `target_mapping_key` matches the configured account mapping that selected the child account.
+- `target_account_name` matches the configured `childAccountName`.
+- `target_account_id` is populated for live applied transactions.
+- Idempotency keys are distinct when different mappings/accounts are involved.
 
 ---
 
@@ -595,6 +700,7 @@ Use this as the final go/no-go list before trusting the syncer with normal famil
 - [ ] Unmapped approved parent transaction is ignored.
 - [ ] Split transaction plans one child transaction per mapped subtransaction.
 - [ ] Money movement plans expected payee/memo behavior.
+- [ ] Four-child/multi-account dry-run matrix covers literals, regex, shared-account mappings, split transactions, money movements, unapproved work, and unmapped work.
 - [ ] Dry-run creates no child transactions.
 - [ ] Dry-run does not mark planned work as processed.
 
@@ -605,6 +711,8 @@ Use this as the final go/no-go list before trusting the syncer with normal famil
 - [ ] Rerun does not duplicate the child transaction.
 - [ ] Split transaction fan-out creates the expected child transactions only.
 - [ ] Money movement fan-out creates the expected child transactions only.
+- [ ] Four-child/multi-account live matrix creates expected transactions only, in the expected child accounts, and does not duplicate on rerun.
+- [ ] SQLite `sync_mappings` rows show the expected `target_mapping_key` and `target_account_name` routing context.
 - [ ] Child-target failure identifies the failed child and can be retried after fixing config/token.
 - [ ] SQLite state DB is present and backed up if desired.
 

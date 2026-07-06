@@ -37,8 +37,6 @@ class ChildSyncApplier {
         try {
             String budgetId = childContext.budgetId ?: childContext.repository.getLatestBudgetId(childContext.target.budgetName)
             childContext.budgetId = budgetId
-            String accountId = childContext.accountId ?: childContext.repository.getAccountId(budgetId, childContext.target.childAccountName)
-            childContext.accountId = accountId
 
             int applied = 0
             int skipped = 0
@@ -49,11 +47,16 @@ class ChildSyncApplier {
                     return
                 }
 
+                String accountId = childContext.resolveAccountId(plan.childAccountName)
+                if (!accountId) {
+                    accountId = childContext.repository.getAccountId(budgetId, plan.childAccountName)
+                    childContext.cacheAccountId(plan.childAccountName, accountId)
+                }
                 Map<String, Object> transaction = payloadFactory.buildTransaction(plan, accountId)
 
                 if (dryRun) {
-                    log.info('{} child transaction for {} -> {}', DRY_RUN_PREFIX, childContext.target.childKey, JsonOutput.toJson(transaction))
-                    log.info('{} sqlite state for {} -> {}', DRY_RUN_PREFIX, childContext.target.childKey, plan.idempotencyKey)
+                    log.info('{} child transaction for {} mapping {} account {} -> {}', DRY_RUN_PREFIX, childContext.target.childKey, plan.mappingKey, plan.childAccountName, JsonOutput.toJson(transaction))
+                    log.info('{} sqlite state for {} mapping {} -> {}', DRY_RUN_PREFIX, childContext.target.childKey, plan.mappingKey, plan.idempotencyKey)
                     return
                 }
 
@@ -62,7 +65,7 @@ class ChildSyncApplier {
                 def response = childContext.repository.postTransactions(budgetId, [transaction])
                 String createdTransactionId = payloadFactory.extractCreatedTransactionId(response)
                 stateStore.recordAppliedTransaction(mappingId, runId, budgetId, createdTransactionId, 'applied', null, false)
-                log.info('Posted child transaction for {}: {}', childContext.target.childKey, createdTransactionId)
+                log.info('Posted child transaction for {} mapping {} account {}: {}', childContext.target.childKey, plan.mappingKey, plan.childAccountName, createdTransactionId)
                 applied++
             }
             return new ChildApplyResult(childContext.target.childKey, applied, skipped, 0, [])
@@ -72,7 +75,7 @@ class ChildSyncApplier {
                 childPlans.each { ChildTransactionPlan plan ->
                     long sourceEventId = stateStore.recordSourceEvent(plan)
                     String targetBudgetId = childContext?.budgetId ?: plan.targetBudgetName
-                    long mappingId = stateStore.recordMapping(sourceEventId, plan, targetBudgetId, childContext?.accountId)
+                    long mappingId = stateStore.recordMapping(sourceEventId, plan, targetBudgetId, childContext?.resolveAccountId(plan.childAccountName))
                     stateStore.recordAppliedTransaction(mappingId, runId, targetBudgetId, null, 'failed', ex.message, false)
                 }
             }

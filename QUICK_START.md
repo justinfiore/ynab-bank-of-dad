@@ -57,8 +57,9 @@ cp config.yaml.example config.yaml
    - each `sync.childBudgets[*].childKey`
    - each `sync.childBudgets[*].budgetName`
    - each `sync.childBudgets[*].tokenEnvVarName`
-   - each `sync.childBudgets[*].parentCategoryNames`
-   - each `sync.childBudgets[*].childAccountName`
+   - each `sync.childBudgets[*].accountMappings[*].mappingKey`
+   - each `sync.childBudgets[*].accountMappings[*].parentCategoryNames[*].name` (literal by default; add `regex: true` only for regex patterns)
+   - each `sync.childBudgets[*].accountMappings[*].childAccountName`
    - `sync.pollingIntervalSeconds`
    - `sync.logging.filePath`
    - `sync.state.sqlitePath`

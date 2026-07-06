@@ -99,7 +99,7 @@ class SyncStateStoreIntegrationSpec extends Specification {
         given:
         def store = initializedStore()
         def plan = new ChildTransactionPlan(
-            'parent-budget', 'child-two', 'Child Two Budget', 'Child Two Spend Bank',
+            'parent-budget', 'child-two', 'Child Two Budget', 'spend', 'Child Two Spend Bank',
             'money_movement', null, null, 'mm-1', 'group-1', 'movement-idem', 'Child Two Checking',
             '2026-07-03', 500, 'Moved from Parent to Child Two Spend Bank', 'Moved from Parent to Child Two Spend Bank', true
         )
@@ -141,14 +141,17 @@ class SyncStateStoreIntegrationSpec extends Specification {
 
         and:
         def row = querySingleRow(store.databasePath, '''
-            SELECT source_event_id, target_budget_id, target_child_key, target_account_id,
-                   direction, planned_amount, planned_date, planned_payee_name, planned_memo,
-                   planned_category_id, idempotency_key, last_planned_at
+            SELECT source_event_id, target_budget_id, target_child_key, target_mapping_key,
+                   target_account_name, target_account_id, direction, planned_amount,
+                   planned_date, planned_payee_name, planned_memo, planned_category_id,
+                   idempotency_key, last_planned_at
             FROM sync_mappings WHERE id = ?
         ''', firstId)
         row.source_event_id == sourceEventId
         row.target_budget_id == 'child-budget-id'
         row.target_child_key == 'child-one'
+        row.target_mapping_key == 'spend'
+        row.target_account_name == 'Child One Checking'
         row.target_account_id == 'acct-1'
         row.direction == 'outflow'
         row.planned_amount == -1200
@@ -259,7 +262,7 @@ class SyncStateStoreIntegrationSpec extends Specification {
 
     private static ChildTransactionPlan transactionPlan(String idempotencyKey) {
         new ChildTransactionPlan(
-            'parent-budget', 'child-one', 'Child One Budget', 'Child One Spend Bank',
+            'parent-budget', 'child-one', 'Child One Budget', 'spend', 'Child One Spend Bank',
             'transaction', 'txn-1', null, null, null, idempotencyKey, 'Child One Checking',
             '2026-07-01', -1200, 'Shoes', 'Payee', true
         )
