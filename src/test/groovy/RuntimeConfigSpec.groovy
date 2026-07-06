@@ -66,10 +66,17 @@ sync:
     - childKey: child-one
       budgetName: Child One Budget
       tokenEnvVarName: YNAB_CHILD_ONE_TOKEN
-      parentCategoryNames:
-        - "Child One Spend Bank"
-        - "Child One Save Bank"
-      childAccountName: Child One Checking
+      accountMappings:
+        - mappingKey: spend
+          parentCategoryNames:
+            - name: "Child One Spend Bank"
+            - name: "Child One Save Bank"
+          childAccountName: Child One Checking
+        - mappingKey: cd
+          parentCategoryNames:
+            - name: "Child One Gold CD.*"
+              regex: true
+          childAccountName: Child One CD
   pollingIntervalSeconds: 300
   logging:
     filePath: logs/sync.log
@@ -263,8 +270,7 @@ sync:
         raw.sync.childBudgets = [[
             childKey: 'child-one',
             budgetName: 'Child Budget',
-            tokenEnvVarName: 'YNAB_CHILD_ONE_TOKEN',
-            parentCategoryNames: ['Child One Spend Bank']
+            tokenEnvVarName: 'YNAB_CHILD_ONE_TOKEN'
         ]]
 
         when:
@@ -272,7 +278,47 @@ sync:
 
         then:
         def ex = thrown(IllegalArgumentException)
-        ex.message.contains("sync.childBudgets[0].childAccountName")
+        ex.message.contains("sync.childBudgets[0].accountMappings")
+    }
+
+    def "sync config accepts multiple account mappings with literal and regex matchers"() {
+        given:
+        def raw = validConfigMap()
+        raw.sync.childBudgets[0].accountMappings = [
+            [mappingKey: 'spend', parentCategoryNames: [[name: 'Child One Spend Bank']], childAccountName: 'Spend Account'],
+            [mappingKey: 'give', parentCategoryNames: [[name: 'Child One Give Bank']], childAccountName: 'Give Account'],
+            [mappingKey: 'cd', parentCategoryNames: [[name: 'Child One Gold CD.*', regex: true], [name: 'Child One CD (2-Month) [07/31/26]']], childAccountName: 'CD Account']
+        ]
+
+        when:
+        def config = RuntimeConfig.fromMap(raw)
+
+        then:
+        config.sync.childBudgets[0].accountMappings*.mappingKey == ['spend', 'give', 'cd']
+        config.sync.childBudgets[0].accountMappings[2].parentCategoryNames*.regex == [true, false]
+        config.sync.childBudgets[0].accountMappings[2].childAccountName == 'CD Account'
+    }
+
+    def "sync config rejects duplicate mapping keys invalid regex and malformed matcher flags"() {
+        given:
+        def raw = validConfigMap()
+        mutation(raw)
+
+        when:
+        RuntimeConfig.fromMap(raw)
+
+        then:
+        def ex = thrown(IllegalArgumentException)
+        ex.message.contains(expected)
+
+        where:
+        mutation << [
+            { Map cfg -> cfg.sync.childBudgets[0].accountMappings << [mappingKey: 'spend', parentCategoryNames: [[name: 'Other']], childAccountName: 'Other Account'] },
+            { Map cfg -> cfg.sync.childBudgets[0].accountMappings[0].parentCategoryNames = [[name: 'Child One Gold CD[', regex: true]] },
+            { Map cfg -> cfg.sync.childBudgets[0].accountMappings[0].parentCategoryNames = [[name: 'Child One Spend Bank', regex: 'yes']] },
+            { Map cfg -> cfg.sync.childBudgets[0].accountMappings[0].parentCategoryNames = [[regex: false]] }
+        ]
+        expected << ['duplicate mappingKey', 'invalid regex', '.regex', '.name']
     }
 
     def "validate throws when sync logging level is invalid"() {
@@ -343,8 +389,11 @@ sync:
                     childKey: 'child-one',
                     budgetName: 'Child Budget',
                     tokenEnvVarName: 'YNAB_CHILD_ONE_TOKEN',
-                    parentCategoryNames: ['Child One Spend Bank'],
-                    childAccountName: 'Child Checking'
+                    accountMappings: [[
+                        mappingKey: 'spend',
+                        parentCategoryNames: [[name: 'Child One Spend Bank']],
+                        childAccountName: 'Child Checking'
+                    ]]
                 ]],
                 pollingIntervalSeconds: 300,
                 logging: [filePath: 'logs/sync.log', level: 'INFO', maxHistory: 7, maxFileSizeMb: 10],

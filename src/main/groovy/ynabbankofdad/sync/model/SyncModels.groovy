@@ -4,19 +4,29 @@ import groovy.transform.Immutable
 import ynabbankofdad.config.ChildBudgetSyncTarget
 import ynabbankofdad.ynab.YnabBudgetRepository
 
-import groovy.transform.Immutable
-
 class ChildSyncContext {
     final ChildBudgetSyncTarget target
     final YnabBudgetRepository repository
     String budgetId
-    String accountId
+    Map<String, String> accountIdsByName = [:]
 
     ChildSyncContext(ChildBudgetSyncTarget target, YnabBudgetRepository repository, String budgetId = null, String accountId = null) {
         this.target = target
         this.repository = repository
         this.budgetId = budgetId
-        this.accountId = accountId
+        if (accountId) {
+            target?.accountMappings?.collect { it.childAccountName }?.unique()?.each { String accountName ->
+                this.accountIdsByName[accountName] = accountId
+            }
+        }
+    }
+
+    String resolveAccountId(String accountName) {
+        accountIdsByName[accountName]
+    }
+
+    void cacheAccountId(String accountName, String accountId) {
+        accountIdsByName[accountName] = accountId
     }
 }
 
@@ -25,6 +35,7 @@ class ChildTransactionPlan {
     String sourceBudgetId
     String targetChildKey
     String targetBudgetName
+    String mappingKey
     String parentCategoryName
     String eventType
     String parentTransactionId
@@ -44,6 +55,7 @@ class ChildTransactionPlan {
             sourceBudgetId        : sourceBudgetId,
             targetChildKey        : targetChildKey,
             targetBudgetName      : targetBudgetName,
+            mappingKey            : mappingKey,
             parentCategoryName    : parentCategoryName,
             eventType             : eventType,
             parentTransactionId   : parentTransactionId,

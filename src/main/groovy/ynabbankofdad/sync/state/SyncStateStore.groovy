@@ -77,6 +77,8 @@ class SyncStateStore implements SyncStateRepository {
                     source_event_id INTEGER NOT NULL,
                     target_budget_id TEXT NOT NULL,
                     target_child_key TEXT NOT NULL,
+                    target_mapping_key TEXT NULL,
+                    target_account_name TEXT NULL,
                     target_account_id TEXT NULL,
                     direction TEXT NOT NULL CHECK(direction IN ('inflow', 'outflow')),
                     planned_amount INTEGER NOT NULL,
@@ -112,6 +114,8 @@ class SyncStateStore implements SyncStateRepository {
                     updated_at TEXT NOT NULL
                 )
             ''')
+            ensureColumn(connection, 'sync_mappings', 'target_mapping_key', 'TEXT NULL')
+            ensureColumn(connection, 'sync_mappings', 'target_account_name', 'TEXT NULL')
         }
     }
 
@@ -184,21 +188,23 @@ class SyncStateStore implements SyncStateRepository {
         }
         withConnection { Connection connection ->
             def statement = connection.prepareStatement('''
-                INSERT INTO sync_mappings(source_event_id, target_budget_id, target_child_key, target_account_id, direction, planned_amount, planned_date, planned_payee_name, planned_memo, planned_category_id, idempotency_key, last_planned_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO sync_mappings(source_event_id, target_budget_id, target_child_key, target_mapping_key, target_account_name, target_account_id, direction, planned_amount, planned_date, planned_payee_name, planned_memo, planned_category_id, idempotency_key, last_planned_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', java.sql.Statement.RETURN_GENERATED_KEYS)
             statement.setLong(1, sourceEventId)
             statement.setString(2, targetBudgetId)
             statement.setString(3, plan.targetChildKey)
-            statement.setString(4, accountId)
-            statement.setString(5, plan.amount >= 0 ? 'inflow' : 'outflow')
-            statement.setInt(6, plan.amount)
-            statement.setString(7, plan.date)
-            statement.setString(8, plan.payeeName)
-            statement.setString(9, plan.memo)
-            statement.setObject(10, null)
-            statement.setString(11, plan.idempotencyKey)
-            statement.setString(12, now())
+            statement.setString(4, plan.mappingKey)
+            statement.setString(5, plan.childAccountName)
+            statement.setString(6, accountId)
+            statement.setString(7, plan.amount >= 0 ? 'inflow' : 'outflow')
+            statement.setInt(8, plan.amount)
+            statement.setString(9, plan.date)
+            statement.setString(10, plan.payeeName)
+            statement.setString(11, plan.memo)
+            statement.setObject(12, null)
+            statement.setString(13, plan.idempotencyKey)
+            statement.setString(14, now())
             statement.executeUpdate()
             def keys = statement.generatedKeys
             keys.next()
@@ -280,6 +286,20 @@ class SyncStateStore implements SyncStateRepository {
             statement.setString(1, idempotencyKey)
             def rs = statement.executeQuery()
             rs.next() ? rs.getLong(1) : null
+        }
+    }
+
+    private static void ensureColumn(Connection connection, String tableName, String columnName, String definition) {
+        def columns = connection.createStatement().executeQuery("PRAGMA table_info(${tableName})")
+        boolean exists = false
+        while (columns.next()) {
+            if (columns.getString('name') == columnName) {
+                exists = true
+                break
+            }
+        }
+        if (!exists) {
+            connection.createStatement().execute("ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}")
         }
     }
 

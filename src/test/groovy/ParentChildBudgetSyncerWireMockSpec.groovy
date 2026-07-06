@@ -433,8 +433,8 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         SyncConfig syncConfig = new SyncConfig(
             new BudgetRef('Parent Budget', 'YNAB_PARENT_TOKEN'),
             [
-                new ChildBudgetSyncTarget('child-one', 'Child One Budget', 'YNAB_CHILD_ONE_TOKEN', ['Child One Spend Bank', 'Child One Save Bank'], 'Child One Checking'),
-                new ChildBudgetSyncTarget('child-two', 'Child Two Budget', 'YNAB_CHILD_TWO_TOKEN', ['Child Two Spend Bank'], 'Child Two Checking')
+                childTarget('child-one', 'Child One Budget', 'YNAB_CHILD_ONE_TOKEN', [['spend-save', ['Child One Spend Bank', 'Child One Save Bank'], 'Child One Checking']]),
+                childTarget('child-two', 'Child Two Budget', 'YNAB_CHILD_TWO_TOKEN', [['spend', ['Child Two Spend Bank'], 'Child Two Checking']])
             ],
             300,
             new SyncLoggingConfig(tempDir.resolve('parent-child-sync.log').toString(), 'INFO', 7, 10),
@@ -454,6 +454,17 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
                 new ChildSyncContext(syncConfig.childBudgets[0], new YnabBudgetRepository(buildClient('child-one-token'))),
                 new ChildSyncContext(syncConfig.childBudgets[1], new YnabBudgetRepository(buildClient('child-two-token')))
             ]
+        )
+    }
+
+    private static ChildBudgetSyncTarget childTarget(String childKey, String budgetName, String tokenEnvVarName, List mappingRows) {
+        new ChildBudgetSyncTarget(
+            childKey,
+            budgetName,
+            tokenEnvVarName,
+            mappingRows.collect { row ->
+                new ChildAccountMapping(row[0] as String, (row[1] as List<String>).collect { new ParentCategoryNameMatcher(it, false) }, row[2] as String)
+            }
         )
     }
 

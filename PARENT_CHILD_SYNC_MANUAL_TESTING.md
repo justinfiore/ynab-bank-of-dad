@@ -65,10 +65,17 @@ sync:
     - childKey: child-one
       budgetName: Your Child One Budget Name
       tokenEnvVarName: YNAB_CHILD_ONE_TOKEN
-      parentCategoryNames:
-        - "Exact Parent Category For Child One Spend/Bank"
-        - "Exact Parent Category For Child One Save/Bank"
-      childAccountName: Exact Child One Account Name
+      accountMappings:
+        - mappingKey: spend
+          parentCategoryNames:
+            - name: "Exact Parent Category For Child One Spend/Bank"
+          childAccountName: Exact Child One Spend Account Name
+        - mappingKey: save
+          parentCategoryNames:
+            - name: "Exact Parent Category For Child One Save/Bank"
+            - name: "Child One Gold CD.*"
+              regex: true
+          childAccountName: Exact Child One Save/CD Account Name
 
   pollingIntervalSeconds: 300
 
@@ -89,8 +96,10 @@ For every child, check:
 - `childKey` is stable and unique, such as `sam`, `alex`, or `child-one`.
 - `budgetName` exactly matches the YNAB child budget name.
 - `tokenEnvVarName` is the **name** of the env var that will hold that child's token.
-- `parentCategoryNames` exactly match categories in the parent budget that should mirror to that child.
-- `childAccountName` exactly matches the account in the child budget where mirrored transactions should be created.
+- `accountMappings[*].mappingKey` values are stable and unique within that child.
+- `accountMappings[*].parentCategoryNames[*].name` entries exactly match parent categories unless `regex: true` is set.
+- `accountMappings[*].childAccountName` exactly matches the child account that should receive that mapping's mirrored transactions.
+- Literal mappings should be listed for normal category names; use `regex: true` only for intentional pattern matching. Exact literal matches win before regex matches, then first matching mapping wins.
 
 ### 0.3 Export real tokens
 
@@ -173,21 +182,21 @@ Pass criteria:
 - The run reaches YNAB successfully; no HTTP 401/403 errors.
 - The configured parent budget is found.
 - Every configured child budget is found if there is qualifying work for that child.
-- Every configured `childAccountName` is found if there is qualifying work for that child.
+- Every configured `accountMappings[*].childAccountName` is found if there is qualifying work for that child.
 - The run exits by itself because of `--max-cycles 1`.
 
 If it fails:
 
 - HTTP 401/403 usually means a missing/wrong token env var or token permission issue.
 - Budget lookup failure usually means `budgetName` does not exactly match YNAB.
-- Account lookup failure usually means `childAccountName` does not exactly match the child budget account.
-- Category mismatch usually means `parentCategoryNames` does not exactly match parent budget category names.
+- Account lookup failure usually means `accountMappings[*].childAccountName` does not exactly match the child budget account.
+- Category mismatch usually means `accountMappings[*].parentCategoryNames[*].name` does not exactly match parent budget category names.
 
 ### 1.2 No-op dry run: no qualifying parent activity
 
 Purpose: prove unrelated or unmapped parent activity is ignored.
 
-1. In the parent budget, make sure there are no recent approved transactions or money movements in the configured `parentCategoryNames`, or temporarily choose a child mapping category with no recent activity.
+1. In the parent budget, make sure there are no recent approved transactions or money movements in the configured account mapping category matchers, or temporarily choose a child mapping category with no recent activity.
 2. Run the dry-run command.
 
 Pass criteria:
@@ -240,7 +249,7 @@ Pass criteria after approval:
 
 Purpose: prove only configured parent categories mirror into child budgets.
 
-1. In the parent budget, create and approve a small transaction in a category **not** listed in any `sync.childBudgets[*].parentCategoryNames`.
+1. In the parent budget, create and approve a small transaction in a category **not** listed in any `sync.childBudgets[*].accountMappings[*].parentCategoryNames[*].name`.
 2. Use memo `SYNC TEST - unmapped should not sync`.
 3. Run the dry-run command.
 

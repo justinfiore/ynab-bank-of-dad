@@ -134,16 +134,25 @@ sync:
     - childKey: child-one
       budgetName: Demo Child One Budget
       tokenEnvVarName: YNAB_CHILD_ONE_TOKEN
-      parentCategoryNames:
-        - "Child One Spend Bank"
-        - "Child One Save Bank"
-      childAccountName: Child One Checking
+      accountMappings:
+        - mappingKey: spend-save
+          parentCategoryNames:
+            - name: "Child One Spend Bank"
+            - name: "Child One Save Bank"
+          childAccountName: Child One Checking
+        - mappingKey: cd
+          parentCategoryNames:
+            - name: "Child One Gold CD.*"
+              regex: true
+          childAccountName: Child One CD Account
     - childKey: child-two
       budgetName: Demo Child Two Budget
       tokenEnvVarName: YNAB_CHILD_TWO_TOKEN
-      parentCategoryNames:
-        - "Child Two Spend Bank"
-      childAccountName: Child Two Checking
+      accountMappings:
+        - mappingKey: spend
+          parentCategoryNames:
+            - name: "Child Two Spend Bank"
+          childAccountName: Child Two Checking
 
   # Continuous polling interval in seconds.
   pollingIntervalSeconds: 300

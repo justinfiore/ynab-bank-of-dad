@@ -1,5 +1,7 @@
 package ynabbankofdad.sync
 
+import ynabbankofdad.config.ChildAccountMapping
+import ynabbankofdad.config.ParentCategoryNameMatcher
 import ynabbankofdad.model.CategorySnapshot
 import ynabbankofdad.sync.model.*
 
@@ -150,24 +152,29 @@ class ChildSyncPlanner {
         }
 
         childContexts.findResults { ChildSyncContext child ->
-            if (!child.target.parentCategoryNames.contains(resolvedCategoryName)) {
+            ChildAccountMapping mapping = resolveMapping(child, resolvedCategoryName)
+            if (!mapping) {
                 return null
             }
             String idempotencyKey = [
                 parentBudgetId,
                 child.target.childKey,
+                mapping.mappingKey,
+                mapping.childAccountName,
                 eventType,
                 transactionId ?: '',
                 subtransactionId ?: '',
                 moneyMovementId ?: '',
                 movementDirection ?: '',
                 categoryId,
+                resolvedCategoryName,
                 amount
             ].join('|')
             new ChildTransactionPlan(
                 sourceBudgetId: parentBudgetId,
                 targetChildKey: child.target.childKey,
                 targetBudgetName: child.target.budgetName,
+                mappingKey: mapping.mappingKey,
                 parentCategoryName: resolvedCategoryName,
                 eventType: eventType,
                 parentTransactionId: transactionId,
@@ -175,13 +182,30 @@ class ChildSyncPlanner {
                 moneyMovementId: moneyMovementId,
                 moneyMovementGroupId: moneyMovementGroupId,
                 idempotencyKey: idempotencyKey,
-                childAccountName: child.target.childAccountName,
+                childAccountName: mapping.childAccountName,
                 date: date,
                 amount: amount,
                 memo: memo,
                 payeeName: explicitPayeeName,
                 approved: true
             )
+        }
+    }
+
+    private ChildAccountMapping resolveMapping(ChildSyncContext child, String categoryName) {
+        ChildAccountMapping literalMatch = child.target.accountMappings.find { ChildAccountMapping mapping ->
+            mapping.parentCategoryNames.any { ParentCategoryNameMatcher matcher ->
+                !matcher.regex && matcher.name == categoryName
+            }
+        }
+        if (literalMatch) {
+            return literalMatch
+        }
+
+        child.target.accountMappings.find { ChildAccountMapping mapping ->
+            mapping.parentCategoryNames.any { ParentCategoryNameMatcher matcher ->
+                matcher.regex && categoryName ==~ matcher.name
+            }
         }
     }
 }
