@@ -156,20 +156,21 @@ class ChildSyncPlanner {
             if (!mapping) {
                 return null
             }
-            String idempotencyKey = [
+            String targetAccountId = child.resolveAccountId(mapping.childAccountName) ?: ''
+            String idempotencyKey = ChildSyncIdempotency.composeKey(
                 parentBudgetId,
                 child.target.childKey,
                 mapping.mappingKey,
-                mapping.childAccountName,
+                targetAccountId,
                 eventType,
-                transactionId ?: '',
-                subtransactionId ?: '',
-                moneyMovementId ?: '',
-                movementDirection ?: '',
+                transactionId,
+                subtransactionId,
+                moneyMovementId,
+                movementDirection,
                 categoryId,
                 resolvedCategoryName,
                 amount
-            ].join('|')
+            )
             new ChildTransactionPlan(
                 sourceBudgetId: parentBudgetId,
                 targetChildKey: child.target.childKey,

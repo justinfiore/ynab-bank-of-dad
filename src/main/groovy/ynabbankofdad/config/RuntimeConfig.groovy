@@ -290,11 +290,11 @@ class SyncConfig {
             throw new IllegalArgumentException("Config key 'sync.childBudgets' must be a non-empty list")
         }
         def seenChildKeys = [] as Set
-        childBudgets.each { ChildBudgetSyncTarget target ->
+        childBudgets.eachWithIndex { ChildBudgetSyncTarget target, int index ->
             if (!seenChildKeys.add(target.childKey)) {
-                throw new IllegalArgumentException("sync.childBudgets childKey '${target.childKey}' must be unique")
+                throw new IllegalArgumentException("sync.childBudgets[${index}].childKey '${target.childKey}' must be unique")
             }
-            target.validate()
+            target.validate("sync.childBudgets[${index}]")
         }
     }
 }
@@ -312,16 +312,21 @@ class ChildBudgetSyncTarget {
     String tokenEnvVarName
     List<ChildAccountMapping> accountMappings
 
-    void validate() {
+    void validate(String childConfigPath) {
         if (accountMappings == null || accountMappings.isEmpty()) {
-            throw new IllegalArgumentException("sync.childBudgets childKey '${childKey}' must define at least one accountMapping")
+            throw new IllegalArgumentException("Config key '${childConfigPath}.accountMappings' must be a non-empty list")
         }
         def seenMappingKeys = [] as Set
-        accountMappings.each { ChildAccountMapping mapping ->
+        def seenChildAccountNames = [] as Set
+        accountMappings.eachWithIndex { ChildAccountMapping mapping, int index ->
+            String mappingPath = "${childConfigPath}.accountMappings[${index}]"
             if (!seenMappingKeys.add(mapping.mappingKey)) {
-                throw new IllegalArgumentException("sync.childBudgets childKey '${childKey}' has duplicate mappingKey '${mapping.mappingKey}'")
+                throw new IllegalArgumentException("Config key '${mappingPath}.mappingKey' duplicates mappingKey '${mapping.mappingKey}' within the same child budget")
             }
-            mapping.validate(childKey)
+            if (!seenChildAccountNames.add(mapping.childAccountName)) {
+                throw new IllegalArgumentException("Config key '${mappingPath}.childAccountName' duplicates child account '${mapping.childAccountName}' within the same child budget; list multiple parentCategoryNames on one mapping instead")
+            }
+            mapping.validate(mappingPath)
         }
     }
 }
@@ -332,16 +337,16 @@ class ChildAccountMapping {
     List<ParentCategoryNameMatcher> parentCategoryNames
     String childAccountName
 
-    void validate(String childKey) {
+    void validate(String mappingConfigPath) {
         if (parentCategoryNames == null || parentCategoryNames.isEmpty()) {
-            throw new IllegalArgumentException("sync.childBudgets childKey '${childKey}' mappingKey '${mappingKey}' must define at least one parentCategoryNames matcher")
+            throw new IllegalArgumentException("Config key '${mappingConfigPath}.parentCategoryNames' must be a non-empty list")
         }
-        parentCategoryNames.each { ParentCategoryNameMatcher matcher ->
+        parentCategoryNames.eachWithIndex { ParentCategoryNameMatcher matcher, int index ->
             if (matcher.regex) {
                 try {
                     Pattern.compile(matcher.name)
                 } catch (PatternSyntaxException ex) {
-                    throw new IllegalArgumentException("sync.childBudgets childKey '${childKey}' mappingKey '${mappingKey}' has invalid regex parentCategoryNames pattern '${matcher.name}': ${ex.message}")
+                    throw new IllegalArgumentException("Config key '${mappingConfigPath}.parentCategoryNames[${index}].name' has invalid regex pattern '${matcher.name}': ${ex.message}")
                 }
             }
         }

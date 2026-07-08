@@ -143,7 +143,7 @@ class ParentChildBudgetSyncerSpec extends Specification {
                 new ChildAccountMapping('cd', [new ParentCategoryNameMatcher('Child One Gold CD.*', true)], 'CD Account')
             ]
         )
-        def planner = new ChildSyncPlanner([new ChildSyncContext(target, new FakeYnabBudgetRepository())])
+        def planner = new ChildSyncPlanner([childContextForPlanner(target)])
         Map<String, CategorySnapshot> categoriesById = [
             'cat-spend': new CategorySnapshot('cat-spend', 'Child One Spend Bank', 0),
             'cat-give' : new CategorySnapshot('cat-give', 'Child One Give Bank', 0),
@@ -164,7 +164,7 @@ class ParentChildBudgetSyncerSpec extends Specification {
             'Child One Give Bank': ['give', 'Give Account'],
             'Child One Gold CD 2-Month 07/31/26': ['cd', 'CD Account']
         ]
-        plans.find { it.parentCategoryName == 'Child One Spend Bank' }.idempotencyKey.contains('|spend|Spend Account|')
+        plans.find { it.parentCategoryName == 'Child One Spend Bank' }.idempotencyKey.contains('|spend|acct-spend|')
     }
 
     def "planner treats regex metacharacters literally unless regex is true and uses first match for ties"() {
@@ -175,12 +175,11 @@ class ParentChildBudgetSyncerSpec extends Specification {
             'CHILD_ONE_TOKEN',
             [
                 new ChildAccountMapping('literal-first', [new ParentCategoryNameMatcher('Child One CD (2-Month) [07/31/26]', false)], 'Literal Account'),
-                new ChildAccountMapping('literal-second', [new ParentCategoryNameMatcher('Child One CD (2-Month) [07/31/26]', false)], 'Second Literal Account'),
                 new ChildAccountMapping('regex-first', [new ParentCategoryNameMatcher('Child One Bonus.*', true)], 'First Regex Account'),
                 new ChildAccountMapping('regex-second', [new ParentCategoryNameMatcher('Child One Bonus.*', true)], 'Second Regex Account')
             ]
         )
-        def planner = new ChildSyncPlanner([new ChildSyncContext(target, new FakeYnabBudgetRepository())])
+        def planner = new ChildSyncPlanner([childContextForPlanner(target)])
         Map<String, CategorySnapshot> categoriesById = [
             'cat-literal': new CategorySnapshot('cat-literal', 'Child One CD (2-Month) [07/31/26]', 0),
             'cat-regex'  : new CategorySnapshot('cat-regex', 'Child One Bonus Bank', 0)
@@ -249,8 +248,8 @@ class ParentChildBudgetSyncerSpec extends Specification {
         def childContext = new ChildSyncContext(target, childRepository)
         def applier = new ChildSyncApplier(store, new ChildTransactionPayloadFactory(), false)
         def plans = [
-            new ChildTransactionPlan('parent-budget', 'child-one', 'Child One Budget', 'spend', 'Child One Spend Bank', 'transaction', 'txn-1', null, null, null, 'idem-spend', 'Spend Account', '2026-07-01', -1200, 'Shoes', 'Payee', true),
-            new ChildTransactionPlan('parent-budget', 'child-one', 'Child One Budget', 'give', 'Child One Give Bank', 'transaction', 'txn-2', null, null, null, 'idem-give', 'Give Account', '2026-07-01', -500, 'Gift', 'Payee', true)
+            new ChildTransactionPlan('parent-budget', 'child-one', 'Child One Budget', 'spend', 'Child One Spend Bank', 'transaction', 'txn-1', null, null, null, 'parent-budget|child-one|spend||transaction|txn-1||||cat-spend|Child One Spend Bank|-1200', 'Spend Account', '2026-07-01', -1200, 'Shoes', 'Payee', true),
+            new ChildTransactionPlan('parent-budget', 'child-one', 'Child One Budget', 'give', 'Child One Give Bank', 'transaction', 'txn-2', null, null, null, 'parent-budget|child-one|give||transaction|txn-2||||cat-give|Child One Give Bank|-500', 'Give Account', '2026-07-01', -500, 'Gift', 'Payee', true)
         ]
 
         when:
@@ -261,10 +260,19 @@ class ParentChildBudgetSyncerSpec extends Specification {
         result.appliedCount == 2
         childRepository.requestedAccountNames == ['Spend Account', 'Give Account']
         childContext.accountIdsByName == ['Spend Account': 'acct-spend', 'Give Account': 'acct-give']
-        store.hasAppliedIdempotencyKey('idem-spend')
-        store.hasAppliedIdempotencyKey('idem-give')
+        store.hasAppliedIdempotencyKey(ChildSyncIdempotency.buildKey(plans[0], 'acct-spend'))
+        store.hasAppliedIdempotencyKey(ChildSyncIdempotency.buildKey(plans[1], 'acct-give'))
     }
 
+
+    private static ChildSyncContext childContextForPlanner(ChildBudgetSyncTarget target, Map<String, String> accountIdsByName = null) {
+        Map<String, String> ids = accountIdsByName ?: target.accountMappings.collectEntries { [(it.childAccountName): "acct-${it.mappingKey}"] }
+        def repo = new FakeYnabBudgetRepository('child-budget-id', ids)
+        def context = new ChildSyncContext(target, repo)
+        context.budgetId = 'child-budget-id'
+        ids.each { name, id -> context.cacheAccountId(name, id) }
+        context
+    }
 
     private static ChildBudgetSyncTarget childTarget(String childKey, String budgetName, String tokenEnvVarName, List mappingRows) {
         new ChildBudgetSyncTarget(

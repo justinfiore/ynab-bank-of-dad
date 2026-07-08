@@ -314,11 +314,49 @@ sync:
         where:
         mutation << [
             { Map cfg -> cfg.sync.childBudgets[0].accountMappings << [mappingKey: 'spend', parentCategoryNames: [[name: 'Other']], childAccountName: 'Other Account'] },
+            { Map cfg -> cfg.sync.childBudgets[0].accountMappings << [mappingKey: 'give', parentCategoryNames: [[name: 'Child One Give Bank']], childAccountName: 'Child Checking'] },
             { Map cfg -> cfg.sync.childBudgets[0].accountMappings[0].parentCategoryNames = [[name: 'Child One Gold CD[', regex: true]] },
             { Map cfg -> cfg.sync.childBudgets[0].accountMappings[0].parentCategoryNames = [[name: 'Child One Spend Bank', regex: 'yes']] },
             { Map cfg -> cfg.sync.childBudgets[0].accountMappings[0].parentCategoryNames = [[regex: false]] }
         ]
-        expected << ['duplicate mappingKey', 'invalid regex', '.regex', '.name']
+        expected << [
+            'sync.childBudgets[0].accountMappings[1].mappingKey',
+            'sync.childBudgets[0].accountMappings[1].childAccountName',
+            'sync.childBudgets[0].accountMappings[0].parentCategoryNames[0].name',
+            'sync.childBudgets[0].accountMappings[0].parentCategoryNames[0].regex',
+            'sync.childBudgets[0].accountMappings[0].parentCategoryNames[0].name'
+        ]
+    }
+
+    def 'sync config startup errors identify missing nested account mapping fields with full config paths'() {
+        given:
+        def raw = validConfigMap()
+        mutation(raw)
+
+        when:
+        RuntimeConfig.fromMap(raw)
+
+        then:
+        def ex = thrown(IllegalArgumentException)
+        ex.message.contains(expected)
+
+        where:
+        mutation << [
+            { Map cfg -> cfg.sync.childBudgets[0].remove('accountMappings') },
+            { Map cfg -> cfg.sync.childBudgets[0].accountMappings = [] },
+            { Map cfg -> cfg.sync.childBudgets[0].accountMappings[0].remove('mappingKey') },
+            { Map cfg -> cfg.sync.childBudgets[0].accountMappings[0].remove('childAccountName') },
+            { Map cfg -> cfg.sync.childBudgets[0].accountMappings[0].remove('parentCategoryNames') },
+            { Map cfg -> cfg.sync.childBudgets[0].accountMappings[0].parentCategoryNames = [] }
+        ]
+        expected << [
+            'sync.childBudgets[0].accountMappings',
+            'sync.childBudgets[0].accountMappings',
+            'sync.childBudgets[0].accountMappings[0].mappingKey',
+            'sync.childBudgets[0].accountMappings[0].childAccountName',
+            'sync.childBudgets[0].accountMappings[0].parentCategoryNames',
+            'sync.childBudgets[0].accountMappings[0].parentCategoryNames'
+        ]
     }
 
     def "validate throws when sync logging level is invalid"() {

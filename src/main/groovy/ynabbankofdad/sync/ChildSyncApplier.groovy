@@ -40,18 +40,23 @@ class ChildSyncApplier {
 
             int applied = 0
             int skipped = 0
-            childPlans.each { ChildTransactionPlan plan ->
+            childPlans.each { ChildTransactionPlan provisionalPlan ->
+                String accountId = childContext.resolveAccountId(provisionalPlan.childAccountName)
+                if (!accountId) {
+                    accountId = childContext.repository.getAccountId(budgetId, provisionalPlan.childAccountName)
+                    childContext.cacheAccountId(provisionalPlan.childAccountName, accountId)
+                }
+                ChildTransactionPlan plan = ChildSyncIdempotency.withKey(
+                    provisionalPlan,
+                    ChildSyncIdempotency.buildKey(provisionalPlan, accountId)
+                )
+
                 if (stateStore.hasAppliedIdempotencyKey(plan.idempotencyKey)) {
                     log.info('Skipping duplicate child sync plan {}', plan.idempotencyKey)
                     skipped++
                     return
                 }
 
-                String accountId = childContext.resolveAccountId(plan.childAccountName)
-                if (!accountId) {
-                    accountId = childContext.repository.getAccountId(budgetId, plan.childAccountName)
-                    childContext.cacheAccountId(plan.childAccountName, accountId)
-                }
                 Map<String, Object> transaction = payloadFactory.buildTransaction(plan, accountId)
 
                 if (dryRun) {
@@ -72,10 +77,14 @@ class ChildSyncApplier {
         } catch (Exception ex) {
             log.error('Child sync target {} failed: {}', childContext?.target?.childKey, ex.message, ex)
             if (!dryRun && runId > 0) {
-                childPlans.each { ChildTransactionPlan plan ->
+                childPlans.each { ChildTransactionPlan provisionalPlan ->
+                    String accountId = childContext?.resolveAccountId(provisionalPlan.childAccountName)
+                    ChildTransactionPlan plan = accountId
+                        ? ChildSyncIdempotency.withKey(provisionalPlan, ChildSyncIdempotency.buildKey(provisionalPlan, accountId))
+                        : provisionalPlan
                     long sourceEventId = stateStore.recordSourceEvent(plan)
                     String targetBudgetId = childContext?.budgetId ?: plan.targetBudgetName
-                    long mappingId = stateStore.recordMapping(sourceEventId, plan, targetBudgetId, childContext?.resolveAccountId(plan.childAccountName))
+                    long mappingId = stateStore.recordMapping(sourceEventId, plan, targetBudgetId, accountId)
                     stateStore.recordAppliedTransaction(mappingId, runId, targetBudgetId, null, 'failed', ex.message, false)
                 }
             }
