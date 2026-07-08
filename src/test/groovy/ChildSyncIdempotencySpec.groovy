@@ -6,20 +6,20 @@ class ChildSyncIdempotencySpec extends Specification {
 
     def 'buildKey substitutes stable target account id into planner provisional key'() {
         given:
-        String provisional = [
+        String provisional = ChildSyncIdempotency.composeKey(
             'parent-budget-id',
             'child-one',
             'spend',
             '',
             'transaction',
             'txn-1',
-            '',
-            '',
+            null,
+            null,
             '',
             'cat-spend',
             'Child One Spend Bank',
             -1200
-        ].join('|')
+        )
         def plan = new ChildTransactionPlan(
             'parent-budget-id', 'child-one', 'Child One Budget', 'spend', 'Child One Spend Bank',
             'transaction', 'txn-1', null, null, null, provisional, 'Child One Checking',
