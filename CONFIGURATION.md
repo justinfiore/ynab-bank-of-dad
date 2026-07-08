@@ -526,7 +526,7 @@ Field guidance:
 - `accountMappings[*].mappingKey` — stable unique key within the child target, used in logs/state/idempotency
 - `accountMappings[*].parentCategoryNames[*].name` — parent-budget category matcher; literal exact match by default
 - `accountMappings[*].parentCategoryNames[*].regex` — optional boolean; set `true` only when `name` is a regex pattern
-- `accountMappings[*].childAccountName` — exact child-budget account name that receives mirrored transactions for that mapping
+- `accountMappings[*].childAccountName` — exact child-budget account name that receives mirrored transactions for that mapping; must be unique within the child budget (use multiple `parentCategoryNames` on one mapping to route several categories to the same account)
 
 Notes:
 - literal matchers are evaluated first and win over overlapping regex mappings, even if the regex appears earlier

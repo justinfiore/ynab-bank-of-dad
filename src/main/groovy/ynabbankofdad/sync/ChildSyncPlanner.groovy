@@ -156,11 +156,12 @@ class ChildSyncPlanner {
             if (!mapping) {
                 return null
             }
+            String targetAccountId = child.resolveAccountId(mapping.childAccountName) ?: ''
             String idempotencyKey = [
                 parentBudgetId,
                 child.target.childKey,
                 mapping.mappingKey,
-                mapping.childAccountName,
+                targetAccountId,
                 eventType,
                 transactionId ?: '',
                 subtransactionId ?: '',
