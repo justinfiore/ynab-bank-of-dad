@@ -122,7 +122,9 @@ class RuntimeConfig {
                 childKey: requireString(item, 'childKey', itemKey),
                 budgetName: requireString(item, 'budgetName', itemKey),
                 tokenEnvVarName: requireString(item, 'tokenEnvVarName', itemKey),
-                accountMappings: requireAccountMappings(item, 'accountMappings', itemKey)
+                accountMappings: requireAccountMappings(item, 'accountMappings', itemKey),
+                memoPrefix: item.memoPrefix ?: "YBOD: ",
+                memoSuffix: item.memoSuffix ?: ""
             )
         }
     }
@@ -311,6 +313,8 @@ class ChildBudgetSyncTarget {
     String budgetName
     String tokenEnvVarName
     List<ChildAccountMapping> accountMappings
+    String memoPrefix = "YBOD: "
+    String memoSuffix = ""
 
     void validate(String childConfigPath) {
         if (accountMappings == null || accountMappings.isEmpty()) {
