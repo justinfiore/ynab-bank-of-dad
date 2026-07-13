@@ -4,7 +4,7 @@ import ynabbankofdad.sync.model.ChildTransactionPlan
 
 class ChildTransactionPayloadFactory {
 
-    Map<String, Object> buildTransaction(ChildTransactionPlan plan, String accountId, String memoPrefix = "YBOD: ", String memoSuffix = "") {
+    Map<String, Object> buildTransaction(ChildTransactionPlan plan, String accountId, String memoPrefix, String memoSuffix) {
         String finalMemo = ((memoPrefix ?: "") + (plan.memo ?: "") + (memoSuffix ?: "")).trim()
         [
             account_id : accountId,

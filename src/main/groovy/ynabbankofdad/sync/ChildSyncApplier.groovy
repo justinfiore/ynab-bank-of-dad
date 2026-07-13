@@ -57,8 +57,8 @@ class ChildSyncApplier {
                     return
                 }
 
-                String prefix = childContext.target.memoPrefix ?: "YBOD: "
-                String suffix = childContext.target.memoSuffix ?: ""
+                String prefix = childContext.target.memoPrefix
+                String suffix = childContext.target.memoSuffix
                 Map<String, Object> transaction = payloadFactory.buildTransaction(plan, accountId, prefix, suffix)
 
                 if (dryRun) {

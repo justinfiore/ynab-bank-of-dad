@@ -10,8 +10,8 @@ class ChildTransactionPayloadFactorySpec extends Specification {
         def plan = plan('parent|child-one|transaction|txn-1||||cat-1|-1200')
 
         when:
-        def first = factory.buildTransaction(plan, 'acct-1')
-        def second = factory.buildTransaction(plan, 'acct-1')
+        def first = factory.buildTransaction(plan, 'acct-1', 'YBOD: ', '')
+        def second = factory.buildTransaction(plan, 'acct-1', 'YBOD: ', '')
 
         then:
         first.account_id == 'acct-1'
@@ -35,6 +35,18 @@ class ChildTransactionPayloadFactorySpec extends Specification {
 
         then:
         result.memo == '[Kid] Memo (auto)'
+        result.cleared == 'cleared'
+    }
+
+    def "buildTransaction respects empty prefix/suffix"() {
+        given:
+        def plan = plan('parent|child-one|transaction|txn-1||||cat-1|-1200')
+
+        when:
+        def result = factory.buildTransaction(plan, 'acct-1', '', '')
+
+        then:
+        result.memo == 'Memo'
         result.cleared == 'cleared'
     }
 

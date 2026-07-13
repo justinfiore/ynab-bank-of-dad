@@ -123,8 +123,8 @@ class RuntimeConfig {
                 budgetName: requireString(item, 'budgetName', itemKey),
                 tokenEnvVarName: requireString(item, 'tokenEnvVarName', itemKey),
                 accountMappings: requireAccountMappings(item, 'accountMappings', itemKey),
-                memoPrefix: item.memoPrefix ?: "YBOD: ",
-                memoSuffix: item.memoSuffix ?: ""
+                memoPrefix: item.containsKey('memoPrefix') ? item.memoPrefix : "YBOD: ",
+                memoSuffix: item.containsKey('memoSuffix') ? item.memoSuffix : ""
             )
         }
     }
