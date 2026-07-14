@@ -133,10 +133,10 @@ class ParentChildBudgetSyncerSpec extends Specification {
     def "planner maps one child budget categories to distinct mapped child accounts with deterministic disambiguation"() {
         given:
         def target = new ChildBudgetSyncTarget(
-            'child-one',
-            'Child One Budget',
-            'CHILD_ONE_TOKEN',
-            [
+            childKey: 'child-one',
+            budgetName: 'Child One Budget',
+            tokenEnvVarName: 'CHILD_ONE_TOKEN',
+            accountMappings: [
                 new ChildAccountMapping('broad-regex', [new ParentCategoryNameMatcher('Child One .* Bank', true)], 'Broad Account'),
                 new ChildAccountMapping('spend', [new ParentCategoryNameMatcher('Child One Spend Bank', false)], 'Spend Account'),
                 new ChildAccountMapping('give', [new ParentCategoryNameMatcher('Child One Give Bank', false)], 'Give Account'),
@@ -170,10 +170,10 @@ class ParentChildBudgetSyncerSpec extends Specification {
     def "planner treats regex metacharacters literally unless regex is true and uses first match for ties"() {
         given:
         def target = new ChildBudgetSyncTarget(
-            'child-one',
-            'Child One Budget',
-            'CHILD_ONE_TOKEN',
-            [
+            childKey: 'child-one',
+            budgetName: 'Child One Budget',
+            tokenEnvVarName: 'CHILD_ONE_TOKEN',
+            accountMappings: [
                 new ChildAccountMapping('literal-first', [new ParentCategoryNameMatcher('Child One CD (2-Month) [07/31/26]', false)], 'Literal Account'),
                 new ChildAccountMapping('regex-first', [new ParentCategoryNameMatcher('Child One Bonus.*', true)], 'First Regex Account'),
                 new ChildAccountMapping('regex-second', [new ParentCategoryNameMatcher('Child One Bonus.*', true)], 'Second Regex Account')
@@ -236,10 +236,10 @@ class ParentChildBudgetSyncerSpec extends Specification {
         def store = new SyncStateStore(dbPath)
         store.initialize()
         def target = new ChildBudgetSyncTarget(
-            'child-one',
-            'Child One Budget',
-            'CHILD_ONE_TOKEN',
-            [
+            childKey: 'child-one',
+            budgetName: 'Child One Budget',
+            tokenEnvVarName: 'CHILD_ONE_TOKEN',
+            accountMappings: [
                 new ChildAccountMapping('spend', [new ParentCategoryNameMatcher('Child One Spend Bank', false)], 'Spend Account'),
                 new ChildAccountMapping('give', [new ParentCategoryNameMatcher('Child One Give Bank', false)], 'Give Account')
             ]
@@ -276,10 +276,10 @@ class ParentChildBudgetSyncerSpec extends Specification {
 
     private static ChildBudgetSyncTarget childTarget(String childKey, String budgetName, String tokenEnvVarName, List mappingRows) {
         new ChildBudgetSyncTarget(
-            childKey,
-            budgetName,
-            tokenEnvVarName,
-            mappingRows.collect { row ->
+            childKey: childKey,
+            budgetName: budgetName,
+            tokenEnvVarName: tokenEnvVarName,
+            accountMappings: mappingRows.collect { row ->
                 new ChildAccountMapping(row[0] as String, (row[1] as List<String>).collect { new ParentCategoryNameMatcher(it, false) }, row[2] as String)
             }
         )
