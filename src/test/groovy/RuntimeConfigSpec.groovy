@@ -115,6 +115,35 @@ sync:
         config.sync.state.sqlitePath == 'syncstate.db'
     }
 
+    def "sync childBudgets parse memoPrefix and memoSuffix correctly including explicit empty string"() {
+        given:
+        def raw = validConfigMap()
+        raw.sync.childBudgets = [[
+            childKey: 'child-one',
+            budgetName: 'Child Budget',
+            tokenEnvVarName: 'YNAB_CHILD_TOKEN',
+            accountMappings: [[mappingKey: 'spend', parentCategoryNames: [[name: 'Child One Spend Bank']], childAccountName: 'Spend Account']],
+            memoPrefix: 'YBOD: ',
+            memoSuffix: ''
+        ], [
+            childKey: 'child-two',
+            budgetName: 'Child Budget 2',
+            tokenEnvVarName: 'YNAB_CHILD2_TOKEN',
+            accountMappings: [[mappingKey: 'spend', parentCategoryNames: [[name: 'Child Two Spend Bank']], childAccountName: 'Spend Account']],
+            memoPrefix: '',
+            memoSuffix: ' (auto)'
+        ]]
+
+        when:
+        def config = RuntimeConfig.fromMap(raw)
+
+        then:
+        config.sync.childBudgets[0].memoPrefix == 'YBOD: '
+        config.sync.childBudgets[0].memoSuffix == ''
+        config.sync.childBudgets[1].memoPrefix == ''
+        config.sync.childBudgets[1].memoSuffix == ' (auto)'
+    }
+
     def "load throws when config file does not exist"() {
         when:
         RuntimeConfig.load(tempDir.resolve('missing.yaml').toString())

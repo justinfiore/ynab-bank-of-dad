@@ -10,8 +10,8 @@ class ChildTransactionPayloadFactorySpec extends Specification {
         def plan = plan('parent|child-one|transaction|txn-1||||cat-1|-1200')
 
         when:
-        def first = factory.buildTransaction(plan, 'acct-1')
-        def second = factory.buildTransaction(plan, 'acct-1')
+        def first = factory.buildTransaction(plan, 'acct-1', 'YBOD: ', '')
+        def second = factory.buildTransaction(plan, 'acct-1', 'YBOD: ', '')
 
         then:
         first.account_id == 'acct-1'
@@ -19,10 +19,35 @@ class ChildTransactionPayloadFactorySpec extends Specification {
         first.amount == -1200
         first.payee_name == 'Payee'
         first.category_id == null
-        first.memo == 'Memo'
+        first.memo == 'YBOD: Memo'
+        first.cleared == 'cleared'
         first.approved
         first.import_id == second.import_id
         first.import_id.startsWith('PCBS:20260701:1200:')
+    }
+
+    def "buildTransaction applies custom prefix and suffix"() {
+        given:
+        def plan = plan('parent|child-one|transaction|txn-1||||cat-1|-1200')
+
+        when:
+        def result = factory.buildTransaction(plan, 'acct-1', '[Kid] ', ' (auto)')
+
+        then:
+        result.memo == '[Kid] Memo (auto)'
+        result.cleared == 'cleared'
+    }
+
+    def "buildTransaction respects empty prefix/suffix"() {
+        given:
+        def plan = plan('parent|child-one|transaction|txn-1||||cat-1|-1200')
+
+        when:
+        def result = factory.buildTransaction(plan, 'acct-1', '', '')
+
+        then:
+        result.memo == 'Memo'
+        result.cleared == 'cleared'
     }
 
     def "different idempotency keys produce different import ids"() {

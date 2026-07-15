@@ -3,14 +3,17 @@ package ynabbankofdad.sync
 import ynabbankofdad.sync.model.ChildTransactionPlan
 
 class ChildTransactionPayloadFactory {
-    Map<String, Object> buildTransaction(ChildTransactionPlan plan, String accountId) {
+
+    Map<String, Object> buildTransaction(ChildTransactionPlan plan, String accountId, String memoPrefix, String memoSuffix) {
+        String finalMemo = ((memoPrefix ?: "") + (plan.memo ?: "") + (memoSuffix ?: "")).trim()
         [
             account_id : accountId,
             date       : plan.date,
             amount     : plan.amount,
             payee_name : plan.payeeName,
             category_id: null,
-            memo       : plan.memo,
+            memo       : finalMemo,
+            cleared    : "cleared",
             approved   : plan.approved,
             import_id  : buildImportId(plan)
         ]

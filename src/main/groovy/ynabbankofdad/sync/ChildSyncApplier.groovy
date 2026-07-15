@@ -57,7 +57,9 @@ class ChildSyncApplier {
                     return
                 }
 
-                Map<String, Object> transaction = payloadFactory.buildTransaction(plan, accountId)
+                String prefix = childContext.target.memoPrefix
+                String suffix = childContext.target.memoSuffix
+                Map<String, Object> transaction = payloadFactory.buildTransaction(plan, accountId, prefix, suffix)
 
                 if (dryRun) {
                     log.info('{} child transaction for {} mapping {} account {} -> {}', DRY_RUN_PREFIX, childContext.target.childKey, plan.mappingKey, plan.childAccountName, JsonOutput.toJson(transaction))
