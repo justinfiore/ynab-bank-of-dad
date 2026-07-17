@@ -52,10 +52,19 @@ class YnabHttpClient {
         HttpRequest request = baseRequest(path)
             .GET()
             .build()
-        return sendJson(request, 'GET', path)
+        return sendJson(request, 'GET', path).body
     }
 
     def postJson(String path, Object payload) {
+        String json = JsonOutput.toJson(payload)
+        HttpRequest request = baseRequest(path)
+            .header('Content-Type', 'application/json')
+            .POST(HttpRequest.BodyPublishers.ofString(json))
+            .build()
+        return sendJson(request, 'POST', path).body
+    }
+
+    YnabHttpResponse postJsonWithMetadata(String path, Object payload) {
         String json = JsonOutput.toJson(payload)
         HttpRequest request = baseRequest(path)
             .header('Content-Type', 'application/json')
@@ -76,7 +85,7 @@ class YnabHttpClient {
         return URI.create(baseUrl + normalized)
     }
 
-    private def sendJson(HttpRequest request, String method, String path) {
+    private YnabHttpResponse sendJson(HttpRequest request, String method, String path) {
         HttpResponse<String> response
         try {
             response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
@@ -92,10 +101,19 @@ class YnabHttpClient {
             throw new IllegalStateException("YNAB ${method} ${path} failed with status ${response.statusCode()}: ${bodyText}")
         }
 
-        if (bodyText == null || bodyText.isBlank()) {
-            return null
-        }
+        def parsedBody = (bodyText == null || bodyText.isBlank()) ? null : jsonSlurper.parseText(bodyText)
+        return new YnabHttpResponse(response.statusCode(), bodyText, parsedBody)
+    }
+}
 
-        return jsonSlurper.parseText(bodyText)
+class YnabHttpResponse {
+    final int statusCode
+    final String bodyText
+    final Object body
+
+    YnabHttpResponse(int statusCode, String bodyText, Object body) {
+        this.statusCode = statusCode
+        this.bodyText = bodyText
+        this.body = body
     }
 }

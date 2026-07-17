@@ -9,14 +9,15 @@ import spock.lang.Specification
 
 class ScriptWrapperBehaviorSpec extends Specification {
 
-    def "parent-child sync bash wrapper enforces one-cycle dry-run bootstrap"() {
+    def "parent-child sync bash wrapper runs one cycle without forcing dry-run"() {
         given:
         def script = new File('run-parent-child-sync.sh').text
 
         expect:
         script.contains('STATE_DB_PATH="${2:-syncstate.db}"')
         script.contains('JAVA_HOME must be set before running the syncer.')
-        script.contains('exec ./gradlew runSyncer --args="--dry-run --config ${CONFIG_PATH} --sync-state-db-path ${STATE_DB_PATH} --max-cycles 1"')
+        script.contains('exec ./gradlew runSyncer --args="--config ${CONFIG_PATH} --sync-state-db-path ${STATE_DB_PATH} --max-cycles 1"')
+        !script.contains('--dry-run')
     }
 
     def "parent-child sync batch wrapper enforces one-cycle dry-run bootstrap"() {
