@@ -142,7 +142,7 @@ class RecordAllowance {
         log.info('YNAB access token loaded from environment')
         this.ynabClient = ynabClient
         if (this.ynabClient == null && initializeBudget) {
-            this.ynabClient = new YnabHttpClient('https://api.youneedabudget.com', this.accessToken)
+            this.ynabClient = new YnabHttpClient('https://api.ynab.com', this.accessToken)
         }
         if (this.ynabClient != null) {
             this.ynabRepository = new YnabBudgetRepository(this.ynabClient)

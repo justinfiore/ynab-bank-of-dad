@@ -25,7 +25,7 @@ class YnabBudgetRepositorySpec extends Specification {
         wireMockServer.stop()
     }
 
-    def "getBudgets maps budget payloads into summaries"() {
+    def "getBudgets maps plan payloads into summaries"() {
         given:
         stubFor(get(urlEqualTo('/v1/plans'))
             .willReturn(aResponse()
@@ -34,7 +34,7 @@ class YnabBudgetRepositorySpec extends Specification {
                 .withBody('''
 {
   "data": {
-    "budgets": [
+    "plans": [
       {"id": "budget-1", "name": "Configured Budget", "last_modified_on": "2025-07-01T12:00:00Z"},
       {"id": "budget-2", "name": "Other", "last_modified_on": "2025-07-08T12:00:00Z"}
     ]
@@ -63,7 +63,7 @@ class YnabBudgetRepositorySpec extends Specification {
                 .withBody('''
 {
   "data": {
-    "budgets": [
+    "plans": [
       {"id": "budget-old", "name": "Configured Budget", "last_modified_on": "2025-07-01T12:00:00Z"},
       {"id": "budget-new", "name": "Configured Budget", "last_modified_on": "2025-07-08T12:00:00Z"},
       {"id": "budget-other", "name": "Other", "last_modified_on": "2025-07-09T12:00:00Z"}
@@ -206,7 +206,7 @@ class YnabBudgetRepositorySpec extends Specification {
         movements[1].eventDate == java.time.LocalDate.now().toString()
     }
 
-    def "getLatestServerKnowledge reads budget server knowledge from budget details response"() {
+    def "getLatestServerKnowledge reads plan server knowledge from plan details response"() {
         given:
         stubFor(get(urlEqualTo('/v1/plans/budget-new'))
             .willReturn(aResponse()
@@ -215,7 +215,7 @@ class YnabBudgetRepositorySpec extends Specification {
                 .withBody('''
 {
   "data": {
-    "budget": {
+    "plan": {
       "id": "budget-new",
       "server_knowledge": 123
     }

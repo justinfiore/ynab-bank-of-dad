@@ -86,7 +86,7 @@ class RecordAllowanceWireMockSpec extends Specification {
         wireMockServer.stop()
     }
 
-    def "constructor selects newest Configured Budget budget using simulated YNAB budgets response"() {
+    def "constructor selects newest Configured Budget using simulated YNAB plans response"() {
         given:
         stubFor(get(urlEqualTo('/v1/plans'))
             .willReturn(aResponse()
@@ -95,7 +95,7 @@ class RecordAllowanceWireMockSpec extends Specification {
                 .withBody('''
 {
   "data": {
-    "budgets": [
+    "plans": [
       {"id": "budget-old", "name": "Configured Budget", "last_modified_on": "2025-07-01T12:00:00Z"},
       {"id": "budget-new", "name": "Configured Budget", "last_modified_on": "2025-07-08T12:00:00Z"},
       {"id": "budget-other", "name": "Other", "last_modified_on": "2025-07-09T12:00:00Z"}
@@ -120,7 +120,7 @@ class RecordAllowanceWireMockSpec extends Specification {
                 .withBody('''
 {
   "data": {
-    "budgets": [
+    "plans": [
       {"id": "budget-new", "name": "Configured Budget", "last_modified_on": "2025-07-08T12:00:00Z"}
     ]
   }
@@ -180,7 +180,7 @@ class RecordAllowanceWireMockSpec extends Specification {
                 .withBody('''
 {
   "data": {
-    "budgets": [
+    "plans": [
       {"id": "budget-other", "name": "Other", "last_modified_on": "2025-07-09T12:00:00Z"}
     ]
   }
@@ -204,7 +204,7 @@ class RecordAllowanceWireMockSpec extends Specification {
                 .withBody('''
 {
   "data": {
-    "budgets": [
+    "plans": [
       {"id": "budget-new", "name": "Configured Budget", "last_modified_on": "2025-07-08T12:00:00Z"}
     ]
   }
@@ -242,7 +242,7 @@ class RecordAllowanceWireMockSpec extends Specification {
                 .withBody('''
 {
   "data": {
-    "budgets": [
+    "plans": [
       {"id": "budget-new", "name": "Configured Budget", "last_modified_on": "2025-07-08T12:00:00Z"}
     ]
   }
@@ -285,7 +285,7 @@ class RecordAllowanceWireMockSpec extends Specification {
                 .withBody('''
 {
   "data": {
-    "budgets": [
+    "plans": [
       {"id": "budget-new", "name": "Configured Budget", "last_modified_on": "2025-07-08T12:00:00Z"}
     ]
   }
@@ -328,7 +328,7 @@ class RecordAllowanceWireMockSpec extends Specification {
         categories['Child Four Bronze Account'].balance == -250
     }
 
-    def "constructor surfaces budget endpoint failures from YNAB"() {
+    def "constructor surfaces plan endpoint failures from YNAB"() {
         given:
         stubFor(get(urlEqualTo('/v1/plans'))
             .willReturn(aResponse()
@@ -383,7 +383,7 @@ class RecordAllowanceWireMockSpec extends Specification {
                 .withBody('''
 {
   "data": {
-    "budgets": [
+    "plans": [
       {"id": "budget-new", "name": "Configured Budget", "last_modified_on": "2025-07-08T12:00:00Z"}
     ]
   }
@@ -507,7 +507,7 @@ class RecordAllowanceWireMockSpec extends Specification {
                 .withBody('''
 {
   "data": {
-    "budgets": [
+    "plans": [
       {"id": "budget-new", "name": "Configured Budget", "last_modified_on": "2025-07-08T12:00:00Z"}
     ]
   }
@@ -559,7 +559,7 @@ class RecordAllowanceWireMockSpec extends Specification {
                 .withBody('''
 {
   "data": {
-    "budgets": [
+    "plans": [
       {"id": "budget-new", "name": "Configured Budget", "last_modified_on": "2025-07-08T12:00:00Z"}
     ]
   }

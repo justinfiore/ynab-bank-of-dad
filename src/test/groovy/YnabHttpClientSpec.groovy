@@ -40,7 +40,7 @@ class YnabHttpClientSpec extends Specification {
         server.enqueue(new MockResponse()
             .setResponseCode(200)
             .setHeader('Content-Type', 'application/json')
-            .setBody('{"data":{"budgets":[{"id":"budget-1"}]}}'))
+            .setBody('{"data":{"plans":[{"id":"budget-1"}]}}'))
         def client = buildClient()
 
         when:
@@ -48,7 +48,7 @@ class YnabHttpClientSpec extends Specification {
         def request = server.takeRequest()
 
         then:
-        response.data.budgets[0].id == 'budget-1'
+        response.data.plans[0].id == 'budget-1'
         request.method == 'GET'
         request.path == '/v1/plans'
         request.getHeader('Authorization') == 'Bearer token'
@@ -147,7 +147,7 @@ class YnabHttpClientSpec extends Specification {
     def "timeouts surface a clear error with configured duration"() {
         given:
         def timeout = Duration.ofSeconds(7)
-        def client = new YnabHttpClient('https://api.youneedabudget.com', 'token', new TimeoutThrowingHttpClient(), timeout)
+        def client = new YnabHttpClient('https://api.ynab.com', 'token', new TimeoutThrowingHttpClient(), timeout)
 
         when:
         client.getJson('/v1/plans')
@@ -160,7 +160,7 @@ class YnabHttpClientSpec extends Specification {
 
     def "interruption preserves thread interrupt status and surfaces clear error"() {
         given:
-        def client = new YnabHttpClient('https://api.youneedabudget.com', 'token', new InterruptingHttpClient())
+        def client = new YnabHttpClient('https://api.ynab.com', 'token', new InterruptingHttpClient())
 
         when:
         client.getJson('/v1/plans')

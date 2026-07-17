@@ -19,7 +19,7 @@ class YnabBudgetRepository {
 
     List<BudgetSummary> getBudgets() {
         def response = ynabClient.getJson('/v1/plans')
-        List budgets = (response?.data?.budgets ?: []) as List
+        List budgets = (response?.data?.plans ?: []) as List
         log.debug('Fetched {} budgets from YNAB /v1/plans', budgets.size())
         budgets.collect { budget ->
             new BudgetSummary(
@@ -146,7 +146,7 @@ class YnabBudgetRepository {
 
     Integer getLatestServerKnowledge(String budgetId) {
         def response = ynabClient.getJson("/v1/plans/${budgetId}")
-        Integer serverKnowledge = (response?.data?.budget?.server_knowledge ?: response?.data?.server_knowledge) as Integer
+        Integer serverKnowledge = (response?.data?.plan?.server_knowledge ?: response?.data?.server_knowledge) as Integer
         log.debug("Fetched latest server_knowledge={} for budget '{}'", serverKnowledge, budgetId)
         serverKnowledge
     }

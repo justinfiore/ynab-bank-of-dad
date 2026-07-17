@@ -41,7 +41,7 @@ Rationale: These remain as currently implemented; cleared is an independent conc
 
 ## Risks / Trade-offs
 
-- [YNAB API contract] The exact key name and allowed values for the cleared flag could differ slightly from the assumed shape → Mitigation: consult official YNAB REST docs (https://api.youneedabudget.com) before writing the payload change; add a small test that the key appears.
+- [YNAB API contract] The exact key name and allowed values for the cleared flag could differ slightly from the assumed shape → Mitigation: consult official YNAB REST docs (https://api.ynab.com) before writing the payload change; add a small test that the key appears.
 - [Searchability] If a child manually enters a transaction with the exact same memo prefix, filtering may return both; acceptable because the prefix is intended as a namespace.
 - [Payload size] Negligible; memo strings remain short.
 
