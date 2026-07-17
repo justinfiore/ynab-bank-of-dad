@@ -140,6 +140,7 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         then:
         List childOnePosts = postedTransactions('child-one-budget-id')
         childOnePosts.size() == 4
+        childOnePosts.every { it.approved == false }
         childOnePosts.find { it.memo == 'YBOD: Child one shoes' && it.account_id == 'child-one-spend-account-id' && it.amount == -1100 && it.category_id == null && it.cleared == 'cleared' }
         childOnePosts.find { it.memo == 'YBOD: Child one bonus' && it.account_id == 'child-one-save-account-id' && it.amount == -1200 && it.category_id == null && it.cleared == 'cleared' }
         childOnePosts.find { it.memo == 'YBOD: Child one split save' && it.account_id == 'child-one-save-account-id' && it.amount == -600 && it.category_id == null && it.cleared == 'cleared' }
@@ -148,6 +149,7 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         and:
         List childTwoPosts = postedTransactions('child-two-budget-id')
         childTwoPosts.size() == 3
+        childTwoPosts.every { it.approved == false }
         childTwoPosts.find { it.memo == 'YBOD: Child two CD' && it.account_id == 'child-two-cd-account-id' && it.amount == -1300 && it.category_id == null && it.cleared == 'cleared' }
         childTwoPosts.find { it.memo == 'YBOD: Child two split give' && it.account_id == 'child-two-give-account-id' && it.amount == -700 && it.category_id == null && it.cleared == 'cleared' }
         childTwoPosts.find { it.memo == 'YBOD: From Child One Save Bank to Child Two Spend Bank' && it.account_id == 'child-two-spend-account-id' && it.amount == 250 && it.payee_name == 'From Child One Save Bank' && it.category_id == null && it.cleared == 'cleared' }
@@ -156,6 +158,7 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         and:
         List childThreePosts = postedTransactions('child-three-budget-id')
         childThreePosts.size() == 3
+        childThreePosts.every { it.approved == false }
         childThreePosts.find { it.memo == 'YBOD: Child three give' && it.account_id == 'child-three-give-account-id' && it.amount == -1400 && it.category_id == null && it.cleared == 'cleared' }
         childThreePosts.find { it.memo == 'YBOD: Four child split memo' && it.account_id == 'child-three-spend-account-id' && it.amount == -800 && it.category_id == null && it.cleared == 'cleared' }
         childThreePosts.find { it.memo == 'YBOD: From Child Three Gold CD 07/31/26 to Child Four Give Bank' && it.account_id == 'child-three-cd-account-id' && it.amount == -350 && it.payee_name == 'To Child Four Give Bank' && it.category_id == null && it.cleared == 'cleared' }
@@ -163,6 +166,7 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         and:
         List childFourPosts = postedTransactions('child-four-budget-id')
         childFourPosts.size() == 3
+        childFourPosts.every { it.approved == false }
         childFourPosts.find { it.memo == 'YBOD: Child four bonus' && it.account_id == 'child-four-spend-account-id' && it.amount == -1500 && it.category_id == null && it.cleared == 'cleared' }
         childFourPosts.find { it.memo == 'YBOD: Child four split CD' && it.account_id == 'child-four-cd-account-id' && it.amount == -900 && it.category_id == null && it.cleared == 'cleared' }
         childFourPosts.find { it.memo == 'YBOD: From Child Three Gold CD 07/31/26 to Child Four Give Bank' && it.account_id == 'child-four-give-account-id' && it.amount == 350 && it.payee_name == 'From Child Three Gold CD 07/31/26' && it.category_id == null && it.cleared == 'cleared' }

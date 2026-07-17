@@ -97,13 +97,13 @@ class RecordAllowance {
         transactions.addAll(ra.generateNonInterestBearingTransactions(allowanceEscrowAccountId, categoryInfo))
 
         def ynabTransactions = toYnabTransactions(transactions)
-        log.info("Transactions to add: ${JsonOutput.prettyPrint(JsonOutput.toJson(ynabTransactions))}")
+        log.info("Transactions to add: ${JsonOutput.prettyPrint(JsonOutput.toJson(YnabLogFormatter.formatAmounts(ynabTransactions)))}")
 
         if (!dryRun) {
             def postedTransactions = ra.postTransactions(ynabTransactions)
-            log.info("Successfully posted the following transactions: ${JsonOutput.prettyPrint(JsonOutput.toJson(postedTransactions))}")
+            log.info("Successfully posted the following transactions: ${JsonOutput.prettyPrint(JsonOutput.toJson(YnabLogFormatter.formatAmounts(postedTransactions)))}")
         } else {
-            log.info(DRY_RUN_PREFIX + " posted the following transactions: ${JsonOutput.prettyPrint(JsonOutput.toJson(ynabTransactions))}")
+            log.info(DRY_RUN_PREFIX + " posted the following transactions: ${JsonOutput.prettyPrint(JsonOutput.toJson(YnabLogFormatter.formatAmounts(ynabTransactions)))}")
         }
     }
 

@@ -4,6 +4,7 @@ import groovy.json.JsonOutput
 import groovy.util.logging.Slf4j
 import ynabbankofdad.sync.model.*
 import ynabbankofdad.sync.state.SyncStateRepository
+import ynabbankofdad.ynab.YnabLogFormatter
 
 @Slf4j
 class ChildSyncApplier {
@@ -62,7 +63,7 @@ class ChildSyncApplier {
                 Map<String, Object> transaction = payloadFactory.buildTransaction(plan, accountId, prefix, suffix)
 
                 if (dryRun) {
-                    log.info('{} child transaction for {} mapping {} account {} -> {}', DRY_RUN_PREFIX, childContext.target.childKey, plan.mappingKey, plan.childAccountName, JsonOutput.toJson(transaction))
+                    log.info('{} child transaction for {} mapping {} account {} -> {}', DRY_RUN_PREFIX, childContext.target.childKey, plan.mappingKey, plan.childAccountName, JsonOutput.toJson(YnabLogFormatter.formatAmounts(transaction)))
                     log.info('{} sqlite state for {} mapping {} -> {}', DRY_RUN_PREFIX, childContext.target.childKey, plan.mappingKey, plan.idempotencyKey)
                     return
                 }
