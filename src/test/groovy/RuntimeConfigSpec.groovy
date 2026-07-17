@@ -222,6 +222,39 @@ sync:
         ex.message.contains("Config key 'allowanceRates' must map strings to numeric values")
     }
 
+    def "fromMap defaults simple-account config fields when simple-account kids are omitted"() {
+        given:
+        def raw = validConfigMap()
+        raw.remove('bankSuffixes')
+        raw.remove('allowanceRates')
+        raw.remove('kidsWithoutInterest')
+        raw.remove('kidsWithSimpleAccounts')
+
+        when:
+        def config = RuntimeConfig.fromMap(raw)
+
+        then:
+        config.bankSuffixes == []
+        config.allowanceRates == [:]
+        config.kidsWithoutInterest == []
+        config.kidsWithSimpleAccounts == []
+    }
+
+    def "fromMap still requires simple-account config when simple-account kids are configured"() {
+        given:
+        def raw = validConfigMap()
+        raw.kidsWithoutInterest = ['Sam']
+        raw.remove('bankSuffixes')
+        raw.remove('allowanceRates')
+
+        when:
+        RuntimeConfig.fromMap(raw)
+
+        then:
+        def ex = thrown(IllegalArgumentException)
+        ex.message.contains("Config key 'bankSuffixes' must be a list of non-empty strings")
+    }
+
     def "fromMap throws when nested map contains non-numeric values"() {
         given:
         def raw = validConfigMap()

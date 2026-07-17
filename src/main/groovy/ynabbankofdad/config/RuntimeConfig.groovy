@@ -41,6 +41,10 @@ class RuntimeConfig {
     }
 
     static RuntimeConfig fromMap(Map raw) {
+        List<String> kidsWithoutInterest = optionalStringList(raw, 'kidsWithoutInterest')
+        List<String> kidsWithSimpleAccounts = optionalStringList(raw, 'kidsWithSimpleAccounts')
+        boolean requiresSimpleAccountConfig = !kidsWithoutInterest.isEmpty() || !kidsWithSimpleAccounts.isEmpty()
+
         RuntimeConfig config = new RuntimeConfig(
             budgetName: requireString(raw, 'budgetName'),
             allowanceEscrowAccountName: requireString(raw, 'allowanceEscrowAccountName'),
@@ -49,11 +53,11 @@ class RuntimeConfig {
             allowanceMemo: requireString(raw, 'allowanceMemo'),
             combinedMemo: requireString(raw, 'combinedMemo'),
             nonInterestMemoSuffix: requireString(raw, 'nonInterestMemoSuffix'),
-            bankSuffixes: requireStringList(raw, 'bankSuffixes'),
-            allowanceRates: requireNumberMap(raw, 'allowanceRates'),
+            bankSuffixes: requiresSimpleAccountConfig ? requireStringList(raw, 'bankSuffixes') : optionalStringList(raw, 'bankSuffixes'),
+            allowanceRates: requiresSimpleAccountConfig ? requireNumberMap(raw, 'allowanceRates') : optionalNumberMap(raw, 'allowanceRates'),
             giveBankRate: requireNumber(raw, 'giveBankRate'),
-            kidsWithoutInterest: requireStringList(raw, 'kidsWithoutInterest'),
-            kidsWithSimpleAccounts: requireStringList(raw, 'kidsWithSimpleAccounts'),
+            kidsWithoutInterest: kidsWithoutInterest,
+            kidsWithSimpleAccounts: kidsWithSimpleAccounts,
             kidsWithAdvancedAccounts: requireStringList(raw, 'kidsWithAdvancedAccounts'),
             advancedAllowanceDeposits: requireNestedNumberMap(raw, 'advancedAllowanceDeposits'),
             accountTypes: requireStringList(raw, 'accountTypes'),
@@ -237,6 +241,13 @@ class RuntimeConfig {
         (value as List).collect { it as String }
     }
 
+    private static List<String> optionalStringList(Map raw, String key) {
+        if (!raw.containsKey(key) || raw[key] == null) {
+            return []
+        }
+        requireStringList(raw, key)
+    }
+
     private static Map<String, Number> requireNumberMap(Map raw, String key) {
         def value = raw[key]
         if (!(value instanceof Map)) {
@@ -250,6 +261,13 @@ class RuntimeConfig {
             result[k as String] = v as Number
         }
         result
+    }
+
+    private static Map<String, Number> optionalNumberMap(Map raw, String key) {
+        if (!raw.containsKey(key) || raw[key] == null) {
+            return [:]
+        }
+        requireNumberMap(raw, key)
     }
 
     private static Map<String, Map<String, Number>> requireNestedNumberMap(Map raw, String key) {
