@@ -206,6 +206,40 @@ class YnabBudgetRepositorySpec extends Specification {
         movements[1].eventDate == java.time.LocalDate.now().toString()
     }
 
+    def "getLatestServerKnowledge reads budget server knowledge from budget details response"() {
+        given:
+        stubFor(get(urlEqualTo('/v1/plans/budget-new'))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader('Content-Type', 'application/json')
+                .withBody('''
+{
+  "data": {
+    "budget": {
+      "id": "budget-new",
+      "server_knowledge": 123
+    }
+  }
+}
+''')))
+
+        expect:
+        buildRepository().getLatestServerKnowledge('budget-new') == 123
+    }
+
+    def "latestServerKnowledge returns the highest transaction server knowledge"() {
+        given:
+        def repository = buildRepository()
+        def transactions = [
+            new ParentTransactionEvent('txn-1', '2026-07-01', -100, 'One', true, 40, null, null, []),
+            new ParentTransactionEvent('txn-2', '2026-07-02', -200, 'Two', true, 77, null, null, []),
+            new ParentTransactionEvent('txn-3', '2026-07-03', -300, 'Three', true, 55, null, null, [])
+        ]
+
+        expect:
+        repository.latestServerKnowledge(transactions) == 77
+    }
+
     def "postTransactions sends the expected bulk payload to YNAB"() {
         given:
         stubFor(post(urlEqualTo('/v1/plans/budget-new/transactions/bulk'))

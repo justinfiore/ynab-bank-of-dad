@@ -1,11 +1,14 @@
 package ynabbankofdad.ynab
 
+import groovy.json.JsonOutput
+import groovy.util.logging.Slf4j
 import ynabbankofdad.model.*
 import ynabbankofdad.sync.model.*
 
 import java.text.SimpleDateFormat
 import java.time.LocalDate
 
+@Slf4j
 class YnabBudgetRepository {
     private final YnabHttpClient ynabClient
     private final SimpleDateFormat budgetTimestampFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssX")
@@ -16,7 +19,9 @@ class YnabBudgetRepository {
 
     List<BudgetSummary> getBudgets() {
         def response = ynabClient.getJson('/v1/plans')
-        response.data.budgets.collect { budget ->
+        List budgets = (response?.data?.budgets ?: []) as List
+        log.debug('Fetched {} budgets from YNAB /v1/plans', budgets.size())
+        budgets.collect { budget ->
             new BudgetSummary(
                 budget.id as String,
                 budget.name as String,
@@ -30,6 +35,13 @@ class YnabBudgetRepository {
         def allBudgetNames = allBudgets.collect { it.name }
         def matchingBudgets = allBudgets.findAll { it.name == budgetName }
             .sort { a, b -> b.lastModifiedOn.time <=> a.lastModifiedOn.time }
+        log.debug(
+            "Budget lookup for '{}' saw {} total budgets and {} matching budgets: {}",
+            budgetName,
+            allBudgets.size(),
+            matchingBudgets.size(),
+            allBudgetNames
+        )
         if (matchingBudgets.isEmpty()) {
             throw new IllegalStateException("Could not find budget named '${budgetName}'. Available budget names: ${allBudgetNames}")
         }
@@ -38,7 +50,9 @@ class YnabBudgetRepository {
 
     String getAccountId(String budgetId, String accountName) {
         def response = ynabClient.getJson("/v1/plans/${budgetId}/accounts")
-        def account = response.data.accounts.find { it.name == accountName }
+        List accounts = (response?.data?.accounts ?: []) as List
+        log.debug("Fetched {} accounts from YNAB for budget '{}'", accounts.size(), budgetId)
+        def account = accounts.find { it.name == accountName }
         if (account == null) {
             throw new IllegalStateException("Could not find account named '${accountName}' in budget '${budgetId}'")
         }
@@ -47,8 +61,11 @@ class YnabBudgetRepository {
 
     Map<String, CategorySnapshot> getCategoryInfoByCategoryName(String budgetId) {
         def response = ynabClient.getJson("/v1/plans/${budgetId}/categories")
+        List categoryGroups = (response?.data?.category_groups ?: []) as List
+        int categoryCount = categoryGroups.sum { ((it.categories ?: []) as List).size() } ?: 0
+        log.debug("Fetched {} category groups and {} categories from YNAB for budget '{}'", categoryGroups.size(), categoryCount, budgetId)
         Map<String, CategorySnapshot> categoriesByName = [:]
-        response.data.category_groups.each { group ->
+        categoryGroups.each { group ->
             group.categories.each { category ->
                 categoriesByName[category.name] = new CategorySnapshot(
                     category.id as String,
@@ -68,6 +85,15 @@ class YnabBudgetRepository {
         }
         def response = ynabClient.getJson(path)
         List transactions = (response?.data?.transactions ?: []) as List
+        Integer responseServerKnowledge = (response?.data?.server_knowledge ?: 0) as Integer
+        log.debug(
+            "Fetched {} transactions from YNAB for budget '{}' since {} with last_knowledge_of_server={} and response server_knowledge={}",
+            transactions.size(),
+            budgetId,
+            sinceDate,
+            lastServerKnowledge,
+            responseServerKnowledge
+        )
         transactions.collect { transaction ->
             new ParentTransactionEvent(
                 transaction.id as String,
@@ -96,7 +122,7 @@ class YnabBudgetRepository {
         def response = ynabClient.getJson("/v1/plans/${budgetId}/money_movements")
         LocalDate threshold = LocalDate.now().minusDays(lookbackDays as long)
         List movements = (response?.data?.money_movements ?: []) as List
-        movements.collect { movement ->
+        List<MoneyMovementEvent> mappedMovements = movements.collect { movement ->
             new MoneyMovementEvent(
                 movement.id as String,
                 movement.money_movement_group_id as String,
@@ -108,20 +134,40 @@ class YnabBudgetRepository {
         }.findAll { MoneyMovementEvent movement ->
             LocalDate.parse(movement.eventDate) >= threshold
         }
+        log.debug(
+            "Fetched {} money movements from YNAB for budget '{}' and retained {} within {} days",
+            movements.size(),
+            budgetId,
+            mappedMovements.size(),
+            lookbackDays
+        )
+        mappedMovements
     }
 
     Integer getLatestServerKnowledge(String budgetId) {
         def response = ynabClient.getJson("/v1/plans/${budgetId}")
-        (response?.data?.budget?.server_knowledge ?: response?.data?.server_knowledge) as Integer
+        Integer serverKnowledge = (response?.data?.budget?.server_knowledge ?: response?.data?.server_knowledge) as Integer
+        log.debug("Fetched latest server_knowledge={} for budget '{}'", serverKnowledge, budgetId)
+        serverKnowledge
     }
 
     Integer latestServerKnowledge(List<ParentTransactionEvent> transactions) {
         List<Integer> knowledgeValues = transactions.collect { it.serverKnowledge }.findAll { it != null }
-        knowledgeValues ? knowledgeValues.max() : null
+        Integer latestKnowledge = knowledgeValues ? knowledgeValues.max() : null
+        log.debug('Derived latest server_knowledge={} from {} transactions', latestKnowledge, transactions.size())
+        latestKnowledge
     }
 
     def postTransactions(String budgetId, List<Map<String, Object>> transactions) {
-        ynabClient.postJson("/v1/plans/${budgetId}/transactions/bulk", [transactions: transactions])
+        YnabHttpResponse response = ynabClient.postJsonWithMetadata("/v1/plans/${budgetId}/transactions/bulk", [transactions: transactions])
+        log.debug(
+            "Posted {} transactions to budget '{}' and received status {} with body {}",
+            transactions.size(),
+            budgetId,
+            response.statusCode,
+            response.bodyText == null ? 'null' : JsonOutput.prettyPrint(JsonOutput.toJson(response.body))
+        )
+        response.body
     }
 
     def getUser() {

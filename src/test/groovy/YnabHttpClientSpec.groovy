@@ -78,6 +78,27 @@ class YnabHttpClientSpec extends Specification {
         body == payload
     }
 
+    def "postJsonWithMetadata preserves status body text and parsed body"() {
+        given:
+        server.enqueue(new MockResponse()
+            .setResponseCode(201)
+            .setHeader('Content-Type', 'application/json')
+            .setBody('{"data":{"bulk":{"transaction_ids":["txn-1"]}}}'))
+        def client = buildClient()
+        def payload = [transactions: [[payee_name: 'Test Transaction', amount: 1000]]]
+
+        when:
+        def response = client.postJsonWithMetadata('/v1/plans/budget-1/transactions/bulk', payload)
+        def request = server.takeRequest()
+
+        then:
+        response.statusCode == 201
+        response.bodyText == '{"data":{"bulk":{"transaction_ids":["txn-1"]}}}'
+        response.body.data.bulk.transaction_ids == ['txn-1']
+        request.method == 'POST'
+        request.path == '/v1/plans/budget-1/transactions/bulk'
+    }
+
     def "successful blank response body returns null"() {
         given:
         server.enqueue(new MockResponse()
