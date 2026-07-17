@@ -75,7 +75,7 @@ class ParentChildBudgetSyncer {
 
     static ParentChildBudgetSyncer fromConfig(RuntimeConfig runtimeConfig, SyncCliOptions options, Map<String, String> environment) {
         String parentToken = resolveRequiredToken(runtimeConfig.sync.parentBudget.tokenEnvVarName, 'sync.parentBudget.tokenEnvVarName', environment)
-        YnabBudgetRepository parentRepository = new YnabBudgetRepository(new YnabHttpClient('https://api.youneedabudget.com', parentToken))
+        YnabBudgetRepository parentRepository = new YnabBudgetRepository(new YnabHttpClient('https://api.ynab.com', parentToken))
 
         String stateDbPath = options.syncStateDbPath ?: runtimeConfig.sync.state.sqlitePath
         SyncStateStore stateStore = new SyncStateStore(stateDbPath)
@@ -83,7 +83,7 @@ class ParentChildBudgetSyncer {
 
         List<ChildSyncContext> childContexts = runtimeConfig.sync.childBudgets.collect { ChildBudgetSyncTarget target ->
             String token = resolveRequiredToken(target.tokenEnvVarName, "sync.childBudgets[${target.childKey}].tokenEnvVarName", environment)
-            YnabBudgetRepository childRepository = new YnabBudgetRepository(new YnabHttpClient('https://api.youneedabudget.com', token))
+            YnabBudgetRepository childRepository = new YnabBudgetRepository(new YnabHttpClient('https://api.ynab.com', token))
             new ChildSyncContext(target, childRepository)
         }
 

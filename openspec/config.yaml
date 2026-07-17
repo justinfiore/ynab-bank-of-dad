@@ -22,7 +22,7 @@ context: |
   - Gradle test runs produce both JUnit XML and HTML reports under build/test-results/ and build/reports/tests/.
 
   Domain model and runtime configuration:
-  - The script talks directly to https://api.youneedabudget.com.
+  - The script talks directly to https://api.ynab.com.
   - It loads budget/account/category names plus allowance/interest rules from a top-level YAML config file.
   - `config.yaml.example` is the checked-in template; `config.yaml` is local and gitignored.
   - `-c` / `--config` can point to an explicit config file path.

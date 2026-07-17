@@ -634,7 +634,7 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
 
     private static def commonBudgetDiscoveryResponse() {
         jsonResponse([
-            data: [budgets: [
+            data: [plans: [
                 [id: 'parent-budget-id', name: 'Parent Budget', last_modified_on: '2026-07-01T12:00:00Z'],
                 [id: 'child-one-budget-id', name: 'Child One Budget', last_modified_on: '2026-07-01T12:00:00Z'],
                 [id: 'child-two-budget-id', name: 'Child Two Budget', last_modified_on: '2026-07-01T12:00:00Z'],

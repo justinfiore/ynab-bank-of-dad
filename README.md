@@ -64,7 +64,7 @@ For step-by-step real-account validation before continuous parent/child syncing,
 - `JAVA_HOME` pointing at your JDK 25 installation
 - `YNAB_ACCESS_TOKEN`
 - a config file in the repository format (`config.yaml.example` is the starting template)
-- network access to `https://api.youneedabudget.com`
+- network access to `https://api.ynab.com`
 
 ### Parent/child syncer
 - Java JDK 25
@@ -72,7 +72,7 @@ For step-by-step real-account validation before continuous parent/child syncing,
 - `YNAB_PARENT_TOKEN`
 - one token env var per configured child budget (for example `YNAB_CHILD_ONE_TOKEN`, `YNAB_CHILD_TWO_TOKEN`)
 - a config file containing a valid `sync:` section
-- network access to `https://api.youneedabudget.com`
+- network access to `https://api.ynab.com`
 - a writable SQLite state path such as `syncstate.db`
 
 ## Configuration
