@@ -26,10 +26,12 @@ class YnabBudgetRepository {
     }
 
     String getLatestBudgetId(String budgetName) {
-        def matchingBudgets = getBudgets().findAll { it.name == budgetName }
+        def allBudgets = getBudgets()
+        def allBudgetNames = allBudgets.collect { it.name }
+        def matchingBudgets = allBudgets.findAll { it.name == budgetName }
             .sort { a, b -> b.lastModifiedOn.time <=> a.lastModifiedOn.time }
         if (matchingBudgets.isEmpty()) {
-            throw new IllegalStateException("Could not find budget named '${budgetName}'")
+            throw new IllegalStateException("Could not find budget named '${budgetName}'. Available budget names: ${allBudgetNames}")
         }
         matchingBudgets.first().id
     }
