@@ -12,4 +12,4 @@ if [[ -z "${JAVA_HOME:-}" ]]; then
   exit 1
 fi
 
-exec ./gradlew runSyncer --args="--dry-run --config ${CONFIG_PATH} --sync-state-db-path ${STATE_DB_PATH} --max-cycles 1"
+exec ./gradlew runSyncer --args="--config ${CONFIG_PATH} --sync-state-db-path ${STATE_DB_PATH} --max-cycles 1"
