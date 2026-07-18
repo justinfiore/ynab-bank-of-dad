@@ -73,6 +73,30 @@ class ChildTransactionPayloadFactorySpec extends Specification {
         factory.extractCreatedTransactionId([data: [:]]) == null
     }
 
+    def "buildImportId rejects a missing idempotency key with a useful error"() {
+        when:
+        factory.buildImportId(plan(null))
+
+        then:
+        def ex = thrown(IllegalArgumentException)
+        ex.message.contains('idempotency key')
+    }
+
+    def "buildImportId handles the minimum integer amount without a negative absolute value"() {
+        given:
+        def source = plan('minimum-amount-key')
+        def minimum = new ChildTransactionPlan(
+            source.sourceBudgetId, source.targetChildKey, source.targetBudgetName, source.mappingKey,
+            source.parentCategoryName, source.eventType, source.parentTransactionId,
+            source.parentSubtransactionId, source.moneyMovementId, source.moneyMovementGroupId,
+            source.idempotencyKey, source.childAccountName, source.date, -2147483647 - 1,
+            source.memo, source.payeeName, source.approved
+        )
+
+        expect:
+        factory.buildImportId(minimum).contains(':2147483648:')
+    }
+
     private static ChildTransactionPlan plan(String idempotencyKey) {
         new ChildTransactionPlan(
             'parent-budget', 'child-one', 'Child Budget', 'spend', 'Child One Spend Bank',

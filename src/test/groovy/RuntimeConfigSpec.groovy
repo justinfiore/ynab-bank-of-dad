@@ -427,11 +427,32 @@ sync:
         raw.sync.logging.level = 'VERBOSE'
 
         when:
-        RuntimeConfig.fromMap(raw).sync.logging.validate()
+        RuntimeConfig.fromMap(raw)
 
         then:
         def ex = thrown(IllegalArgumentException)
         ex.message.contains("sync.logging.level")
+    }
+
+    def "positive integer sync settings reject fractional and overflowing values"() {
+        given:
+        def raw = validConfigMap()
+        mutation(raw)
+
+        when:
+        RuntimeConfig.fromMap(raw)
+
+        then:
+        def ex = thrown(IllegalArgumentException)
+        ex.message.contains(expected)
+
+        where:
+        mutation << [
+            { Map cfg -> cfg.sync.pollingIntervalSeconds = 1.5 },
+            { Map cfg -> cfg.sync.logging.maxHistory = 2147483648L },
+            { Map cfg -> cfg.sync.state.transactionLookbackDays = 2.25 }
+        ]
+        expected << ['sync.pollingIntervalSeconds', 'sync.logging.maxHistory', 'sync.state.transactionLookbackDays']
     }
 
     def "validate throws when polling interval is non-positive"() {

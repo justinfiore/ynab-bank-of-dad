@@ -91,6 +91,9 @@ class TransactionAssemblyService {
                                                    List<TransactionDraft> transactionsForAllowanceAndInterest,
                                                    Map<String, CategorySnapshot> categoryInfoByCategoryName,
                                                    List<String> kidsWithSimpleAccounts) {
+        if (!transactionsForAllowanceAndInterest) {
+            throw new IllegalArgumentException('At least one allowance or interest transaction is required to generate an offsetting transaction')
+        }
         Integer totalMilliUnits = transactionsForAllowanceAndInterest.sum { it.amount } as Integer
         CategorySnapshot allowanceCategory = categoryInfoByCategoryName[allowanceCategoryName]
         if (allowanceCategory == null) {
@@ -113,6 +116,9 @@ class TransactionAssemblyService {
                                                                   Map<String, Number> allowanceRates,
                                                                   Number giveBankRate) {
         CategorySnapshot allowanceCategory = categoryInfoByCategoryName[allowanceCategoryName]
+        if (allowanceCategory == null) {
+            throw new IllegalStateException("Missing category info for ${allowanceCategoryName}")
+        }
         Number amount = giveBankRate + allowanceRates.values().sum()
         kidsWithoutInterest.collect { String kid ->
             new TransactionDraft(

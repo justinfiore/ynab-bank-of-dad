@@ -106,6 +106,18 @@ class YnabBudgetRepositorySpec extends Specification {
         categories['Child One Silver Account'] == new CategorySnapshot('cat-jack', 'Child One Silver Account', 0)
     }
 
+    def "getCategoryInfoByCategoryName tolerates category groups without categories"() {
+        given:
+        stubFor(get(urlEqualTo('/v1/plans/budget-new/categories'))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader('Content-Type', 'application/json')
+                .withBody('{"data":{"category_groups":[{"name":"Empty"},{"name":"Null","categories":null}]}}')))
+
+        expect:
+        buildRepository().getCategoryInfoByCategoryName('budget-new') == [:]
+    }
+
     def "getTransactions maps top-level and subtransaction payloads"() {
         given:
         stubFor(get(urlPathEqualTo('/v1/plans/budget-new/transactions'))
@@ -150,6 +162,25 @@ class YnabBudgetRepositorySpec extends Specification {
         transactions[0].serverKnowledge == 77
         transactions[0].subtransactions*.id == ['sub-1']
         transactions[0].subtransactions[0].categoryName == 'Child One Save Bank'
+    }
+
+    def "empty incremental transaction response retains response server knowledge for cursor advancement"() {
+        given:
+        stubFor(get(urlPathEqualTo('/v1/plans/budget-new/transactions'))
+            .withQueryParam('since_date', matching('.*'))
+            .withQueryParam('last_knowledge_of_server', equalTo('77'))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader('Content-Type', 'application/json')
+                .withBody('{"data":{"server_knowledge":88,"transactions":[]}}')))
+        def repository = buildRepository()
+
+        when:
+        def transactions = repository.getTransactions('budget-new', 30, 77)
+
+        then:
+        transactions.empty
+        repository.latestServerKnowledge(transactions) == 88
     }
 
     def "getMoneyMovements filters to recent events and maps payloads"() {

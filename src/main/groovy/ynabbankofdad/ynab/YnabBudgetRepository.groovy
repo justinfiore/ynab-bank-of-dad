@@ -12,6 +12,7 @@ import java.time.LocalDate
 class YnabBudgetRepository {
     private final YnabHttpClient ynabClient
     private final SimpleDateFormat budgetTimestampFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssX")
+    private Integer lastTransactionServerKnowledge
 
     YnabBudgetRepository(YnabHttpClient ynabClient) {
         this.ynabClient = ynabClient
@@ -66,7 +67,7 @@ class YnabBudgetRepository {
         log.debug("Fetched {} category groups and {} categories from YNAB for budget '{}'", categoryGroups.size(), categoryCount, budgetId)
         Map<String, CategorySnapshot> categoriesByName = [:]
         categoryGroups.each { group ->
-            group.categories.each { category ->
+            ((group.categories ?: []) as List).each { category ->
                 categoriesByName[category.name] = new CategorySnapshot(
                     category.id as String,
                     category.name as String,
@@ -85,7 +86,8 @@ class YnabBudgetRepository {
         }
         def response = ynabClient.getJson(path)
         List transactions = (response?.data?.transactions ?: []) as List
-        Integer responseServerKnowledge = (response?.data?.server_knowledge ?: 0) as Integer
+        Integer responseServerKnowledge = response?.data?.server_knowledge as Integer
+        lastTransactionServerKnowledge = responseServerKnowledge
         log.debug(
             "Fetched {} transactions from YNAB for budget '{}' since {} with last_knowledge_of_server={} and response server_knowledge={}",
             transactions.size(),
@@ -101,7 +103,7 @@ class YnabBudgetRepository {
                 (transaction.amount ?: 0) as Integer,
                 transaction.memo as String,
                 transaction.approved as Boolean,
-                (response?.data?.server_knowledge ?: transaction.server_knowledge ?: 0) as Integer,
+                (responseServerKnowledge ?: transaction.server_knowledge) as Integer,
                 transaction.category_id as String,
                 transaction.category_name as String,
                 ((transaction.subtransactions ?: []) as List).collect { subtransaction ->
@@ -153,7 +155,7 @@ class YnabBudgetRepository {
 
     Integer latestServerKnowledge(List<ParentTransactionEvent> transactions) {
         List<Integer> knowledgeValues = transactions.collect { it.serverKnowledge }.findAll { it != null }
-        Integer latestKnowledge = knowledgeValues ? knowledgeValues.max() : null
+        Integer latestKnowledge = knowledgeValues ? knowledgeValues.max() : lastTransactionServerKnowledge
         log.debug('Derived latest server_knowledge={} from {} transactions', latestKnowledge, transactions.size())
         latestKnowledge
     }

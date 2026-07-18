@@ -20,9 +20,12 @@ class ChildTransactionPayloadFactory {
     }
 
     String buildImportId(ChildTransactionPlan plan) {
+        if (!plan?.idempotencyKey) {
+            throw new IllegalArgumentException('Child transaction plan must have an idempotency key')
+        }
         String compact = plan.idempotencyKey.replaceAll(/[^A-Za-z0-9]/, '').takeRight(28)
         String datePart = (plan.date ?: '1970-01-01').replace('-', '')
-        long amountAbs = Math.abs((plan.amount ?: 0) as long)
+        BigInteger amountAbs = BigInteger.valueOf((plan.amount ?: 0) as long).abs()
         "PCBS:${datePart}:${amountAbs}:${compact}"
     }
 
