@@ -54,7 +54,7 @@ class TransactionAssemblyServiceSpec extends Specification {
         ex.message.contains("Couldn't Find Account Type for category: Child One Mystery Account")
     }
 
-    def "generateOffsettingTransaction throws when no component transactions are provided"() {
+    def "generateOffsettingTransaction throws a clear error when no component transactions are provided"() {
         given:
         def service = buildAssemblyService('2025-07-06')
         def categories = [
@@ -65,7 +65,26 @@ class TransactionAssemblyServiceSpec extends Specification {
         service.generateOffsettingTransaction('allowance-escrow', [], categories, [])
 
         then:
-        thrown(NullPointerException)
+        def ex = thrown(IllegalArgumentException)
+        ex.message.contains('At least one allowance or interest transaction')
+    }
+
+    def "generateNonInterestBearingTransactions throws when the allowance category is missing"() {
+        given:
+        def service = buildAssemblyService('2025-07-06')
+
+        when:
+        service.generateNonInterestBearingTransactions(
+            'allowance-escrow',
+            [:],
+            ['Sam'],
+            [' Spend Bank': 1],
+            0.5
+        )
+
+        then:
+        def ex = thrown(IllegalStateException)
+        ex.message.contains('Family Allowance')
     }
 
     def "generateNonInterestBearingTransactions reuses the allowance category for each configured kid"() {

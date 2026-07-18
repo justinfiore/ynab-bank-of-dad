@@ -78,7 +78,10 @@ class ParentChildBudgetSyncer {
         YnabBudgetRepository parentRepository = new YnabBudgetRepository(new YnabHttpClient('https://api.ynab.com', parentToken))
 
         String stateDbPath = options.syncStateDbPath ?: runtimeConfig.sync.state.sqlitePath
-        SyncStateStore stateStore = new SyncStateStore(stateDbPath)
+        SyncStateStore persistentStateStore = new SyncStateStore(stateDbPath)
+        SyncStateRepository stateStore = options.dryRun
+            ? new DryRunSyncStateRepository(persistentStateStore, stateDbPath)
+            : persistentStateStore
         stateStore.initialize()
 
         List<ChildSyncContext> childContexts = runtimeConfig.sync.childBudgets.collect { ChildBudgetSyncTarget target ->

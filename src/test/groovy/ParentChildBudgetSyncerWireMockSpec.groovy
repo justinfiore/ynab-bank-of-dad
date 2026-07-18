@@ -218,6 +218,61 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
             .withQueryParam('last_knowledge_of_server', equalTo('41')))
     }
 
+    def "three process-like cycles preserve partial success retry failure and apply only incremental work"() {
+        given:
+        stubCommonBudgetDiscovery()
+        stubParentCategories()
+        stubParentTransactions([
+            [id: 'txn-cycle-one-applied', date: '2026-07-10', amount: -1000, memo: 'First', approved: true, category_id: 'cat-child-one-spend', category_name: 'Child One Spend Bank', subtransactions: []],
+            [id: 'txn-cycle-one-retry', date: '2026-07-10', amount: -2000, memo: 'Retry', approved: true, category_id: 'cat-child-one-save', category_name: 'Child One Save Bank', subtransactions: []]
+        ], 100)
+        stubParentTransactions([
+            [id: 'txn-cycle-three-new', date: '2026-07-11', amount: -3000, memo: 'New incremental work', approved: true, category_id: 'cat-child-one-spend', category_name: 'Child One Spend Bank', subtransactions: []]
+        ], 101, 100)
+        stubMoneyMovements([])
+        stubChildAccounts('child-one-budget-id', 'child-one-account-id', 'Child One Checking')
+        stubChildPostSuccessFailureSuccessSuccess('child-one-budget-id')
+
+        when:
+        syncer(false).runOnce(1)
+
+        then:
+        postedTransactions('child-one-budget-id').size() == 2
+        appliedRows()*.status == ['applied', 'failed']
+        runRows()*.status == ['partial']
+        cursorValue('transactions.last_server_knowledge') == null
+
+        when:
+        syncer(false).runOnce(2)
+
+        then:
+        postedTransactions('child-one-budget-id').size() == 3
+        appliedRows()*.status == ['applied', 'failed', 'applied']
+        runRows()*.status == ['partial', 'succeeded']
+        cursorValue('transactions.last_server_knowledge') == 100
+
+        when:
+        syncer(false).runOnce(3)
+
+        then:
+        List posts = postedTransactions('child-one-budget-id')
+        posts.size() == 4
+        posts*.memo == ['YBOD: First', 'YBOD: Retry', 'YBOD: Retry', 'YBOD: New incremental work']
+        posts[1].import_id == posts[2].import_id
+        posts[0].import_id != posts[3].import_id
+        appliedRows()*.status == ['applied', 'failed', 'applied', 'applied']
+        appliedRows().findAll { it.status == 'applied' }*.created_child_transaction_id == ['created-first', 'created-retry', 'created-new']
+        runRows()*.status == ['partial', 'succeeded', 'succeeded']
+        runRows()[0].error_summary.contains('simulated second post failure')
+        runRows()[1..2]*.error_summary == [null, null]
+        tableCount('source_events') == 3
+        tableCount('sync_mappings') == 3
+        tableCount('applied_transactions') == 4
+        cursorValue('transactions.last_server_knowledge') == 101
+        verify(getRequestedFor(urlPathEqualTo('/v1/plans/parent-budget-id/transactions'))
+            .withQueryParam('last_knowledge_of_server', equalTo('100')))
+    }
+
     def "dry run exercises WireMock reads and child account resolution without posting or mutating SQLite state"() {
         given:
         stubCommonBudgetDiscovery()
@@ -263,6 +318,28 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         postedTransactions('child-two-budget-id').size() == 1
         appliedRows()*.status.sort() == ['applied', 'failed']
         appliedRows().find { it.status == 'failed' }.failure_reason.contains('YNAB POST /v1/plans/child-one-budget-id/transactions/bulk failed with status 500')
+        cursorValue('transactions.last_server_knowledge') == null
+    }
+
+    def "successful child post response without a transaction id is recorded as failed"() {
+        given:
+        stubCommonBudgetDiscovery()
+        stubParentCategories()
+        stubParentTransactions([
+            [id: 'txn-missing-created-id', date: '2026-07-01', amount: -1200, memo: 'Shoes', approved: true, category_id: 'cat-child-one-spend', category_name: 'Child One Spend Bank', subtransactions: []]
+        ], 50)
+        stubMoneyMovements([])
+        stubChildAccounts('child-one-budget-id', 'child-one-account-id', 'Child One Checking')
+        stubFor(post(urlEqualTo('/v1/plans/child-one-budget-id/transactions/bulk'))
+            .willReturn(jsonResponse([data: [bulk: [transaction_ids: []]]])))
+
+        when:
+        syncer(false).runOnce(1)
+
+        then:
+        appliedRows()*.status == ['failed']
+        appliedRows()[0].failure_reason.contains('did not include a created transaction ID')
+        runRows()*.status == ['partial']
         cursorValue('transactions.last_server_knowledge') == null
     }
 
@@ -529,7 +606,7 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         childOnePosts.find { it.memo == 'YBOD: From Parent Only to Child One Spend Bank' && it.amount == 500 && it.payee_name == 'From Parent Only' && it.cleared == 'cleared' }
         childOnePosts.find { it.memo == 'YBOD: From Child One Spend Bank to Parent Only' && it.amount == -300 && it.payee_name == 'To Parent Only' && it.cleared == 'cleared' }
         tableCount('sync_mappings') == 2
-        cursorValue('transactions.last_server_knowledge') == null
+        cursorValue('transactions.last_server_knowledge') == 92
     }
 
     private ParentChildBudgetSyncer syncer(boolean dryRun) {
@@ -726,6 +803,29 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
             .willReturn(jsonResponse([data: [bulk: [transaction_ids: transactionIds]]])))
     }
 
+    private void stubChildPostSuccessFailureSuccessSuccess(String budgetId) {
+        String path = "/v1/plans/${budgetId}/transactions/bulk"
+        stubFor(post(urlEqualTo(path))
+            .inScenario('three-cycle-posts')
+            .whenScenarioStateIs('Started')
+            .willReturn(jsonResponse([data: [bulk: [transaction_ids: ['created-first']]]]))
+            .willSetStateTo('second-fails'))
+        stubFor(post(urlEqualTo(path))
+            .inScenario('three-cycle-posts')
+            .whenScenarioStateIs('second-fails')
+            .willReturn(errorResponse(500, 'simulated second post failure'))
+            .willSetStateTo('retry-succeeds'))
+        stubFor(post(urlEqualTo(path))
+            .inScenario('three-cycle-posts')
+            .whenScenarioStateIs('retry-succeeds')
+            .willReturn(jsonResponse([data: [bulk: [transaction_ids: ['created-retry']]]]))
+            .willSetStateTo('new-work-succeeds'))
+        stubFor(post(urlEqualTo(path))
+            .inScenario('three-cycle-posts')
+            .whenScenarioStateIs('new-work-succeeds')
+            .willReturn(jsonResponse([data: [bulk: [transaction_ids: ['created-new']]]])))
+    }
+
     private void stubChildAccountsFailureThenSuccess(String budgetId, String accountId, String accountName) {
         stubFor(get(urlEqualTo("/v1/plans/${budgetId}/accounts"))
             .inScenario('retry-child-account')
@@ -781,10 +881,25 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
 
     private List<Map> appliedRows() {
         withDb { connection ->
-            def rs = connection.createStatement().executeQuery('SELECT status, failure_reason FROM applied_transactions ORDER BY id')
+            def rs = connection.createStatement().executeQuery('SELECT status, failure_reason, created_child_transaction_id FROM applied_transactions ORDER BY id')
             List rows = []
             while (rs.next()) {
-                rows << [status: rs.getString('status'), failure_reason: rs.getString('failure_reason')]
+                rows << [
+                    status: rs.getString('status'),
+                    failure_reason: rs.getString('failure_reason'),
+                    created_child_transaction_id: rs.getString('created_child_transaction_id')
+                ]
+            }
+            rows
+        }
+    }
+
+    private List<Map> runRows() {
+        withDb { connection ->
+            def rs = connection.createStatement().executeQuery('SELECT status, error_summary FROM sync_runs ORDER BY id')
+            List rows = []
+            while (rs.next()) {
+                rows << [status: rs.getString('status'), error_summary: rs.getString('error_summary')]
             }
             rows
         }

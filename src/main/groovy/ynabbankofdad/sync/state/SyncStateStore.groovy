@@ -25,6 +25,30 @@ interface SyncStateRepository {
     void setCursor(String key, Integer value)
 }
 
+class DryRunSyncStateRepository implements SyncStateRepository {
+    private final SyncStateRepository existingState
+    private final Path databasePath
+
+    DryRunSyncStateRepository(SyncStateRepository existingState, String databasePath) {
+        this.existingState = existingState
+        this.databasePath = Paths.get(databasePath)
+    }
+
+    void initialize() {}
+    long startRun(boolean dryRun, int pollingIntervalSeconds, String sourceBudgetId) { -1L }
+    void finishRun(long runId, String status, String errorSummary) {}
+    long recordSourceEvent(ChildTransactionPlan plan) { -1L }
+    long recordMapping(long sourceEventId, ChildTransactionPlan plan, String targetBudgetId, String accountId) { -1L }
+    void recordAppliedTransaction(long mappingId, long runId, String targetBudgetId, String createdChildTransactionId, String status, String failureReason, boolean dryRun) {}
+    boolean hasAppliedIdempotencyKey(String idempotencyKey) {
+        Files.exists(databasePath) && existingState.hasAppliedIdempotencyKey(idempotencyKey)
+    }
+    Integer getCursor(String key) {
+        Files.exists(databasePath) ? existingState.getCursor(key) : null
+    }
+    void setCursor(String key, Integer value) {}
+}
+
 class SyncStateStore implements SyncStateRepository {
     final String databasePath
 

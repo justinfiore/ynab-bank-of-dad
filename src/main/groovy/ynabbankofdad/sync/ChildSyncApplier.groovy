@@ -35,19 +35,32 @@ class ChildSyncApplier {
     }
 
     ChildApplyResult applyChildPlans(long runId, ChildSyncContext childContext, List<ChildTransactionPlan> childPlans) {
+        String childKey = childContext?.target?.childKey
+        String budgetId
         try {
-            String budgetId = childContext.budgetId ?: childContext.repository.getLatestBudgetId(childContext.target.budgetName)
+            budgetId = childContext.budgetId ?: childContext.repository.getLatestBudgetId(childContext.target.budgetName)
             childContext.budgetId = budgetId
+        } catch (Exception ex) {
+            log.error('Child sync target {} failed during budget resolution: {}', childKey, ex.message, ex)
+            childPlans.each { recordFailedPlan(runId, childContext, it, null, null, ex) }
+            return new ChildApplyResult(childKey, 0, 0, childPlans.size(), ["${childKey}: ${ex.message}"])
+        }
 
-            int applied = 0
-            int skipped = 0
-            childPlans.each { ChildTransactionPlan provisionalPlan ->
-                String accountId = childContext.resolveAccountId(provisionalPlan.childAccountName)
+        int applied = 0
+        int skipped = 0
+        int failed = 0
+        List<String> failures = []
+        childPlans.each { ChildTransactionPlan provisionalPlan ->
+            String accountId
+            ChildTransactionPlan plan = provisionalPlan
+            Long mappingId
+            try {
+                accountId = childContext.resolveAccountId(provisionalPlan.childAccountName)
                 if (!accountId) {
                     accountId = childContext.repository.getAccountId(budgetId, provisionalPlan.childAccountName)
                     childContext.cacheAccountId(provisionalPlan.childAccountName, accountId)
                 }
-                ChildTransactionPlan plan = ChildSyncIdempotency.withKey(
+                plan = ChildSyncIdempotency.withKey(
                     provisionalPlan,
                     ChildSyncIdempotency.buildKey(provisionalPlan, accountId)
                 )
@@ -69,29 +82,47 @@ class ChildSyncApplier {
                 }
 
                 long sourceEventId = stateStore.recordSourceEvent(plan)
-                long mappingId = stateStore.recordMapping(sourceEventId, plan, budgetId, accountId)
+                mappingId = stateStore.recordMapping(sourceEventId, plan, budgetId, accountId)
                 def response = childContext.repository.postTransactions(budgetId, [transaction])
                 String createdTransactionId = payloadFactory.extractCreatedTransactionId(response)
+                if (!createdTransactionId) {
+                    throw new IllegalStateException('YNAB child transaction response did not include a created transaction ID')
+                }
                 stateStore.recordAppliedTransaction(mappingId, runId, budgetId, createdTransactionId, 'applied', null, false)
                 log.info('Posted child transaction for {} mapping {} account {}: {}', childContext.target.childKey, plan.mappingKey, plan.childAccountName, createdTransactionId)
                 applied++
+            } catch (Exception ex) {
+                failed++
+                failures << "${childKey}: ${ex.message}"
+                log.error('Child sync target {} plan {} failed: {}', childKey, provisionalPlan.mappingKey, ex.message, ex)
+                recordFailedPlan(runId, childContext, plan, accountId, mappingId, ex)
             }
-            return new ChildApplyResult(childContext.target.childKey, applied, skipped, 0, [])
-        } catch (Exception ex) {
-            log.error('Child sync target {} failed: {}', childContext?.target?.childKey, ex.message, ex)
-            if (!dryRun && runId > 0) {
-                childPlans.each { ChildTransactionPlan provisionalPlan ->
-                    String accountId = childContext?.resolveAccountId(provisionalPlan.childAccountName)
-                    ChildTransactionPlan plan = accountId
-                        ? ChildSyncIdempotency.withKey(provisionalPlan, ChildSyncIdempotency.buildKey(provisionalPlan, accountId))
-                        : provisionalPlan
-                    long sourceEventId = stateStore.recordSourceEvent(plan)
-                    String targetBudgetId = childContext?.budgetId ?: plan.targetBudgetName
-                    long mappingId = stateStore.recordMapping(sourceEventId, plan, targetBudgetId, accountId)
-                    stateStore.recordAppliedTransaction(mappingId, runId, targetBudgetId, null, 'failed', ex.message, false)
-                }
-            }
-            return new ChildApplyResult(childContext?.target?.childKey, 0, 0, childPlans.size(), ["${childContext?.target?.childKey}: ${ex.message}"])
+        }
+        new ChildApplyResult(childKey, applied, skipped, failed, failures)
+    }
+
+    private void recordFailedPlan(
+        long runId,
+        ChildSyncContext childContext,
+        ChildTransactionPlan plan,
+        String accountId,
+        Long existingMappingId,
+        Exception failure
+    ) {
+        if (dryRun || runId <= 0) {
+            return
+        }
+        try {
+            long mappingId = existingMappingId ?: stateStore.recordMapping(
+                stateStore.recordSourceEvent(plan),
+                plan,
+                childContext?.budgetId ?: plan.targetBudgetName,
+                accountId
+            )
+            String targetBudgetId = childContext?.budgetId ?: plan.targetBudgetName
+            stateStore.recordAppliedTransaction(mappingId, runId, targetBudgetId, null, 'failed', failure.message, false)
+        } catch (Exception stateFailure) {
+            log.error('Could not record failed child sync plan {}: {}', plan.mappingKey, stateFailure.message, stateFailure)
         }
     }
 }

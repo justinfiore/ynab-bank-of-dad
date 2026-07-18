@@ -223,7 +223,10 @@ class RuntimeConfig {
 
     private static Integer requirePositiveInteger(Map raw, String key, String parentKey) {
         def value = raw[key]
-        if (!(value instanceof Number) || (value as Number).intValue() <= 0) {
+        if (!(value instanceof Number)
+            || (value as Number).doubleValue() % 1 != 0
+            || (value as Number).longValue() <= 0
+            || (value as Number).longValue() > Integer.MAX_VALUE) {
             throw new IllegalArgumentException("Config key '${formatKey(parentKey, key)}' must be a positive integer")
         }
         (value as Number).intValue()
@@ -316,6 +319,7 @@ class SyncConfig {
             }
             target.validate("sync.childBudgets[${index}]")
         }
+        logging.validate()
     }
 }
 

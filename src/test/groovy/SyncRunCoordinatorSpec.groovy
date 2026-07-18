@@ -36,6 +36,34 @@ class SyncRunCoordinatorSpec extends Specification {
         state.finished == [[runId: 7L, status: 'partial', errorSummary: 'child-one: failed']]
         !state.cursors.containsKey(SyncRunCoordinator.TRANSACTION_CURSOR_KEY)
     }
+
+    def "failed run is finalized with the exception message"() {
+        given:
+        def state = new InMemorySyncStateRepository()
+        def coordinator = new SyncRunCoordinator(state, new FakeYnabBudgetRepository(), false)
+
+        when:
+        coordinator.failRun(9L, new IllegalStateException('parent read failed'))
+
+        then:
+        state.finished == [[runId: 9L, status: 'failed', errorSummary: 'parent read failed']]
+    }
+
+    def "dry run and invalid run ids never persist completion or cursors"() {
+        given:
+        def state = new InMemorySyncStateRepository()
+        def transactions = [new ParentTransactionEvent('txn-1', '2026-07-01', -100, null, true, 12, null, null, [])]
+
+        when:
+        new SyncRunCoordinator(state, new FakeYnabBudgetRepository(), true)
+            .finishRun(7L, SyncRunResult.empty(), transactions)
+        new SyncRunCoordinator(state, new FakeYnabBudgetRepository(), false)
+            .finishRun(0L, SyncRunResult.empty(), transactions)
+
+        then:
+        state.finished.empty
+        state.cursors.isEmpty()
+    }
 }
 
 class InMemorySyncStateRepository implements SyncStateRepository {

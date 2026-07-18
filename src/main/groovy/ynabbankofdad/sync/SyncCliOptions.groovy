@@ -32,7 +32,12 @@ class SyncCliOptions {
                     i += 2
                     break
                 case '--max-cycles':
-                    options.maxCycles = Integer.parseInt(requireValue(args, i, arg))
+                    String maxCyclesValue = requireValue(args, i, arg)
+                    try {
+                        options.maxCycles = Integer.parseInt(maxCyclesValue)
+                    } catch (NumberFormatException ex) {
+                        throw new IllegalArgumentException("--max-cycles must be a positive integer: ${maxCyclesValue}", ex)
+                    }
                     if (options.maxCycles <= 0) {
                         throw new IllegalArgumentException('--max-cycles must be positive')
                     }
@@ -58,6 +63,10 @@ class SyncCliOptions {
         if (index + 1 >= args.length) {
             throw new IllegalArgumentException("Missing value for ${flag}")
         }
-        args[index + 1]
+        String value = args[index + 1]
+        if (!value?.trim()) {
+            throw new IllegalArgumentException("Missing value for ${flag}")
+        }
+        value
     }
 }

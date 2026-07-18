@@ -27,6 +27,33 @@ class ParentChildBudgetSyncerSpec extends Specification {
         options.maxCycles == 2
     }
 
+    def "cli options provide safe defaults and support short help flags"() {
+        expect:
+        SyncCliOptions.parse([] as String[]).with {
+            !dryRun && !help && configPath == 'config.yaml' && syncStateDbPath == null && maxCycles == Integer.MAX_VALUE
+        }
+        SyncCliOptions.parse(['-h'] as String[]).help
+        SyncCliOptions.parse(['-c', 'other.yaml'] as String[]).configPath == 'other.yaml'
+    }
+
+    def "cli options reject unknown missing blank and invalid values"() {
+        when:
+        SyncCliOptions.parse(arguments as String[])
+
+        then:
+        def ex = thrown(IllegalArgumentException)
+        ex.message.contains(expected)
+
+        where:
+        arguments                       | expected
+        ['--unknown']                    | 'Unknown argument'
+        ['--config']                     | 'Missing value for --config'
+        ['--sync-state-db-path', ' ']    | 'Missing value for --sync-state-db-path'
+        ['--max-cycles', 'abc']          | '--max-cycles must be a positive integer'
+        ['--max-cycles', '0']            | '--max-cycles must be positive'
+        ['--max-cycles', '2147483648']   | '--max-cycles must be a positive integer'
+    }
+
     def "state store initializes sqlite schema and records applied transactions"() {
         given:
         def dbPath = tempDir.resolve('syncstate.db').toString()
@@ -211,6 +238,40 @@ class ParentChildBudgetSyncerSpec extends Specification {
         then:
         syncer.stateDbPath.endsWith('override-state.db')
         syncer.childContexts.size() == 2
+    }
+
+    def "fromConfig dry run does not create a SQLite file or parent directory"() {
+        given:
+        def dbPath = tempDir.resolve('missing-parent').resolve('dry-run.db')
+        def config = new RuntimeConfig(sync: sampleSyncConfig(dbPath.toString()))
+        def options = SyncCliOptions.parse(['--dry-run'] as String[])
+
+        when:
+        def syncer = ParentChildBudgetSyncer.fromConfig(config, options, [PARENT_TOKEN: 'parent-token', CHILD_ONE_TOKEN: 'one-token', CHILD_TWO_TOKEN: 'two-token'])
+        syncer.stateStore.initialize()
+
+        then:
+        !dbPath.parent.toFile().exists()
+        !dbPath.toFile().exists()
+    }
+
+    def "fromConfig dry run reads an existing cursor without mutating state"() {
+        given:
+        def dbPath = tempDir.resolve('existing-dry-run.db')
+        def persistentStore = new SyncStateStore(dbPath.toString())
+        persistentStore.initialize()
+        persistentStore.setCursor(SyncRunCoordinator.TRANSACTION_CURSOR_KEY, 77)
+        def config = new RuntimeConfig(sync: sampleSyncConfig(dbPath.toString()))
+        def options = SyncCliOptions.parse(['--dry-run'] as String[])
+
+        when:
+        def syncer = ParentChildBudgetSyncer.fromConfig(config, options, [PARENT_TOKEN: 'parent-token', CHILD_ONE_TOKEN: 'one-token', CHILD_TWO_TOKEN: 'two-token'])
+        Integer cursor = syncer.stateStore.getCursor(SyncRunCoordinator.TRANSACTION_CURSOR_KEY)
+        syncer.stateStore.setCursor(SyncRunCoordinator.TRANSACTION_CURSOR_KEY, 88)
+
+        then:
+        cursor == 77
+        persistentStore.getCursor(SyncRunCoordinator.TRANSACTION_CURSOR_KEY) == 77
     }
 
     def "fromConfig throws when required token environment value is missing or blank"() {
