@@ -5,11 +5,15 @@ import ynabbankofdad.ynab.*
 import ynabbankofdad.sync.*
 import ynabbankofdad.sync.model.*
 import ynabbankofdad.sync.state.*
+import ch.qos.logback.classic.Logger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
 import com.github.tomakehurst.wiremock.WireMockServer
 import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
 import spock.lang.Specification
 import spock.lang.TempDir
+import org.slf4j.LoggerFactory
 
 import java.nio.file.Path
 import java.sql.DriverManager
@@ -82,6 +86,35 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         tableCount('sync_mappings') == 5
         tableCount('applied_transactions') == 5
         cursorValue('transactions.last_server_knowledge') == 41
+    }
+
+    def "live child post uses custom memo decoration and cleared status"() {
+        given:
+        stubCommonBudgetDiscovery()
+        stubParentCategories()
+        stubParentTransactions([
+            [id: 'txn-custom-memo', date: '2026-07-01', amount: -1200, memo: 'Shoes', approved: true, category_id: 'cat-child-one-spend', category_name: 'Child One Spend Bank', subtransactions: []]
+        ], 42)
+        stubMoneyMovements([])
+        stubChildAccounts('child-one-budget-id', 'child-one-account-id', 'Child One Checking')
+        stubChildPost('child-one-budget-id', ['child-one-created-custom'])
+
+        when:
+        syncer(false, syncConfig('[Kid] ', ' (auto)')).runOnce(1)
+
+        then:
+        postedTransactions('child-one-budget-id') == [[
+            account_id: 'child-one-account-id',
+            date: '2026-07-01',
+            amount: -1200,
+            payee_name: null,
+            category_id: null,
+            memo: '[Kid] Shoes (auto)',
+            cleared: 'cleared',
+            approved: false,
+            import_id: postedTransactions('child-one-budget-id')[0].import_id
+        ]]
+        tableCount('applied_transactions') == 1
     }
 
     def "four child budgets route literals regex split and money movements across multiple child accounts"() {
@@ -273,7 +306,7 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
             .withQueryParam('last_knowledge_of_server', equalTo('100')))
     }
 
-    def "dry run exercises WireMock reads and child account resolution without posting or mutating SQLite state"() {
+    def "simulated dry run plans custom decorated cleared payload without posting or mutating SQLite state"() {
         given:
         stubCommonBudgetDiscovery()
         stubParentCategories()
@@ -282,18 +315,30 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         ], 41)
         stubMoneyMovements([])
         stubChildAccounts('child-one-budget-id', 'child-one-account-id', 'Child One Checking')
-        def syncer = syncer(true)
+        Logger logger = (Logger) LoggerFactory.getLogger(ChildSyncApplier)
+        def appender = new ListAppender<ILoggingEvent>()
+        appender.start()
+        logger.addAppender(appender)
+        def syncer = syncer(true, syncConfig('[Kid] ', ' (auto)'))
 
         when:
         syncer.runOnce(1)
 
         then:
         verify(0, postRequestedFor(urlEqualTo('/v1/plans/child-one-budget-id/transactions/bulk')))
+        appender.list*.formattedMessage.any {
+            it.contains('[DRY RUN] child transaction for child-one') &&
+                it.contains('"memo":"[Kid] Shoes (auto)"') &&
+                it.contains('"cleared":"cleared"')
+        }
         tableCount('sync_runs') == 0
         tableCount('source_events') == 0
         tableCount('sync_mappings') == 0
         tableCount('applied_transactions') == 0
         cursorValue('transactions.last_server_knowledge') == null
+
+        cleanup:
+        logger.detachAppender(appender)
     }
 
     def "child API failure records failed applied transaction state and continues other child targets"() {
@@ -610,17 +655,21 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
     }
 
     private ParentChildBudgetSyncer syncer(boolean dryRun) {
+        syncer(dryRun, syncConfig())
+    }
+
+    private SyncConfig syncConfig(String memoPrefix = 'YBOD: ', String memoSuffix = '') {
         String dbPath = tempDir.resolve('syncstate-wiremock.db').toString()
-        syncer(dryRun, new SyncConfig(
+        new SyncConfig(
             new BudgetRef('Parent Budget', 'YNAB_PARENT_TOKEN'),
             [
-                childTarget('child-one', 'Child One Budget', 'YNAB_CHILD_ONE_TOKEN', [['spend-save', ['Child One Spend Bank', 'Child One Save Bank'], 'Child One Checking']]),
+                childTarget('child-one', 'Child One Budget', 'YNAB_CHILD_ONE_TOKEN', [['spend-save', ['Child One Spend Bank', 'Child One Save Bank'], 'Child One Checking']], memoPrefix, memoSuffix),
                 childTarget('child-two', 'Child Two Budget', 'YNAB_CHILD_TWO_TOKEN', [['spend', ['Child Two Spend Bank'], 'Child Two Checking']])
             ],
             300,
             new SyncLoggingConfig(tempDir.resolve('parent-child-sync.log').toString(), 'INFO', 7, 10),
             new SyncStateConfig(dbPath, 45, 45)
-        ))
+        )
     }
 
     private ParentChildBudgetSyncer syncer(boolean dryRun, SyncConfig syncConfig) {
@@ -641,7 +690,14 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         )
     }
 
-    private static ChildBudgetSyncTarget childTarget(String childKey, String budgetName, String tokenEnvVarName, List mappingRows) {
+    private static ChildBudgetSyncTarget childTarget(
+        String childKey,
+        String budgetName,
+        String tokenEnvVarName,
+        List mappingRows,
+        String memoPrefix = 'YBOD: ',
+        String memoSuffix = ''
+    ) {
         new ChildBudgetSyncTarget(
             childKey: childKey,
             budgetName: budgetName,
@@ -653,7 +709,9 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
                     }
                     new ParentCategoryNameMatcher(matcher as String, false)
                 }, row[2] as String)
-            }
+            },
+            memoPrefix: memoPrefix,
+            memoSuffix: memoSuffix
         )
     }
 
