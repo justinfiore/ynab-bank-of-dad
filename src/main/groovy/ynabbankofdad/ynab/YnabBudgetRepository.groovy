@@ -165,7 +165,7 @@ class YnabBudgetRepository {
             transactions.size(),
             budgetId,
             response.statusCode,
-            response.bodyText == null ? 'null' : JsonOutput.prettyPrint(JsonOutput.toJson(response.body))
+            response.bodyText == null ? 'null' : JsonOutput.prettyPrint(JsonOutput.toJson(YnabLogFormatter.formatAmounts(response.body)))
         )
         response.body
     }

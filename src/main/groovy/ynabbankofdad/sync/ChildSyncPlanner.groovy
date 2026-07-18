@@ -188,7 +188,7 @@ class ChildSyncPlanner {
                 amount: amount,
                 memo: memo,
                 payeeName: explicitPayeeName,
-                approved: true
+                approved: false
             )
         }
     }

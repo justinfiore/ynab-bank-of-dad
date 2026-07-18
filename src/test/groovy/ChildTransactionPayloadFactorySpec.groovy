@@ -21,7 +21,7 @@ class ChildTransactionPayloadFactorySpec extends Specification {
         first.category_id == null
         first.memo == 'YBOD: Memo'
         first.cleared == 'cleared'
-        first.approved
+        !first.approved
         first.import_id == second.import_id
         first.import_id.startsWith('PCBS:20260701:1200:')
     }
@@ -77,7 +77,7 @@ class ChildTransactionPayloadFactorySpec extends Specification {
         new ChildTransactionPlan(
             'parent-budget', 'child-one', 'Child Budget', 'spend', 'Child One Spend Bank',
             'transaction', 'txn-1', null, null, null, idempotencyKey, 'Child Checking',
-            '2026-07-01', -1200, 'Memo', 'Payee', true
+            '2026-07-01', -1200, 'Memo', 'Payee', false
         )
     }
 }

@@ -99,6 +99,7 @@ class ParentChildBudgetSyncerSpec extends Specification {
         plans.findAll { it.eventType == 'subtransaction' }*.parentSubtransactionId.toSet() == ['sub-1', 'sub-2'] as Set
         plans.findAll { it.eventType == 'money_movement' }.size() == 2
         plans*.targetChildKey.toSet() == ['child-one', 'child-two'] as Set
+        plans.every { !it.approved }
     }
 
     def "dry-run applyPlans does not persist sqlite mappings"() {
