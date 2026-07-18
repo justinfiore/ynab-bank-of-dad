@@ -127,8 +127,8 @@ class RuntimeConfig {
                 budgetName: requireString(item, 'budgetName', itemKey),
                 tokenEnvVarName: requireString(item, 'tokenEnvVarName', itemKey),
                 accountMappings: requireAccountMappings(item, 'accountMappings', itemKey),
-                memoPrefix: item.containsKey('memoPrefix') ? item.memoPrefix : "YBOD: ",
-                memoSuffix: item.containsKey('memoSuffix') ? item.memoSuffix : ""
+                memoPrefix: item.containsKey('memoPrefix') ? requireStringAllowEmpty(item, 'memoPrefix', itemKey) : "YBOD: ",
+                memoSuffix: item.containsKey('memoSuffix') ? requireStringAllowEmpty(item, 'memoSuffix', itemKey) : ""
             )
         }
     }
@@ -209,6 +209,14 @@ class RuntimeConfig {
         def value = raw[key]
         if (!(value instanceof String) || value.trim().isEmpty()) {
             throw new IllegalArgumentException("Config key '${formatKey(parentKey, key)}' must be a non-empty string")
+        }
+        value
+    }
+
+    private static String requireStringAllowEmpty(Map raw, String key, String parentKey) {
+        def value = raw[key]
+        if (!(value instanceof String)) {
+            throw new IllegalArgumentException("Config key '${formatKey(parentKey, key)}' must be a string")
         }
         value
     }

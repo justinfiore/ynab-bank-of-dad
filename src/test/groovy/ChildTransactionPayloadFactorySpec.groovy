@@ -50,6 +50,23 @@ class ChildTransactionPayloadFactorySpec extends Specification {
         result.cleared == 'cleared'
     }
 
+    def "buildTransaction trims the final decorated memo including an empty source memo"() {
+        given:
+        def source = plan('parent|child-one|transaction|txn-1||||cat-1|-1200')
+        def emptyMemoPlan = new ChildTransactionPlan(
+            source.sourceBudgetId, source.targetChildKey, source.targetBudgetName, source.mappingKey,
+            source.parentCategoryName, source.eventType, source.parentTransactionId,
+            source.parentSubtransactionId, source.moneyMovementId, source.moneyMovementGroupId,
+            source.idempotencyKey, source.childAccountName, source.date, source.amount,
+            null, source.payeeName, source.approved
+        )
+
+        expect:
+        factory.buildTransaction(source, 'acct-1', '  [Kid] ', ' (auto)  ').memo == '[Kid] Memo (auto)'
+        factory.buildTransaction(emptyMemoPlan, 'acct-1', '  [Kid] ', ' (auto)  ').memo == '[Kid]  (auto)'
+        factory.buildTransaction(emptyMemoPlan, 'acct-1', '  ', '  ').memo == ''
+    }
+
     def "different idempotency keys produce different import ids"() {
         expect:
         factory.buildImportId(plan('parent|child-one|transaction|txn-1||||cat-1|-1200')) !=

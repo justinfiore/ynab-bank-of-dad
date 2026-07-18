@@ -144,6 +144,34 @@ sync:
         config.sync.childBudgets[1].memoSuffix == ' (auto)'
     }
 
+    def "sync childBudgets use memo decoration defaults when fields are omitted"() {
+        when:
+        def config = RuntimeConfig.fromMap(validConfigMap())
+
+        then:
+        config.sync.childBudgets[0].memoPrefix == 'YBOD: '
+        config.sync.childBudgets[0].memoSuffix == ''
+    }
+
+    def "sync childBudgets reject non-string memo decoration with full config paths"() {
+        given:
+        def raw = validConfigMap()
+        raw.sync.childBudgets[0][field] = invalidValue
+
+        when:
+        RuntimeConfig.fromMap(raw)
+
+        then:
+        def ex = thrown(IllegalArgumentException)
+        ex.message == "Config key 'sync.childBudgets[0].${field}' must be a string"
+
+        where:
+        field        | invalidValue
+        'memoPrefix' | 123
+        'memoPrefix' | null
+        'memoSuffix' | false
+    }
+
     def "load throws when config file does not exist"() {
         when:
         RuntimeConfig.load(tempDir.resolve('missing.yaml').toString())

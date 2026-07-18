@@ -38,7 +38,7 @@ The standalone syncer:
 - polls the configured parent budget on an interval
 - reads approved parent transactions plus recent money movements
 - maps configured parent categories to child-budget targets
-- creates child-budget transactions with copied date/memo/amount, no child category, and derived payee/memo text for money movements
+- creates cleared child-budget transactions with copied date/amount, no child category, derived payee/memo text for money movements, and per-child memo prefix/suffix decoration (defaults `"YBOD: "` / `""`; final memo is trimmed)
 - writes SQLite state to track sync runs, source fingerprints, idempotency mappings, applied child transactions, and cursors
 - supports `--dry-run`, `--sync-state-db-path`, `--max-cycles`, and explicit `--config` handling
 
@@ -173,6 +173,7 @@ export YNAB_CHILD_TWO_TOKEN='child-two-token'
 - `sync_cursors` stores incremental read cursors such as transaction server knowledge
 - the syncer bootstrap writes to the configured rolling log file path such as `logs/parent-child-sync.log`
 - dry-run mode intentionally suppresses live YNAB writes and SQLite mutation while still exercising config loading, planning, and logging/bootstrap behavior
+- memo decoration and cleared status apply only to child transactions created by the syncer, not parent-budget or allowance transactions
 
 ## Helper scripts
 
@@ -220,6 +221,7 @@ The test suite currently uses:
 - Spock for unit/spec-style testing
 - WireMock for simulated YNAB HTTP integration testing
 - real throwaway SQLite integration tests for sync-state persistence behavior
+- credential-free WireMock coverage for default/custom child memo decoration, cleared payloads, and dry-run no-write behavior
 - focused tests around the repo-local JDK `HttpClient` wrapper
 - script-contract tests for wrapper behavior
 

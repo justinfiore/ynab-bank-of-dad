@@ -4,6 +4,8 @@ This guide is the step-by-step checklist to use when connecting the parent/child
 
 The syncer can create **real child-budget transactions** when it is run without `--dry-run`. Work through the dry-run scenarios first, then do only a small single-cycle live verification before considering continuous live polling.
 
+The automated WireMock suite verifies default/custom memo decoration, `cleared: "cleared"`, and dry-run no-write behavior without live credentials. Run `./gradlew testAll` before using this guide; manual dry runs remain an operator safety check for real names and mappings, not a development verification requirement.
+
 ## What this guide covers
 
 - Preparing real parent and child budget configuration
@@ -65,6 +67,8 @@ sync:
     - childKey: child-one
       budgetName: Your Child One Budget Name
       tokenEnvVarName: YNAB_CHILD_ONE_TOKEN
+      memoPrefix: "[Child One] "
+      memoSuffix: " (synced)"
       accountMappings:
         - mappingKey: spend
           parentCategoryNames:
@@ -96,6 +100,8 @@ For every child, check:
 - `childKey` is stable and unique, such as `sam`, `alex`, or `child-one`.
 - `budgetName` exactly matches the YNAB child budget name.
 - `tokenEnvVarName` is the **name** of the env var that will hold that child's token.
+- `memoPrefix` and `memoSuffix` are optional strings. They default to `"YBOD: "` and `""`; empty strings are allowed.
+- The final decorated memo is trimmed. Decoration and cleared status apply only to synced child transactions.
 - `accountMappings[*].mappingKey` values are stable and unique within that child.
 - `accountMappings[*].parentCategoryNames[*].name` entries exactly match parent categories unless `regex: true` is set.
 - `accountMappings[*].childAccountName` exactly matches the child account that should receive that mapping's mirrored transactions.
@@ -222,6 +228,8 @@ Pass criteria:
 - The planned date matches the parent transaction date.
 - The planned amount matches the parent transaction amount.
 - The planned memo preserves the source memo where available.
+- The planned memo has the configured prefix/suffix and no leading or trailing whitespace after final trimming.
+- The planned payload contains `cleared: "cleared"`.
 - The planned child category is unset/unspecified.
 - No actual child transaction is created.
 
@@ -441,6 +449,7 @@ Pass criteria:
 
 - Exactly one new child transaction appears in the expected child budget/account.
 - Date, amount, and memo match the source transaction behavior expected from dry run.
+- The memo has the configured final-trimmed decoration and the child transaction is cleared.
 - Child transaction category is unset/blank.
 - Logs include `Posted child transaction for <childKey>` and a created transaction ID.
 - `$LIVE_STATE_DB` exists.

@@ -56,6 +56,8 @@ At runtime, the syncer:
 7. posts child-budget transactions unless `--dry-run` is enabled
 8. writes replay-protection and run-history state into SQLite unless `--dry-run` is enabled
 
+Created child transactions are sent as cleared. Their memos use each child target's optional prefix/suffix configuration; the complete decorated memo is trimmed. This does not affect parent-budget or allowance transactions.
+
 Because of this, exact names also matter for:
 - `sync.parentBudget.budgetName`
 - each `sync.childBudgets[*].budgetName`
@@ -505,6 +507,8 @@ sync:
     - childKey: child-one
       budgetName: Demo Child One Budget
       tokenEnvVarName: YNAB_CHILD_ONE_TOKEN
+      memoPrefix: "[Child One] "
+      memoSuffix: " (synced)"
       accountMappings:
         - mappingKey: spend
           parentCategoryNames:
@@ -522,6 +526,8 @@ Field guidance:
 - `childKey` — stable internal identifier used for grouping and replay protection; must be unique
 - `budgetName` — exact YNAB child budget name
 - `tokenEnvVarName` — env var name that holds this child budget’s token
+- `memoPrefix` — optional string prepended to synced child memos; defaults to `"YBOD: "`; empty string disables the prefix
+- `memoSuffix` — optional string appended to synced child memos; defaults to `""`; empty strings are allowed
 - `accountMappings` — non-empty list of parent-category-to-child-account mappings for this child budget
 - `accountMappings[*].mappingKey` — stable unique key within the child target, used in logs/state/idempotency
 - `accountMappings[*].parentCategoryNames[*].name` — parent-budget category matcher; literal exact match by default
@@ -534,6 +540,8 @@ Notes:
 - one mapping can list multiple literal and/or regex parent category matchers for the same child account
 - one child budget can define multiple mappings to different child accounts
 - money movements can fan out when both the source and destination categories belong to configured mappings
+- the final `memoPrefix + source memo + memoSuffix` value is trimmed, including when the source memo is empty
+- these memo settings and `cleared: "cleared"` apply only to transactions created in child budgets by the syncer
 
 ### `sync.pollingIntervalSeconds`
 How often the continuous syncer wakes up between cycles.
@@ -769,6 +777,8 @@ Before a live syncer rollout:
 5. inspect the planned child mutations, log path, and SQLite path
 6. optionally run a single-cycle live verification
 7. only then allow continuous polling
+
+`testAll` includes credential-free WireMock coverage for default/custom memo decoration, cleared child payloads, and a simulated dry run that performs no child POST or SQLite mutation.
 
 Example:
 
