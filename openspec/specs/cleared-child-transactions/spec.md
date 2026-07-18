@@ -1,4 +1,10 @@
-## ADDED Requirements
+# Cleared Child Transactions
+
+## Purpose
+
+Define memo decoration and cleared-status behavior for transactions created in child budgets by the parent-child sync.
+
+## Requirements
 
 ### Requirement: Child budgets support per-child memo prefix and suffix configuration
 Each `sync.childBudgets[]` entry SHALL accept optional `memoPrefix` and `memoSuffix` string fields.
@@ -35,7 +41,7 @@ This applies to allowance/interest transfers, money movements, and any other pla
 - **THEN** YNAB is expected to offer or perform auto-matching (observable via YNAB UI behavior)
 
 ### Requirement: Config validation accepts new memo fields without breaking existing configs
-Existing `sync.childBudgets[]` entries that omit `memoPrefix`/`memoSuffix` SHALL continue to validate and operate exactly as before.
+Existing `sync.childBudgets[]` entries that omit `memoPrefix`/`memoSuffix` SHALL continue to validate and use the documented defaults.
 New fields SHALL be validated only for type (string) if present; empty strings are allowed and mean "no prefix/suffix".
 
 #### Scenario: Legacy config loads successfully
