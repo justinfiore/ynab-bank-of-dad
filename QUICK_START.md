@@ -8,6 +8,8 @@ This repo now has **two** safe-first flows:
 
 For the full field-by-field configuration reference, active allowance modeling, and syncer-specific YAML guidance, see [CONFIGURATION.md](CONFIGURATION.md).
 
+Before adopting the proposed transaction edit/deletion reconciliation behavior, read [PARENT_TRANSACTION_RECONCILIATION.md](PARENT_TRANSACTION_RECONCILIATION.md). It explains destructive cases, split transitions, retry behavior, migration cleanup, and the limits of money-movement change detection. That behavior is currently under review and is not implemented in the released syncer yet.
+
 ## 1. Install prerequisites
 
 1. Install Java JDK 25.

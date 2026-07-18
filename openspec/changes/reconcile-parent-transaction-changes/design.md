@@ -4,7 +4,9 @@ The syncer currently derives a create-only `ChildTransactionPlan` and uses an id
 
 This change makes the parent budget authoritative for transaction existence, date, amount, payee, and routing. Child memos are initialized from the parent with the configured prefix/suffix, then remain child-owned. Child transactions remain cleared and are reset to unapproved whenever an automatic update occurs. The implementation must preserve independent child-token failure isolation, dry-run safety, restart-safe retries, and the Java 25 / Gradle 9 / Groovy 5 baseline.
 
-The active `cleared-transactions` change overlaps child payload behavior and must be completed before implementation begins. Current YNAB API request and response contracts for transaction delta tombstones, lookup, update, and deletion must be checked against the official documentation before repository methods or fixtures are finalized.
+The `cleared-transactions` change overlaps child payload behavior and must be completed before implementation begins. Current YNAB API request and response contracts for transaction delta tombstones, lookup, update, and deletion must be checked against the official documentation before repository methods or fixtures are finalized.
+
+Money movements have a weaker official contract than transactions. The current YNAB API exposes a stable movement ID, optional group ID, movement fields, and response server knowledge, but no deletion tombstone, revision timestamp, individual lookup, or mutation endpoint. Official prose says money-movement endpoints support delta requests, while the current OpenAPI operation omits the request cursor parameter. This design therefore supports observed same-ID changes from complete snapshots and does not infer deletion from absence.
 
 ## Goals / Non-Goals
 
@@ -14,9 +16,11 @@ The active `cleared-transactions` change overlaps child payload behavior and mus
 - Apply authoritative date, amount, payee, approval, cleared-state, and routing changes while preserving child memo edits.
 - Remove child mirrors when parent activity is deleted, unapproved, unmapped, or removed from a split.
 - Support ordinary-to-split, split-to-ordinary, split-add, split-edit, and split-remove transitions.
+- Reconcile observed same-ID money-movement changes without inventing unsupported deletion semantics.
 - Persist source revisions, current child mirror correlations, and retryable mutation operations.
 - Migrate populated legacy state without discarding audit history and clean up known duplicate child mirrors through the normal operation pipeline.
 - Prevent cursor advancement until all derived remote operations have succeeded or reached an idempotent already-complete result.
+- Provide complete human-facing semantics documentation and require both unit and integration coverage for every semantic.
 
 **Non-Goals:**
 
@@ -24,7 +28,8 @@ The active `cleared-transactions` change overlaps child payload behavior and mus
 - Synchronizing parent memo edits after initial child transaction creation.
 - Periodically scanning all child budgets for manual edits or deletions when no parent delta is received.
 - Retroactively rerouting all history solely because mapping configuration changed.
-- Reconciliation of money-movement edits or expiration behavior in this change.
+- Deleting child mirrors merely because a money movement is absent from a later API response or falls outside the configured local lookback.
+- Assuming that a replacement movement ID, group ID, or `moved_at` value proves an edit or deletion when YNAB does not document that relationship.
 - Automatically changing child categories, which remain unset.
 
 ## Decisions
@@ -47,7 +52,7 @@ For every transaction returned in a delta, reconciliation derives the complete s
 - existing only: delete;
 - equivalent existing and desired state: no-op.
 
-When a parent transaction has subtransactions, the desired set is keyed by stable subtransaction ID. This allows removed components and ordinary/split transitions to be detected without inferring deletion from absence in unrelated API reads.
+When a parent transaction has subtransactions, the desired set is keyed by stable subtransaction ID. Before absence is interpreted as split-component removal, the implementation must verify that the delta contains the complete current split composition or fetch the full transaction by ID. This allows removed components and ordinary/split transitions to be detected without treating a partial delta as complete state.
 
 Alternative considered: emit ad hoc delete flags from the existing planner. Rejected because it would not provide a complete-set comparison or reliable transition behavior.
 
@@ -67,26 +72,28 @@ Alternative considered: reverse or queue removals for review. Rejected because t
 
 ### 5. Child disappearance is repaired when reconciliation observes the source
 
-If an update targets a recorded child transaction that is no longer present, the operation transitions to create and stores the replacement child transaction ID. The syncer does not poll child transaction existence independently, so a manual child deletion is repaired only when a later parent delta causes that source to be reconciled.
+Every observed qualifying source with an active mirror verifies that the recorded child transaction still exists before concluding reconciliation, including memo-only and otherwise no-op revisions. If it is absent, reconciliation creates a replacement from current authoritative source state and stores the replacement child transaction ID. The syncer does not poll child existence independently, so manual child deletion is repaired only after a later parent delta causes that source to be observed.
 
 Alternative considered: treat child deletion as a permanent override. Rejected because it contradicts authoritative parent semantics.
 
 ### 6. Use a durable operation journal
 
-The state layer adds four concepts, either as new tables or equivalently constrained incremental tables:
+The state layer adds six concepts, either as new tables or equivalently constrained incremental tables:
 
 - `source_entities`: stable parent identity and current lifecycle state;
 - `source_revisions`: normalized append-only parent observations and server knowledge;
 - `child_mirrors`: current source-to-child transaction correlation and last applied authoritative payload hash;
-- `sync_operations`: ordered create/update/delete work with pending, applied, and failed outcomes.
+- `ingestion_batches`: response server knowledge and completion state tying revisions and operations to cursor eligibility;
+- `sync_operations`: immutable ordered create/update/delete intent with pending, applied, and retryable-failed status;
+- `operation_attempts`: append-only remote attempt outcomes and failure details.
 
-Operations are persisted before remote mutation. Cross-budget rerouting uses an ordered delete followed by create; the create cannot apply until the delete is complete. Attempts remain auditable and retryable across process restarts.
+Operations are persisted before remote mutation. Every mixed transition, including cross-budget and ordinary/split replacement, deletes obsolete mirrors before creating replacements. A dependent create cannot apply until its deletes complete. Attempts remain auditable and retryable across process restarts, and failed operation intent returns to retryable processing without losing attempt history.
 
 Alternative considered: directly mutate YNAB and then update the existing mapping row. Rejected because a crash would lose intended work or make multi-step rerouting ambiguous.
 
 ### 7. Cursor advancement remains remote-application gated
 
-The transaction server-knowledge cursor advances only after every operation derived from that delta batch is applied successfully or recognized as idempotently complete. Partial child failures preserve successful sibling results but block the shared parent transaction cursor, allowing retry with stable operation identities.
+The transaction server-knowledge cursor advances only after the durable ingestion batch and every operation derived from that batch are applied successfully or recognized as idempotently complete. Partial child failures preserve successful sibling results but block the shared parent transaction cursor, allowing retry with stable operation identities. Migration cleanup operations are not transaction-delta work and do not block transaction cursor advancement.
 
 Initial bootstrap may use the configured transaction lookback date. Once a transaction server-knowledge cursor exists, delta reads omit `since_date` unless official YNAB documentation confirms that combining the filters cannot hide old-transaction tombstones or edits.
 
@@ -102,7 +109,9 @@ New create import IDs are derived from stable source and target identity using a
 
 SQLite initialization gains transactional schema versioning. Migration preserves existing tables and backfills stable entities/mirrors from successful historical rows with child transaction IDs. For multiple successful mirrors sharing one stable source and target, the newest is selected by `applied_at`, with the highest row ID as a deterministic tie-breaker. Older mirrors become pending delete operations; migration itself never calls YNAB.
 
-Missing child IDs remain historical records but cannot become active mirrors. Failed-only legacy mappings remain retryable according to current source data rather than being assumed applied.
+Migration identity uses event type plus parent transaction/subtransaction IDs for transaction sources, and movement ID plus target child and direction for money movements. Successful non-dry-run rows with child IDs are eligible active-mirror candidates; rows without child IDs and failed/dry-run attempts remain historical only. Missing child IDs remain historical records but cannot become active mirrors. Failed-only legacy mappings remain retryable according to current source data rather than being assumed applied.
+
+Dry-run against an unversioned database computes an in-memory migration projection so it can report legacy cleanup without modifying SQLite. Live startup applies the same migration transactionally before remote work.
 
 Alternative considered: delete duplicates during migration. Rejected because schema initialization must remain local, transactional, and safe during dry runs.
 
@@ -114,6 +123,24 @@ The syncer does not scan historical source entities solely when configuration ch
 
 Dry-run reads existing mirrors and cursors, fetches any child state needed to describe an operation, and logs ordered create/update/delete actions. It does not persist revisions or operations, mutate cursors, run destructive legacy cleanup, or call child mutation endpoints.
 
+### 12. Money movements use stable observed-state reconciliation
+
+A money movement entity is identified by `(sourceBudgetId, moneyMovementId)`. Each child mirror is identified by the movement entity, target child budget, and logical `inflow` or `outflow` side. Amount, category, category name, date, group ID, mapping, and target account are mutable revision/routing data rather than identity.
+
+The syncer reads the complete unfiltered money-movement snapshot and persists normalized observations before applying the configured lookback eligibility rule for new mirrors. If the same movement ID is observed later with changed amount, date, categories, or routing, its existing sides are reconciled with the same update, same-budget reroute, and cross-budget replacement rules as transaction mirrors. Memo remains child-owned after initial creation.
+
+An ID missing from a later snapshot, absent from a delta, or outside the local lookback is marked unconfirmed and logged; its child mirrors are not deleted. A newly observed replacement ID is a separate movement because the API does not document replacement lineage. Group ID is correlation metadata only and never identity or proof of replacement.
+
+Money-movement reads and operation retries are independent of the transaction ingestion cursor. Because the current official OpenAPI and prose disagree about the movement delta request parameter, the initial implementation uses complete snapshots and does not invent a movement cursor. The implementation may adopt a cursor only after the official contract is clarified and covered by contract tests.
+
+Alternative considered: infer movement deletion from absence in a complete response. Rejected because YNAB exposes no deletion tombstone or retention guarantee, making destructive cleanup unsafe.
+
+### 13. Human semantics and tests are first-class deliverables
+
+`PARENT_TRANSACTION_RECONCILIATION.md` explains the authoritative/child-owned boundary, ordinary and split transitions, money-movement limitations, retries, migration, dry-run behavior, and rollout in user language. `README.md` and `QUICK_START.md` link to it. Until implementation lands, all three references clearly label the behavior as proposed.
+
+Every normative scenario in the delta specification must map to at least one focused unit test and at least one integration test using WireMock and/or real SQLite. Unit tests prove normalization, planning, payload, state, and retry decisions in isolation; integration tests prove HTTP contracts, persistence, process restarts, operation ordering, and observable side effects. A maintained coverage matrix in the semantics guide or test documentation records both test names for each semantic.
+
 ## Risks / Trade-offs
 
 - [Destructive parent authority can remove reviewed child records] → Document the policy prominently, reset edited mirrors to unapproved, require dry-run review before first live reconciliation, and retain operation audit history.
@@ -124,6 +151,9 @@ Dry-run reads existing mirrors and cursors, fetches any child state needed to de
 - [Child memo preservation requires partial updates] → Verify update semantics and omit memo rather than reading and rewriting it whenever the API permits.
 - [State-model expansion increases brownfield complexity] → Add versioned migrations incrementally, retain existing audit tables, and cover populated migration fixtures with real SQLite.
 - [Active OpenSpec overlap] → Complete `cleared-transactions` before applying this change and rebase the payload/update rules on its final behavior.
+- [Money-movement disappearance is ambiguous] → Never delete from absence; log unconfirmed movements and reconcile only re-observed stable IDs.
+- [Complete movement snapshots may be expensive] → Fetch once per cycle, normalize deterministically, and avoid child calls when snapshots are unchanged.
+- [Large semantic surface can drift from user expectations] → Maintain the linked semantics guide and require paired unit/integration tests for every normative scenario.
 
 ## Migration Plan
 
@@ -133,7 +163,8 @@ Dry-run reads existing mirrors and cursors, fetches any child state needed to de
 4. Persist pending cleanup operations for older duplicate mirrors, but make no remote calls during migration.
 5. Deploy the new binary and run at least one `--dry-run --max-cycles 1` against the migrated database.
 6. Review planned legacy deletions, updates, and creates before enabling a live cycle.
-7. Run one live cycle, verify operation outcomes and cursor movement, then resume continuous polling.
+7. Review the human semantics guide and paired test-coverage matrix before enabling the implementation.
+8. Run one live cycle, verify operation outcomes and cursor movement, then resume continuous polling.
 
 Rollback before a live reconciliation consists of restoring a database backup and the prior binary. After live updates or deletions, rollback cannot reconstruct remote child state automatically; operation history must be used for manual recovery.
 
@@ -141,3 +172,4 @@ Rollback before a live reconciliation consists of restoring a database backup an
 
 - Confirm the exact current YNAB endpoint paths, mutable update fields, transaction lookup response, deletion response, and not-found behavior from official documentation during implementation.
 - Confirm whether transaction delta requests with both `since_date` and `last_knowledge_of_server` can omit tombstones for older transactions; default implementation omits `since_date` after cursor establishment unless verified safe.
+- Ask YNAB whether `last_knowledge_of_server` is accepted for money-movement endpoints despite its omission from the current OpenAPI operation, and whether movement deletion or replacement has a documented observable form. Until confirmed, complete snapshots and non-destructive absence semantics remain authoritative.

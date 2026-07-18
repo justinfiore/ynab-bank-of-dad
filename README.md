@@ -57,6 +57,8 @@ If you only want the shortest safe path to a first run, start with [QUICK_START.
 For the full configuration guide, see [CONFIGURATION.md](CONFIGURATION.md).
 For step-by-step real-account validation before continuous parent/child syncing, use [PARENT_CHILD_SYNC_MANUAL_TESTING.md](PARENT_CHILD_SYNC_MANUAL_TESTING.md).
 
+The proposed semantics for reconciling later transaction edits, deletions, split changes, and money-movement changes are documented in [PARENT_TRANSACTION_RECONCILIATION.md](PARENT_TRANSACTION_RECONCILIATION.md). These semantics are under review and are not implemented in the current released syncer yet.
+
 ## Required runtime inputs
 
 ### Allowance CLI

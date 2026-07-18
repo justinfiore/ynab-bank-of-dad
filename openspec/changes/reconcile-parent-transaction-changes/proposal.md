@@ -10,14 +10,16 @@ The parent/child sync currently treats mirrored transactions as create-once even
 - Update date, amount, payee, approval, cleared state, and same-budget account routing in place while preserving the child memo after initial creation.
 - Delete child mirrors when the parent source is deleted, becomes unapproved, becomes unmapped, or removes a previously mirrored split component.
 - Delete and recreate mirrors that move to another child budget; recreate a recorded mirror when the child transaction is missing during reconciliation.
+- Reconcile re-observed money movements when the same stable movement ID changes, while never interpreting absence from the API or the local lookback window as a deletion.
 - Treat mapping configuration changes as prospective only; they do not independently trigger historical rewrites.
 - Add transactional SQLite schema migrations and backfill existing successful mirror correlations. When legacy state identifies duplicate successful mirrors, retain the newest and queue deletion of older child transactions.
-- Extend dry-run output and automated coverage for edits, deletions, split transitions, retries, migration, and multi-cycle reconciliation.
+- Add a dedicated human-readable reconciliation semantics guide, linked from `README.md` and `QUICK_START.md`, with examples and operational safety guidance.
+- Require focused unit tests and integration tests for every documented reconciliation semantic, including money-movement changes and limitations.
 
 ## Capabilities
 
 ### New Capabilities
-- `parent-transaction-reconciliation`: Defines stable source identity, authoritative parent edit and deletion behavior, child mirror lifecycle, durable mutation retries, migration, and cursor safety.
+- `parent-transaction-reconciliation`: Defines stable source identity, authoritative parent edit and deletion behavior, conservative money-movement change handling, child mirror lifecycle, durable mutation retries, migration, cursor safety, and mandatory unit/integration coverage.
 
 ### Modified Capabilities
 
@@ -29,6 +31,7 @@ None. The parent/child sync requirements have not yet been promoted into `opensp
 - YNAB transaction delta parsing and child transaction get/update/delete operations in `YnabBudgetRepository` and `YnabHttpClient`.
 - SQLite schema and migration behavior in `src/main/groovy/ynabbankofdad/sync/state/SyncStateStore.groovy`.
 - Unit, real-SQLite, and WireMock integration specifications, including process-like multi-cycle cases.
+- A new `PARENT_TRANSACTION_RECONCILIATION.md` semantics guide referenced from `README.md` and `QUICK_START.md`.
 - Sync configuration validation and documentation where destructive reconciliation and dry-run-first rollout must be explained.
 - No new access tokens, environment variables, or YNAB naming conventions are introduced. Existing per-budget token variables and configured mapping/account names remain authoritative.
 - The change depends on the current cleared/reviewable child transaction behavior and should be implemented after the active `cleared-transactions` change is completed.
