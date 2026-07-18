@@ -57,6 +57,7 @@ cp config.yaml.example config.yaml
    - each `sync.childBudgets[*].childKey`
    - each `sync.childBudgets[*].budgetName`
    - each `sync.childBudgets[*].tokenEnvVarName`
+   - optional `sync.childBudgets[*].memoPrefix` / `memoSuffix` (defaults: `"YBOD: "` / `""`; empty strings are allowed)
    - each `sync.childBudgets[*].accountMappings[*].mappingKey`
    - each `sync.childBudgets[*].accountMappings[*].parentCategoryNames[*].name` (literal by default; add `regex: true` only for regex patterns)
    - each `sync.childBudgets[*].accountMappings[*].childAccountName`
@@ -114,6 +115,8 @@ What this validates safely:
 4. parent/child mapping construction
 5. planned child-budget mutations without live posting
 
+Synced child transactions are planned with `cleared: "cleared"`. Their final `memoPrefix + source memo + memoSuffix` value is trimmed; these settings affect child sync output only. `./gradlew testAll` also verifies this dry-run behavior against simulated YNAB responses without live credentials, child POSTs, or SQLite mutation.
+
 ## 6. Review the dry-run output
 
 Before any live run, verify:
@@ -129,8 +132,9 @@ Before any live run, verify:
 2. each child token env var name points to the intended secret
 3. parent category mappings match the child you expect to mirror into
 4. the planned child transactions have the expected date, amount, memo, and payee behavior
-5. the SQLite path is where you want long-lived replay-protection state to live
-6. the rolling log path is where you want continuous sync logs written
+5. custom/default memo decoration is trimmed as expected and the planned child payload is cleared
+6. the SQLite path is where you want long-lived replay-protection state to live
+7. the rolling log path is where you want continuous sync logs written
 
 ## 7. Optional live allowance run
 

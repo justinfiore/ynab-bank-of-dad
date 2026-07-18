@@ -131,9 +131,14 @@ sync:
     tokenEnvVarName: YNAB_PARENT_TOKEN
 
   childBudgets:
+    # Optional per child. Defaults are memoPrefix: "YBOD: " and memoSuffix: "".
+    # The final prefix + source memo + suffix value is trimmed. These settings
+    # affect synced child transactions only; each created child transaction is cleared.
     - childKey: child-one
       budgetName: Demo Child One Budget
       tokenEnvVarName: YNAB_CHILD_ONE_TOKEN
+      memoPrefix: "YBOD: "
+      memoSuffix: ""
       accountMappings:
         - mappingKey: spend-save
           parentCategoryNames:
@@ -148,6 +153,8 @@ sync:
     - childKey: child-two
       budgetName: Demo Child Two Budget
       tokenEnvVarName: YNAB_CHILD_TWO_TOKEN
+      memoPrefix: "[Child Two] "
+      memoSuffix: " (synced)"
       accountMappings:
         - mappingKey: spend
           parentCategoryNames:

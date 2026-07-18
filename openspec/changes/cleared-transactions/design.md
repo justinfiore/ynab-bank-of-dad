@@ -33,6 +33,9 @@ Rationale: The config model already centralizes per-child settings. Adding two o
 **Decision: Default prefix = "YBOD: " (with trailing space), suffix = ""**
 Rationale: Matches the explicit request; the trailing space prevents the tag from running into the original memo text. Empty suffix is the natural default.
 
+**Decision: Trim the final decorated memo**
+Rationale: The payload factory constructs `prefix + source memo + suffix` and trims that final value. Configured whitespace inside the decorated value is preserved, but leading and trailing whitespace is not. A null or empty source memo follows the same rule, including producing an empty string when the decoration contains only whitespace.
+
 **Decision: cleared value = "cleared" (string literal)**
 Rationale: Standard YNAB transaction cleared status. The exact casing and type will be verified against the current YNAB API reference during implementation; the design intentionally does not hard-code unverified details.
 
@@ -49,4 +52,4 @@ Rationale: These remain as currently implemented; cleared is an independent conc
 
 No migration required. Existing configs continue to work with the documented default prefix behavior. New fields are purely additive.
 
-After implementation, run `./gradlew testAll` (with JAVA_HOME set) and a `--dry-run` sync cycle before any live run that creates real transactions.
+After implementation, run `./gradlew testAll` (with JAVA_HOME set). WireMock coverage simulates a `--dry-run` sync cycle with custom decoration and verifies the cleared payload plan without credentials, child POSTs, or SQLite mutation. Operators should still use `--dry-run` before any live run that creates real transactions.
