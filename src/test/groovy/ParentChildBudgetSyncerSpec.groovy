@@ -5,7 +5,10 @@ import ynabbankofdad.sync.ParentChildBudgetSyncer
 import ynabbankofdad.sync.SyncCliOptions
 import ynabbankofdad.sync.SyncRunCoordinator
 import ynabbankofdad.sync.model.ChildSyncContext
+import ynabbankofdad.sync.model.ParentTransactionEvent
 import ynabbankofdad.sync.reconcile.DesiredMirrorFactory
+import ynabbankofdad.sync.reconcile.ParentReconciliationResult
+import ynabbankofdad.sync.reconcile.SourceRevisionNormalizer
 import ynabbankofdad.sync.state.SourceEntityKey
 import ynabbankofdad.sync.state.SourceEntityType
 import ynabbankofdad.sync.state.SyncStateStore
@@ -150,6 +153,45 @@ class ParentChildBudgetSyncerSpec extends Specification {
         [CHILD_ONE_TOKEN: 'one-token', CHILD_TWO_TOKEN: 'two-token'] | "Environment variable 'PARENT_TOKEN'"
         [PARENT_TOKEN: ' ', CHILD_ONE_TOKEN: 'one-token', CHILD_TWO_TOKEN: 'two-token'] | "Environment variable 'PARENT_TOKEN'"
         [PARENT_TOKEN: 'parent-token', CHILD_TWO_TOKEN: 'two-token'] | "Environment variable 'CHILD_ONE_TOKEN'"
+    }
+
+    def "routing-blocked results do not plan deleted lifecycle from an empty desired set"() {
+        given:
+        def revision = new SourceRevisionNormalizer().normalize('parent', new ParentTransactionEvent(
+            'txn-1', '2026-07-01', -1000, 'memo', true, 1, 'cat', 'Child One Spend Bank',
+            [], null, 'Payee', false), 1, true)
+        long sourceId = 42L
+        Map sourceIds = [(revision.parentSource): sourceId]
+        def blocked = new ParentReconciliationResult(revision, [], [], false, true)
+        def unmapped = new ParentReconciliationResult(revision, [], [], false, false)
+
+        expect:
+        ParentChildBudgetSyncer.plannedSourceLifecycles(blocked, sourceIds).isEmpty()
+        ParentChildBudgetSyncer.plannedSourceLifecycles(unmapped, sourceIds) == [(sourceId): 'deleted']
+    }
+
+    def "unrelated sources still receive lifecycle updates when another source is routing-blocked"() {
+        given:
+        def normalizer = new SourceRevisionNormalizer()
+        def blockedRevision = normalizer.normalize('parent', new ParentTransactionEvent(
+            'blocked', '2026-07-01', -1000, 'memo', true, 1, 'cat', 'Child Two Spend Bank',
+            [], null, 'Payee', false), 1, true)
+        def openRevision = normalizer.normalize('parent', new ParentTransactionEvent(
+            'open', '2026-07-01', -2000, 'memo', true, 1, 'cat', 'Child One Spend Bank',
+            [], null, 'Payee', false), 1, true)
+        def child = new ChildSyncContext(childTarget('child-one', 'Child One Budget', 'CHILD_ONE_TOKEN',
+            [['spend', ['Child One Spend Bank'], 'Checking']]), null, 'budget-one')
+        child.cacheAccountId('Checking', 'account-one')
+        def desired = new DesiredMirrorFactory([child]).forSource(
+            openRevision.parentSource, 'cat', 'Child One Spend Bank', '2026-07-01',
+            -2000, null, 'Payee', 'memo', 'outflow')
+        def blocked = new ParentReconciliationResult(blockedRevision, [], [], false, true)
+        def open = new ParentReconciliationResult(openRevision, desired, [], false, false)
+
+        expect:
+        ParentChildBudgetSyncer.plannedSourceLifecycles(blocked, [(blockedRevision.parentSource): 1L]).isEmpty()
+        ParentChildBudgetSyncer.plannedSourceLifecycles(open, [(openRevision.parentSource): 2L]) ==
+            [2L: 'active']
     }
 
     private static ChildBudgetSyncTarget childTarget(String childKey, String budgetName,

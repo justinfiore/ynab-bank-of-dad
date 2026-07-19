@@ -66,6 +66,19 @@ The syncer SHALL apply the configured memo prefix and suffix when initially crea
 - **WHEN** a parent source changes only its memo
 - **THEN** reconciliation SHALL verify that its recorded child transaction still exists before concluding that no child mutation is required
 
+### Requirement: Transient child routing failure SHALL NOT be treated as unmapping
+When child budget or account resolution fails for a source whose category could route into that failed child, the syncer SHALL skip destructive and constructive reconciliation for that source for the cycle. It SHALL NOT plan deletes from an incomplete desired set, and it SHALL NOT update `source_entities.lifecycle_status` to `deleted` solely because the desired mirror set was empty while routing was blocked. Sources that do not depend on the failed child MAY still reconcile and receive lifecycle updates in the same cycle. Transaction routing failure for any required child still blocks transaction batch completion and cursor advancement for the cycle.
+
+#### Scenario: Routing-blocked source keeps prior lifecycle and mirrors
+- **WHEN** a mirrored parent source would route into a child whose plan or account lookup fails this cycle
+- **THEN** the syncer SHALL NOT delete the existing child mirror
+- **AND** it SHALL NOT set that source entity lifecycle to `deleted` from an empty desired set
+
+#### Scenario: Unrelated source still reconciles while another child routing fails
+- **WHEN** one child routing lookup fails and another resolved child has a newly qualifying mapped parent source
+- **THEN** the resolved child's source MAY create or update normally and receive an `active` lifecycle
+- **AND** the routing-blocked source SHALL retain its prior lifecycle rather than being marked deleted
+
 ### Requirement: Parent deletion and de-qualification SHALL delete child mirrors
 The syncer SHALL delete active child mirrors when their source transaction or subtransaction is explicitly deleted, becomes unapproved, becomes unmapped, or is removed from the current split composition. It SHALL NOT create compensating reversal transactions for these removals.
 

@@ -106,6 +106,11 @@ class ParentReconciliationResult {
     List<DesiredMirror> desiredMirrors
     List<PlannedReconciliationIntent> intents
     boolean fetchRequired
+    /**
+     * True when child routing required for this source failed this cycle.
+     * Empty desired mirrors must not be treated as unmapped/deleted for lifecycle.
+     */
+    boolean routingBlocked = false
 }
 
 @Immutable
@@ -137,6 +142,7 @@ class MovementDecision {
     List<DesiredMirror> desiredMirrors
     List<PlannedReconciliationIntent> intents
     String reason
+    boolean routingBlocked = false
 }
 
 final class ReconciliationCanonicalizer {

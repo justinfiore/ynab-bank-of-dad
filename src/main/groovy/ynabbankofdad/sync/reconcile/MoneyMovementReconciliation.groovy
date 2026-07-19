@@ -65,11 +65,11 @@ class MoneyMovementReconciler {
                 ParentTransactionReconciler.compare(desired, existing)
             String reason = newEligible || !existing.isEmpty() ? null : 'outside new-movement lookback'
             new MovementDecision(observation.source, MovementObservationStatus.OBSERVED,
-                desired, intents, reason)
+                desired, intents, reason, false)
         }
         snapshot.unconfirmedSources.sort { it.moneyMovementId }.each { source ->
             decisions << new MovementDecision(source, MovementObservationStatus.UNCONFIRMED,
-                [], [], 'absent from complete snapshot; absence is not deletion evidence')
+                [], [], 'absent from complete snapshot; absence is not deletion evidence', false)
         }
         decisions
     }

@@ -46,7 +46,7 @@ class DryRunReconciliationIntegrationSpec extends Specification {
                 [rerouteDelete.operationKey]),
             intent('recreate', PlannedAction.NO_OP, source, 'child-budget', 'missing-child', [], true)
         ]
-        def results = [new ParentReconciliationResult(null, [], intents, false)]
+        def results = [new ParentReconciliationResult(null, [], intents, false, false)]
         Logger logger = LoggerFactory.getLogger(ParentChildBudgetSyncer) as Logger
         def appender = new ListAppender<ILoggingEvent>()
         appender.start()

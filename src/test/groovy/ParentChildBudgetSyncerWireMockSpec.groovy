@@ -499,6 +499,36 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         runRows().last().status == 'partial'
     }
 
+    def "routing failure for one child does not mark an unrelated resolved source deleted"() {
+        given:
+        stubCommonBudgetDiscovery()
+        stubParentCategories()
+        stubParentTransactions([
+            [id: 'txn-child-one-ok', date: '2026-07-01', amount: -1100, memo: 'One', approved: true,
+             category_id: 'cat-child-one-spend', category_name: 'Child One Spend Bank', subtransactions: []],
+            [id: 'txn-child-two-blocked', date: '2026-07-01', amount: -2200, memo: 'Two', approved: true,
+             category_id: 'cat-child-two-spend', category_name: 'Child Two Spend Bank', subtransactions: []]
+        ], 410)
+        stubMoneyMovements([])
+        stubChildAccounts('child-one-budget-id', 'child-one-account-id', 'Child One Checking')
+        stubFor(get(urlEqualTo('/v1/plans/child-two-budget-id/accounts'))
+            .willReturn(errorResponse(500, 'child two routing unavailable')))
+        stubChildPost('child-one-budget-id', ['child-one-created'])
+        def syncer = syncer(false)
+
+        when:
+        syncer.runOnce(1)
+
+        then:
+        verify(1, postRequestedFor(urlEqualTo('/v1/plans/child-one-budget-id/transactions/bulk')))
+        verify(0, deleteRequestedFor(urlMatching('/v1/plans/.*/transactions/.*')))
+        mirrorRows()*.child_transaction_id == ['child-one-created']
+        sourceLifecycleRows().findAll { it.parent_transaction_id == 'txn-child-one-ok' }*.lifecycle_status == ['active']
+        sourceLifecycleRows().findAll { it.parent_transaction_id == 'txn-child-two-blocked' }*.lifecycle_status == ['active']
+        cursorValue('transactions.last_server_knowledge') == null
+        runRows().last().status == 'partial'
+    }
+
     def "child auth failure records failed state isolates other child and does not advance cursor"() {
         given:
         stubCommonBudgetDiscovery()
@@ -1356,9 +1386,11 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
     private List<Map> sourceLifecycleRows() {
         withDb { connection ->
             def rs = connection.createStatement().executeQuery(
-                'SELECT lifecycle_status FROM source_entities ORDER BY id')
+                'SELECT parent_transaction_id, lifecycle_status FROM source_entities ORDER BY id')
             List rows = []
-            while (rs.next()) rows << [lifecycle_status: rs.getString(1)]
+            while (rs.next()) {
+                rows << [parent_transaction_id: rs.getString(1), lifecycle_status: rs.getString(2)]
+            }
             rows
         }
     }

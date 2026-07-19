@@ -132,15 +132,19 @@ Future schema changes use migrations numbered consecutively after version 1. Ini
 
 Alternative considered: infer and upgrade an unversioned database. Rejected because its provenance and shape cannot be established safely enough to mutate it automatically.
 
-### 11. Configuration changes are prospective
+### 11. Routing failure is per source and never looks like unmapping
+
+Failed child plan/account resolution is attached to each planned result as `routingBlocked`. Only sources whose categories could route into a failed child are blocked. Blocked results keep empty intents and skip lifecycle writes so an empty desired set is not persisted as `deleted`. Unrelated sources continue to reconcile in the same cycle. Transaction-level routing failure still blocks transaction batch completion and cursor advancement because the delta cannot be considered fully applied.
+
+### 12. Configuration changes are prospective
 
 The syncer does not scan historical source entities solely when configuration changes. If YNAB later returns a changed source transaction, that revision is reconciled using the then-current mapping configuration. This allows future observed activity to use current configuration without a one-time config edit destructively rewriting all history.
 
-### 12. Dry-run computes but does not persist reconciliation
+### 13. Dry-run computes but does not persist reconciliation
 
 Dry-run reads mirrors and cursors from a supported versioned database, fetches any child state needed to describe an operation, and logs ordered create/update/delete actions. It does not persist revisions or operations, mutate cursors, create a missing database, or call child mutation endpoints. Unsupported existing state is rejected without mutation.
 
-### 13. Money movements use stable observed-state reconciliation
+### 14. Money movements use stable observed-state reconciliation
 
 A money movement entity is identified by `(sourceBudgetId, moneyMovementId)`. Each child mirror is identified by the movement entity, target child budget, and logical `inflow` or `outflow` side. Amount, category, category name, date, group ID, mapping, and target account are mutable revision/routing data rather than identity.
 
@@ -152,9 +156,9 @@ Money-movement reads and operation retries are independent of the transaction in
 
 Alternative considered: infer movement deletion from absence in a complete response. Rejected because YNAB exposes no deletion tombstone or retention guarantee, making destructive cleanup unsafe.
 
-### 14. Human semantics and tests are first-class deliverables
+### 15. Human semantics and tests are first-class deliverables
 
-`PARENT_TRANSACTION_RECONCILIATION.md` explains the authoritative/child-owned boundary, ordinary and split transitions, money-movement limitations, retries, fresh-state requirement, schema versioning, dry-run behavior, single-writer lock, and rollout in user language. `README.md` and `QUICK_START.md` link to it.
+`PARENT_TRANSACTION_RECONCILIATION.md` explains the authoritative/child-owned boundary, ordinary and split transitions, money-movement limitations, retries, fresh-state requirement, schema versioning, dry-run behavior, single-writer lock, routing-failure safety, and rollout in user language. `README.md` and `QUICK_START.md` link to it.
 
 Every normative scenario in the delta specification must map to at least one focused unit test and at least one integration test using WireMock and/or real SQLite. Unit tests prove normalization, planning, payload, state, and retry decisions in isolation; integration tests prove HTTP contracts, persistence, process restarts, operation ordering, and observable side effects. A maintained coverage matrix in the semantics guide or test documentation records both test names for each semantic.
 

@@ -656,7 +656,7 @@ Movement operations and failures are independent of the parent transaction curso
 
 Child plan/account resolution can fail because of authentication, network, configuration, or missing-account problems. The syncer separates resolved and failed child contexts.
 
-A source whose applicable category could route into a failed context is not reconciled against an incomplete desired set. This prevents a temporary lookup failure from being interpreted as unmapping and deleting a valid mirror.
+A source whose applicable category could route into a failed context is marked `routingBlocked` and is not reconciled against an incomplete desired set. Persistence skips lifecycle updates for blocked results so temporary lookup failure cannot mark `source_entities` deleted. Unrelated sources still plan, persist operations, and update lifecycle.
 
 Transaction routing failure blocks transaction batch completion and cursor advancement. Movement routing failure blocks only movement-batch completion.
 
@@ -785,7 +785,8 @@ Use this checklist when reviewing reconciliation changes:
 - Verify same-budget routing changes update in place.
 - Verify cross-budget changes produce delete-before-create dependencies.
 - Verify unrelated mirrors survive split edits.
-- Verify routing lookup failures cannot produce destructive absence.
+- Verify routing lookup failures cannot produce destructive absence or deleted lifecycle from an empty desired set.
+- Verify unrelated sources still reconcile when another child is routing-blocked.
 
 #### Persistence
 
@@ -832,7 +833,7 @@ Schema initialization/migrations and operation completion are transactional, but
 
 #### Per-Source Routing Failure State
 
-Planning blocks only sources affected by failed child routing. The transaction persistence call currently receives a cycle-level routing-blocked flag for lifecycle updates. Review whether lifecycle suppression should remain cycle-wide or become per source/result.
+Resolved: each `ParentReconciliationResult` and `MovementDecision` carries `routingBlocked`. Planning empties intents for blocked sources only. Lifecycle updates run per result and skip blocked sources so an empty desired set from routing failure is never stored as `deleted`. Unrelated sources still reconcile and update lifecycle in the same cycle.
 
 #### Operation Limit And Backlog Ordering
 

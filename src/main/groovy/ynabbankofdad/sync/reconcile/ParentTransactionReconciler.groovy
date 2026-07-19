@@ -23,12 +23,12 @@ class ParentTransactionReconciler {
                 it.mirror.status == 'active'
         }
         if (revision.requiresCompleteFetch()) {
-            return new ParentReconciliationResult(revision, [], [], true)
+            return new ParentReconciliationResult(revision, [], [], true, false)
         }
 
         List<DesiredMirror> desired = desiredMirrors(revision)
         List<PlannedReconciliationIntent> intents = compare(desired, mirrors)
-        new ParentReconciliationResult(revision, desired, intents, false)
+        new ParentReconciliationResult(revision, desired, intents, false, false)
     }
 
     List<ParentReconciliationResult> reconcileChanged(List<ParentSourceRevision> changedRevisions,

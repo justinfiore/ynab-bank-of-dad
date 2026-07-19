@@ -11,7 +11,7 @@ class ReconciliationCoverageContractSpec extends Specification {
         List<Map<String, String>> rows = matrixRows()
 
         expect:
-        normative.size() == 57
+        normative.size() == 59
         rows*.scenario == normative
         rows*.scenario.unique().size() == normative.size()
         rows.every { it.unit && it.integration }

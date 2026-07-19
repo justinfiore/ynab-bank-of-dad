@@ -191,7 +191,7 @@ class ParentChildBudgetSyncer {
             }
 
             long transactionBatchId = persistTransactionBatch(parentBudgetId, completeTransactionDelta,
-                transactionResults, !transactionRouting.failedContexts.isEmpty())
+                transactionResults)
             Long movementBatchId = movementPlanning == null ? null :
                 persistMovementBatch(parentBudgetId, movementSnapshot, movementPlanning)
 
@@ -287,8 +287,11 @@ class ParentChildBudgetSyncer {
             List<ActiveMirrorReference> mirrors = activeMirrorsForParent(parentBudgetId, event.id)
             ParentSourceRevision revision = normalizer.normalize(
                 parentBudgetId, event, delta.serverKnowledge, true)
-            routingBlocked(revision, failedContexts) ? new ParentReconciliationResult(revision, [], [], false) :
+            if (routingBlocked(revision, failedContexts)) {
+                new ParentReconciliationResult(revision, [], [], false, true)
+            } else {
                 reconciler.reconcile(revision, mirrors)
+            }
         }
     }
 
@@ -315,10 +318,16 @@ class ParentChildBudgetSyncer {
         }
         LocalDate cutoff = LocalDate.now().minusDays(syncConfig.state.moneyMovementLookbackDays as long)
         List<MovementDecision> decisions = new MoneyMovementReconciler(planningContexts, categoriesById)
-            .reconcile(observation, mirrors, cutoff).findAll { MovementDecision decision ->
+            .reconcile(observation, mirrors, cutoff).collect { MovementDecision decision ->
                 NormalizedMovementObservation current = observation.observations.find { it.source == decision.source }
-                !current || !routingBlocked(
+                boolean blocked = current && routingBlocked(
                     [current.fromCategoryName, current.toCategoryName].findAll() as Set, failedContexts)
+                if (!blocked) {
+                    return decision
+                }
+                // Keep the observation for lifecycle/audit but drop destructive intents while routing is incomplete.
+                new MovementDecision(decision.source, decision.status, [], [],
+                    'child routing required for this movement failed this cycle', true)
             }
         new MovementPlanning(observation, decisions)
     }
@@ -343,8 +352,7 @@ class ParentChildBudgetSyncer {
     }
 
     private long persistTransactionBatch(String parentBudgetId, TransactionDelta delta,
-                                          List<ParentReconciliationResult> results,
-                                          boolean routingBlocked = false) {
+                                          List<ParentReconciliationResult> results) {
         String batchKey = ReconciliationCanonicalizer.stableKey([
             'transaction_delta', parentBudgetId, delta.serverKnowledge,
             results.collect { it.revision.revisionHash }
@@ -358,7 +366,8 @@ class ParentChildBudgetSyncer {
                     sourceIds[planned.source] = reconciliationState.upsertSourceEntity(planned.source)
                 }
             }
-            if (!routingBlocked) {
+            // Routing-blocked results have empty desired sets by construction; never treat that as unmapped.
+            if (!result.routingBlocked) {
                 updateParentLifecycles(result, sourceIds)
             }
             Long priorDelete = null
@@ -377,10 +386,25 @@ class ParentChildBudgetSyncer {
 
     private void updateParentLifecycles(ParentReconciliationResult result,
                                         Map<SourceEntityKey, Long> sourceIds) {
+        plannedSourceLifecycles(result, sourceIds).each { Long sourceId, String lifecycle ->
+            reconciliationState.setSourceLifecycle(sourceId, lifecycle)
+        }
+    }
+
+    /**
+     * Returns lifecycle updates for a planned result. Routing-blocked results return empty so a
+     * temporary child lookup failure cannot mark sources deleted from an empty desired set.
+     */
+    static Map<Long, String> plannedSourceLifecycles(ParentReconciliationResult result,
+                                                     Map<SourceEntityKey, Long> sourceIds) {
+        if (result?.routingBlocked || !result?.revision || sourceIds == null || sourceIds.isEmpty()) {
+            return [:]
+        }
         ParentSourceRevision revision = result.revision
         Set<SourceEntityKey> desiredSources = result.desiredMirrors*.source as Set
         boolean qualifyingParent = revision.deleted != true && revision.approved == true
         boolean split = revision.components.any { it.source != revision.parentSource }
+        Map<Long, String> updates = [:]
         sourceIds.each { SourceEntityKey source, Long sourceId ->
             boolean active
             if (source == revision.parentSource) {
@@ -389,8 +413,9 @@ class ParentChildBudgetSyncer {
                 NormalizedSourceComponent component = revision.components.find { it.source == source }
                 active = qualifyingParent && component?.deleted != true && desiredSources.contains(source)
             }
-            reconciliationState.setSourceLifecycle(sourceId, active ? 'active' : 'deleted')
+            updates[sourceId] = active ? 'active' : 'deleted'
         }
+        updates
     }
 
     private Map<SourceEntityKey, Long> persistParentRevision(ParentSourceRevision revision, long batchId) {
@@ -431,7 +456,9 @@ class ParentChildBudgetSyncer {
         planning.decisions.each { MovementDecision decision ->
             if (decision.status == MovementObservationStatus.UNCONFIRMED) {
                 long entityId = reconciliationState.upsertSourceEntity(decision.source)
-                reconciliationState.setSourceLifecycle(entityId, 'unconfirmed')
+                if (!decision.routingBlocked) {
+                    reconciliationState.setSourceLifecycle(entityId, 'unconfirmed')
+                }
                 log.warn('Money movement {} is unconfirmed: {}', decision.source.moneyMovementId, decision.reason)
                 return
             }
@@ -439,9 +466,16 @@ class ParentChildBudgetSyncer {
                 it.source == decision.source
             }
             long entityId = reconciliationState.upsertSourceEntity(decision.source)
-            reconciliationState.setSourceLifecycle(entityId, 'active')
-            reconciliationState.appendSourceRevision(entityId, observation.revisionHash,
-                observation.normalizedJson, observation.serverKnowledge, batchId)
+            if (!decision.routingBlocked) {
+                reconciliationState.setSourceLifecycle(entityId, 'active')
+            }
+            if (observation) {
+                reconciliationState.appendSourceRevision(entityId, observation.revisionHash,
+                    observation.normalizedJson, observation.serverKnowledge, batchId)
+            }
+            if (decision.routingBlocked) {
+                return
+            }
             Long priorDelete = null
             decision.intents.each { PlannedReconciliationIntent planned ->
                 Long dependency = planned.action == PlannedAction.DELETE ? priorDelete :
