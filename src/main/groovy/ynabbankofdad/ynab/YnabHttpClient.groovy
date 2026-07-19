@@ -20,7 +20,7 @@ import java.util.concurrent.TimeoutException
  * - keeps call sites in RecordAllowance easy to read
  * - centralizes auth headers, JSON serialization, and error handling in one obvious place
  *
- * Deliberately not a generic DSL. It only implements the small JSON GET/POST surface this
+ * Deliberately not a generic DSL. It only implements the small JSON HTTP surface this
  * script actually needs.
  */
 @Slf4j
@@ -52,7 +52,14 @@ class YnabHttpClient {
         HttpRequest request = baseRequest(path)
             .GET()
             .build()
-        return sendJson(request, 'GET', path).body
+        return sendJson(request, 'GET', path, [] as Set).body
+    }
+
+    YnabHttpResponse getJsonWithMetadata(String path, Set<Integer> acceptedStatuses = [] as Set) {
+        HttpRequest request = baseRequest(path)
+            .GET()
+            .build()
+        sendJson(request, 'GET', path, acceptedStatuses)
     }
 
     def postJson(String path, Object payload) {
@@ -61,7 +68,7 @@ class YnabHttpClient {
             .header('Content-Type', 'application/json')
             .POST(HttpRequest.BodyPublishers.ofString(json))
             .build()
-        return sendJson(request, 'POST', path).body
+        return sendJson(request, 'POST', path, [] as Set).body
     }
 
     YnabHttpResponse postJsonWithMetadata(String path, Object payload) {
@@ -70,7 +77,32 @@ class YnabHttpClient {
             .header('Content-Type', 'application/json')
             .POST(HttpRequest.BodyPublishers.ofString(json))
             .build()
-        return sendJson(request, 'POST', path)
+        return sendJson(request, 'POST', path, [] as Set)
+    }
+
+    YnabHttpResponse putJsonWithMetadata(String path, Object payload, Set<Integer> acceptedStatuses = [] as Set) {
+        String json = JsonOutput.toJson(payload)
+        HttpRequest request = baseRequest(path)
+            .header('Content-Type', 'application/json')
+            .PUT(HttpRequest.BodyPublishers.ofString(json))
+            .build()
+        sendJson(request, 'PUT', path, acceptedStatuses)
+    }
+
+    YnabHttpResponse patchJsonWithMetadata(String path, Object payload, Set<Integer> acceptedStatuses = [] as Set) {
+        String json = JsonOutput.toJson(payload)
+        HttpRequest request = baseRequest(path)
+            .header('Content-Type', 'application/json')
+            .method('PATCH', HttpRequest.BodyPublishers.ofString(json))
+            .build()
+        sendJson(request, 'PATCH', path, acceptedStatuses)
+    }
+
+    YnabHttpResponse deleteJsonWithMetadata(String path, Set<Integer> acceptedStatuses = [] as Set) {
+        HttpRequest request = baseRequest(path)
+            .DELETE()
+            .build()
+        sendJson(request, 'DELETE', path, acceptedStatuses)
     }
 
     private HttpRequest.Builder baseRequest(String path) {
@@ -85,7 +117,7 @@ class YnabHttpClient {
         return URI.create(baseUrl + normalized)
     }
 
-    private YnabHttpResponse sendJson(HttpRequest request, String method, String path) {
+    private YnabHttpResponse sendJson(HttpRequest request, String method, String path, Set<Integer> acceptedStatuses) {
         HttpResponse<String> response
         try {
             response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
@@ -97,11 +129,16 @@ class YnabHttpClient {
         }
         String bodyText = response.body()
 
-        if (response.statusCode() < 200 || response.statusCode() >= 300) {
+        if ((response.statusCode() < 200 || response.statusCode() >= 300) && !acceptedStatuses.contains(response.statusCode())) {
             throw new IllegalStateException("YNAB ${method} ${path} failed with status ${response.statusCode()}: ${bodyText}")
         }
 
-        def parsedBody = (bodyText == null || bodyText.isBlank()) ? null : jsonSlurper.parseText(bodyText)
+        def parsedBody
+        try {
+            parsedBody = (bodyText == null || bodyText.isBlank()) ? null : jsonSlurper.parseText(bodyText)
+        } catch (RuntimeException e) {
+            throw new IllegalStateException("YNAB ${method} ${path} returned invalid JSON", e)
+        }
         return new YnabHttpResponse(response.statusCode(), bodyText, parsedBody)
     }
 }

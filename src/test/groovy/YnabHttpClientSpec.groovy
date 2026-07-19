@@ -99,6 +99,47 @@ class YnabHttpClientSpec extends Specification {
         request.path == '/v1/plans/budget-1/transactions/bulk'
     }
 
+    def "putJsonWithMetadata sends JSON and deleteJsonWithMetadata accepts configured status"() {
+        given:
+        server.enqueue(new MockResponse()
+            .setResponseCode(200)
+            .setHeader('Content-Type', 'application/json')
+            .setBody('{"data":{"transaction":{"id":"txn-1"}}}'))
+        server.enqueue(new MockResponse()
+            .setResponseCode(404)
+            .setHeader('Content-Type', 'application/json')
+            .setBody('{"error":{"detail":"not found"}}'))
+        def client = buildClient()
+        def payload = [transaction: [amount: -1000, approved: false]]
+
+        when:
+        def putResponse = client.putJsonWithMetadata('/v1/plans/budget-1/transactions/txn-1', payload)
+        def putRequest = server.takeRequest()
+        def deleteResponse = client.deleteJsonWithMetadata('/v1/plans/budget-1/transactions/missing', [404] as Set)
+        def deleteRequest = server.takeRequest()
+
+        then:
+        putResponse.statusCode == 200
+        putRequest.method == 'PUT'
+        new JsonSlurper().parseText(putRequest.body.readUtf8()) == payload
+        putRequest.getHeader('Authorization') == 'Bearer token'
+        deleteResponse.statusCode == 404
+        deleteRequest.method == 'DELETE'
+        deleteRequest.getHeader('Authorization') == 'Bearer token'
+    }
+
+    def "malformed JSON success includes HTTP operation context"() {
+        given:
+        server.enqueue(new MockResponse().setResponseCode(200).setBody('{not-json'))
+
+        when:
+        buildClient().putJsonWithMetadata('/v1/plans/budget-1/transactions/txn-1', [transaction: [amount: -1]])
+
+        then:
+        def ex = thrown(IllegalStateException)
+        ex.message == 'YNAB PUT /v1/plans/budget-1/transactions/txn-1 returned invalid JSON'
+    }
+
     def "successful blank response body returns null"() {
         given:
         server.enqueue(new MockResponse()
@@ -173,6 +214,34 @@ class YnabHttpClientSpec extends Specification {
 
         cleanup:
         Thread.interrupted()
+    }
+
+    def "new HTTP verbs preserve timeout and interruption behavior"() {
+        given:
+        def timeout = Duration.ofSeconds(7)
+        def httpClient = failure == 'timeout' ? new TimeoutThrowingHttpClient() : new InterruptingHttpClient()
+        def client = new YnabHttpClient('https://api.ynab.com', 'token', httpClient, timeout)
+
+        when:
+        if (method == 'PUT') {
+            client.putJsonWithMetadata('/v1/plans/budget-1/transactions/txn-1', [transaction: [amount: -1]])
+        } else {
+            client.deleteJsonWithMetadata('/v1/plans/budget-1/transactions/txn-1')
+        }
+
+        then:
+        def ex = thrown(IllegalStateException)
+        ex.message == expectedMessage
+        ex.cause.class == expectedCause
+        Thread.currentThread().isInterrupted() == interrupted
+
+        cleanup:
+        Thread.interrupted()
+
+        where:
+        method   | failure     | expectedCause          | interrupted | expectedMessage
+        'PUT'    | 'timeout'   | HttpTimeoutException   | false       | 'YNAB PUT /v1/plans/budget-1/transactions/txn-1 timed out after PT7S'
+        'DELETE' | 'interrupt' | InterruptedException   | true        | 'YNAB DELETE /v1/plans/budget-1/transactions/txn-1 interrupted'
     }
 
     private YnabHttpClient buildClient() {

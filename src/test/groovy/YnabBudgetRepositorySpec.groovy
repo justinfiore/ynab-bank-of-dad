@@ -136,6 +136,9 @@ class YnabBudgetRepositorySpec extends Specification {
         "amount": -1200,
         "memo": "Shoes",
         "approved": true,
+            "payee_id": "payee-1",
+            "payee_name": "Shoe Store",
+        "deleted": false,
         "category_id": "cat-shoes",
         "category_name": "Child One Spend Bank",
         "subtransactions": [
@@ -144,6 +147,9 @@ class YnabBudgetRepositorySpec extends Specification {
             "transaction_id": "txn-1",
             "amount": -700,
             "memo": "Split one",
+            "payee_id": "payee-split",
+            "payee_name": "Split Store",
+            "deleted": true,
             "category_id": "cat-split",
             "category_name": "Child One Save Bank"
           }
@@ -155,35 +161,59 @@ class YnabBudgetRepositorySpec extends Specification {
 ''')))
 
         when:
-        def transactions = buildRepository().getTransactions('budget-new', 30)
+        def delta = buildRepository().getTransactions('budget-new', 30)
 
         then:
-        transactions*.id == ['txn-1']
-        transactions[0].serverKnowledge == 77
-        transactions[0].subtransactions*.id == ['sub-1']
-        transactions[0].subtransactions[0].categoryName == 'Child One Save Bank'
+        delta.serverKnowledge == 77
+        delta.transactions*.id == ['txn-1']
+        delta.transactions[0].serverKnowledge == 77
+        delta.transactions[0].payeeId == 'payee-1'
+        delta.transactions[0].payeeName == 'Shoe Store'
+        !delta.transactions[0].deleted
+        delta.transactions[0].subtransactions*.id == ['sub-1']
+        delta.transactions[0].subtransactions[0].categoryName == 'Child One Save Bank'
+        delta.transactions[0].subtransactions[0].payeeId == 'payee-split'
+        delta.transactions[0].subtransactions[0].payeeName == 'Split Store'
+        delta.transactions[0].subtransactions[0].deleted
     }
 
     def "empty incremental transaction response retains response server knowledge for cursor advancement"() {
         given:
         stubFor(get(urlPathEqualTo('/v1/plans/budget-new/transactions'))
-            .withQueryParam('since_date', matching('.*'))
+            .withQueryParam('since_date', absent())
             .withQueryParam('last_knowledge_of_server', equalTo('77'))
             .willReturn(aResponse()
                 .withStatus(200)
                 .withHeader('Content-Type', 'application/json')
                 .withBody('{"data":{"server_knowledge":88,"transactions":[]}}')))
-        def repository = buildRepository()
-
         when:
-        def transactions = repository.getTransactions('budget-new', 30, 77)
+        def delta = buildRepository().getTransactions('budget-new', 30, 77)
 
         then:
-        transactions.empty
-        repository.latestServerKnowledge(transactions) == 88
+        delta.transactions.empty
+        delta.serverKnowledge == 88
     }
 
-    def "getMoneyMovements filters to recent events and maps payloads"() {
+    def "getParentTransaction fetches complete split composition"() {
+        given:
+        stubFor(get(urlEqualTo('/v1/plans/budget-new/transactions/txn-split'))
+            .willReturn(jsonResponse([data: [server_knowledge: 91, transaction: [
+                id: 'txn-split', date: '2026-07-01', amount: -300, approved: true,
+                deleted: false, subtransactions: [
+                    [id: 'sub-1', transaction_id: 'txn-split', amount: -100, deleted: false],
+                    [id: 'sub-2', transaction_id: 'txn-split', amount: -200, deleted: false]
+                ]
+            ]]])))
+
+        when:
+        def transaction = buildRepository().getParentTransaction('budget-new', 'txn-split')
+
+        then:
+        transaction.serverKnowledge == 91
+        transaction.subtransactions*.id == ['sub-1', 'sub-2']
+    }
+
+    def "getMoneyMovements returns a typed complete unfiltered snapshot"() {
         given:
         def recentDate = java.time.LocalDate.now().minusDays(5).toString()
         def staleDate = java.time.LocalDate.now().minusDays(80).toString()
@@ -194,6 +224,7 @@ class YnabBudgetRepositorySpec extends Specification {
                 .withBody("""
 {
   \"data\": {
+    \"server_knowledge\": 93,
     \"money_movements\": [
       {\"id\": \"mm-1\", \"money_movement_group_id\": \"group-1\", \"moved_at\": \"${recentDate}T12:00:00Z\", \"from_category_id\": \"cat-a\", \"to_category_id\": \"cat-b\", \"amount\": 500},
       {\"id\": \"mm-2\", \"money_movement_group_id\": \"group-2\", \"moved_at\": \"${staleDate}T12:00:00Z\", \"from_category_id\": \"cat-c\", \"to_category_id\": \"cat-d\", \"amount\": 900}
@@ -203,12 +234,13 @@ class YnabBudgetRepositorySpec extends Specification {
 """)))
 
         when:
-        def movements = buildRepository().getMoneyMovements('budget-new', 30)
+        def snapshot = buildRepository().getMoneyMovements('budget-new')
 
         then:
-        movements*.id == ['mm-1']
-        movements[0].groupId == 'group-1'
-        movements[0].eventDate == recentDate
+        snapshot.serverKnowledge == 93
+        snapshot.movements*.id == ['mm-1', 'mm-2']
+        snapshot.movements[0].groupId == 'group-1'
+        snapshot.movements[0].eventDate == recentDate
     }
 
     def "getMoneyMovements supports month and current-date fallbacks"() {
@@ -220,6 +252,7 @@ class YnabBudgetRepositorySpec extends Specification {
                 .withBody('''
 {
   "data": {
+    "server_knowledge": 94,
     "money_movements": [
       {"id": "mm-month", "money_movement_group_id": "group-month", "month": "2026-07", "from_category_id": "cat-a", "to_category_id": "cat-b", "amount": 500},
       {"id": "mm-now", "money_movement_group_id": "group-now", "from_category_id": "cat-c", "to_category_id": "cat-d", "amount": 900}
@@ -229,7 +262,7 @@ class YnabBudgetRepositorySpec extends Specification {
 ''')))
 
         when:
-        def movements = buildRepository().getMoneyMovements('budget-new', 5000)
+        def movements = buildRepository().getMoneyMovements('budget-new').movements
 
         then:
         movements*.id == ['mm-month', 'mm-now']
@@ -258,17 +291,159 @@ class YnabBudgetRepositorySpec extends Specification {
         buildRepository().getLatestServerKnowledge('budget-new') == 123
     }
 
-    def "latestServerKnowledge returns the highest transaction server knowledge"() {
+    def "parent event model keeps nullable payee and deletion fields"() {
+        expect:
+        new ParentTransactionEvent('txn-1', null, 0, null, null, null, null, null, [], null, null, null).payeeName == null
+        new ParentSubtransactionEvent('sub-1', 'txn-1', 0, null, null, null, null, null, null).deleted == null
+    }
+
+    def "child transaction lookup maps the documented response"() {
         given:
-        def repository = buildRepository()
-        def transactions = [
-            new ParentTransactionEvent('txn-1', '2026-07-01', -100, 'One', true, 40, null, null, []),
-            new ParentTransactionEvent('txn-2', '2026-07-02', -200, 'Two', true, 77, null, null, []),
-            new ParentTransactionEvent('txn-3', '2026-07-03', -300, 'Three', true, 55, null, null, [])
-        ]
+        stubFor(get(urlEqualTo('/v1/plans/child-budget/transactions/txn-1'))
+            .willReturn(jsonResponse(childTransactionResponse('txn-1', 101))))
+
+        when:
+        def result = buildRepository().getChildTransaction('child-budget', 'txn-1')
+
+        then:
+        result.found()
+        result.serverKnowledge == 101
+        result.transaction.id == 'txn-1'
+        result.transaction.payeeId == 'payee-1'
+        result.transaction.payeeName == 'Store'
+        !result.transaction.deleted
+    }
+
+    def "child transaction lookup represents documented 404 as not found"() {
+        given:
+        stubFor(get(urlEqualTo('/v1/plans/child-budget/transactions/missing'))
+            .willReturn(aResponse().withStatus(404).withHeader('Content-Type', 'application/json').withBody('{"error":{"detail":"not found"}}')))
 
         expect:
-        repository.latestServerKnowledge(transactions) == 77
+        !buildRepository().getChildTransaction('child-budget', 'missing').found()
+    }
+
+    def "child transaction update sends only supplied supported fields in wrapper"() {
+        given:
+        stubFor(put(urlEqualTo('/v1/plans/child-budget/transactions/txn-1'))
+            .willReturn(jsonResponse(childTransactionResponse('txn-1', 102))))
+        def fields = [account_id: 'acct-2', date: '2026-07-02', amount: -900, payee_name: 'New Store', cleared: 'cleared', approved: false]
+
+        when:
+        def result = buildRepository().updateChildTransaction('child-budget', 'txn-1', fields)
+        def request = wireMockServer.findAll(putRequestedFor(urlEqualTo('/v1/plans/child-budget/transactions/txn-1')))[0]
+
+        then:
+        result.transaction.id == 'txn-1'
+        result.serverKnowledge == 102
+        new JsonSlurper().parseText(request.bodyAsString) == [transaction: fields]
+        request.getHeader('Authorization') == 'Bearer token'
+    }
+
+    def "child transaction update rejects import id and unsupported fields before HTTP"() {
+        when:
+        buildRepository().updateChildTransaction('child-budget', 'txn-1', [amount: -900, import_id: 'immutable'])
+
+        then:
+        def ex = thrown(IllegalArgumentException)
+        ex.message.contains('import_id')
+        wireMockServer.allServeEvents.empty
+    }
+
+    def "import identity recovery uses documented bulk patch lookup and returns matched transaction"() {
+        given:
+        stubFor(patch(urlEqualTo('/v1/plans/child-budget/transactions'))
+            .willReturn(jsonResponse([data: [server_knowledge: 104, transaction_ids: ['txn-existing'],
+                transactions: [[id: 'txn-existing', account_id: 'acct-1', date: '2026-07-01', amount: -800,
+                    payee_name: 'Store', memo: 'Child memo', cleared: 'cleared', approved: false,
+                    deleted: false]]]])))
+        def fields = [account_id: 'acct-1', date: '2026-07-01', amount: -800,
+            payee_name: 'Store', memo: 'Child memo', cleared: 'cleared', approved: false,
+            import_id: 'must-not-overwrite', unsupported: 'drop-me']
+
+        when:
+        def result = buildRepository().recoverChildTransactionByImportId('child-budget', 'PCBS:stable', fields)
+        def request = wireMockServer.findAll(patchRequestedFor(
+            urlEqualTo('/v1/plans/child-budget/transactions'))).first()
+
+        then:
+        result.transaction.id == 'txn-existing'
+        result.serverKnowledge == 104
+        new JsonSlurper().parseText(request.bodyAsString) == [transactions: [[
+            account_id: 'acct-1', date: '2026-07-01', amount: -800, payee_name: 'Store',
+            memo: 'Child memo', cleared: 'cleared', approved: false, import_id: 'PCBS:stable'
+        ]]]
+    }
+
+    def "child transaction delete maps success and treats 404 as already absent"() {
+        given:
+        stubFor(delete(urlEqualTo('/v1/plans/child-budget/transactions/txn-1'))
+            .willReturn(jsonResponse(childTransactionResponse('txn-1', 103))))
+        stubFor(delete(urlEqualTo('/v1/plans/child-budget/transactions/missing'))
+            .willReturn(aResponse().withStatus(404).withHeader('Content-Type', 'application/json').withBody('{"error":{"detail":"not found"}}')))
+        def repository = buildRepository()
+
+        when:
+        def deleted = repository.deleteChildTransaction('child-budget', 'txn-1')
+        def absent = repository.deleteChildTransaction('child-budget', 'missing')
+
+        then:
+        !deleted.alreadyAbsent
+        deleted.transaction.id == 'txn-1'
+        deleted.serverKnowledge == 103
+        absent.alreadyAbsent
+        absent.transaction == null
+    }
+
+    def "child transaction operations reject malformed success responses"() {
+        given:
+        stubFor(get(urlEqualTo('/v1/plans/child-budget/transactions/txn-1')).willReturn(jsonResponse([data: [server_knowledge: 1]])))
+        stubFor(put(urlEqualTo('/v1/plans/child-budget/transactions/txn-1')).willReturn(jsonResponse([data: [transaction: [id: 'txn-1']]])))
+        stubFor(delete(urlEqualTo('/v1/plans/child-budget/transactions/txn-1')).willReturn(jsonResponse([data: [:]])))
+        def repository = buildRepository()
+
+        when:
+        switch (operation) {
+            case 'lookup': repository.getChildTransaction('child-budget', 'txn-1'); break
+            case 'update': repository.updateChildTransaction('child-budget', 'txn-1', [amount: -1]); break
+            case 'delete': repository.deleteChildTransaction('child-budget', 'txn-1'); break
+        }
+
+        then:
+        def ex = thrown(IllegalStateException)
+        ex.message.contains("child transaction ${operation} response")
+
+        where:
+        operation << ['lookup', 'update', 'delete']
+    }
+
+    def "child transaction operations surface authentication validation and server errors"() {
+        given:
+        switch (operation) {
+            case 'lookup': stubFor(get(urlEqualTo(path)).willReturn(errorResponse(status))); break
+            case 'update': stubFor(put(urlEqualTo(path)).willReturn(errorResponse(status))); break
+            case 'delete': stubFor(delete(urlEqualTo(path)).willReturn(errorResponse(status))); break
+        }
+        def repository = buildRepository()
+
+        when:
+        switch (operation) {
+            case 'lookup': repository.getChildTransaction('child-budget', 'txn-1'); break
+            case 'update': repository.updateChildTransaction('child-budget', 'txn-1', [amount: -1]); break
+            case 'delete': repository.deleteChildTransaction('child-budget', 'txn-1'); break
+        }
+
+        then:
+        def ex = thrown(IllegalStateException)
+        ex.message.contains("YNAB ${method} ${path} failed with status ${status}")
+
+        where:
+        operation | method   | status
+        'lookup'  | 'GET'    | 401
+        'update'  | 'PUT'    | 400
+        'delete'  | 'DELETE' | 500
+
+        path = '/v1/plans/child-budget/transactions/txn-1'
     }
 
     def "postTransactions sends the expected bulk payload to YNAB"() {
@@ -306,5 +481,23 @@ class YnabBudgetRepositorySpec extends Specification {
 
     private YnabBudgetRepository buildRepository() {
         new YnabBudgetRepository(new YnabHttpClient("http://localhost:${wireMockServer.port()}", 'token'))
+    }
+
+    private static Map childTransactionResponse(String id, int serverKnowledge) {
+        [data: [server_knowledge: serverKnowledge, transaction: [
+            id: id, account_id: 'acct-1', date: '2026-07-01', amount: -800,
+            payee_id: 'payee-1', payee_name: 'Store', category_id: null, memo: 'Child memo',
+            cleared: 'cleared', approved: false, flag_color: null, deleted: false
+        ]]]
+    }
+
+    private static def jsonResponse(Object body) {
+        aResponse().withStatus(200).withHeader('Content-Type', 'application/json')
+            .withBody(groovy.json.JsonOutput.toJson(body))
+    }
+
+    private static def errorResponse(int status) {
+        aResponse().withStatus(status).withHeader('Content-Type', 'application/json')
+            .withBody('{"error":{"detail":"failure"}}')
     }
 }

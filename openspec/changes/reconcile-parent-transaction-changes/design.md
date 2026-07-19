@@ -34,6 +34,18 @@ Money movements have a weaker official contract than transactions. The current Y
 
 ## Decisions
 
+### Verified YNAB API contracts (2026-07-18)
+
+The implementation was checked against the official YNAB API documentation and canonical OpenAPI 1.86.0 schema at <https://api.ynab.com/>, <https://api.ynab.com/v1>, and <https://api.ynab.com/papi/open_api_spec.yaml>.
+
+- `TransactionDetail.deleted` and `SubTransactionBase.deleted` are required booleans. Deleted transactions and subtransactions are included only in delta responses. The official contract does not guarantee that a changed split response contains the complete current subtransaction set, so absence cannot drive deletion without a complete transaction lookup.
+- `GET /v1/plans/{plan_id}/transactions` accepts `since_date` and `last_knowledge_of_server` and returns required `transactions` and `server_knowledge` fields. Official documentation does not define how the two filters interact or guarantee that a date filter preserves older edits and tombstones. Since API 1.85.0, omitting `since_date` defaults transaction listings to one year ago; no cursor-specific exception or tombstone-retention period is documented. Established-cursor requests therefore omit the configured bootstrap lookback as required by this change, while this remaining upstream limitation is treated as an explicit operational risk.
+- Child lookup uses `GET /v1/plans/{plan_id}/transactions/{transaction_id}` and returns `data.transaction` plus `data.server_knowledge`; missing lookup is documented as `404` with `ErrorResponse`.
+- A focused child update uses `PUT` on the same path with `{ "transaction": { ... } }`. The supported request fields are `account_id`, `date`, `amount`, `payee_id`, `payee_name`, `category_id`, `memo`, `cleared`, `approved`, `flag_color`, and `subtransactions`; this implementation sends only the narrower authoritative fields needed for reconciliation and omits memo. The operation does not document missing-transaction `404` behavior, so a missing update is recognized through a preceding documented lookup rather than assuming an undocumented update response.
+- Child deletion uses `DELETE` on the same path. Success is `200` with `TransactionResponse`; already absent is documented as `404` with `ErrorResponse` and is treated as idempotent completion by the application layer.
+- Creation `import_id` has a maximum length of 36 characters. It is not accepted by the single-transaction update schema, and the bulk update documentation states that it can identify but cannot change an existing transaction. New imports therefore use bounded stable identity while existing import IDs remain unchanged.
+- Plan-wide money-movement endpoints return `server_knowledge`, and official overview prose says they support delta requests, but OpenAPI 1.86.0 does not declare `last_knowledge_of_server` as a request parameter. Money movements expose no deletion, replacement, supersession, individual lookup, or retention guarantee. The implementation therefore uses complete unfiltered snapshots, sends no movement cursor, and never treats absence, lookback expiry, a similar new ID, or a group ID as destructive evidence.
+
 ### 1. Separate stable source identity from mutable revisions
 
 A top-level source identity is `(sourceBudgetId, parentTransactionId)`. A split component identity is `(sourceBudgetId, parentTransactionId, parentSubtransactionId)`. Amount, category, category name, date, memo, payee, approval, deletion state, mapping, and target account are revision data and MUST NOT participate in source identity.

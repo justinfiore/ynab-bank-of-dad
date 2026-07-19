@@ -107,12 +107,12 @@ class ParentChildBudgetSyncerSpec extends Specification {
             'cat-3': new CategorySnapshot('cat-3', 'Child Two Spend Bank', 0)
         ]
         def transactions = [
-            new ParentTransactionEvent('txn-approved', '2026-07-01', -1200, 'Shoes', true, 12, 'cat-1', 'Child One Spend Bank', []),
-            new ParentTransactionEvent('txn-unapproved', '2026-07-01', -1300, 'Ignore', false, 12, 'cat-1', 'Child One Spend Bank', []),
+            new ParentTransactionEvent('txn-approved', '2026-07-01', -1200, 'Shoes', true, 12, 'cat-1', 'Child One Spend Bank', [], null, null, null),
+            new ParentTransactionEvent('txn-unapproved', '2026-07-01', -1300, 'Ignore', false, 12, 'cat-1', 'Child One Spend Bank', [], null, null, null),
             new ParentTransactionEvent('txn-split', '2026-07-02', -1500, 'Split', true, 12, null, null, [
-                new ParentSubtransactionEvent('sub-1', 'txn-split', -700, 'Split one', 'cat-2', 'Child One Save Bank'),
-                new ParentSubtransactionEvent('sub-2', 'txn-split', -800, 'Split two', 'cat-3', 'Child Two Spend Bank')
-            ])
+                new ParentSubtransactionEvent('sub-1', 'txn-split', -700, 'Split one', 'cat-2', 'Child One Save Bank', null, null, null),
+                new ParentSubtransactionEvent('sub-2', 'txn-split', -800, 'Split two', 'cat-3', 'Child Two Spend Bank', null, null, null)
+            ], null, null, null)
         ]
         def movements = [
             new MoneyMovementEvent('mm-1', 'group-1', '2026-07-03', 'cat-1', 'cat-3', 500)
@@ -178,9 +178,9 @@ class ParentChildBudgetSyncerSpec extends Specification {
             'cat-cd'   : new CategorySnapshot('cat-cd', 'Child One Gold CD 2-Month 07/31/26', 0)
         ]
         def transactions = [
-            new ParentTransactionEvent('txn-spend', '2026-07-01', -1200, 'Spend', true, 12, 'cat-spend', 'Child One Spend Bank', []),
-            new ParentTransactionEvent('txn-give', '2026-07-01', -1300, 'Give', true, 12, 'cat-give', 'Child One Give Bank', []),
-            new ParentTransactionEvent('txn-cd', '2026-07-01', -1400, 'CD', true, 12, 'cat-cd', 'Child One Gold CD 2-Month 07/31/26', [])
+            new ParentTransactionEvent('txn-spend', '2026-07-01', -1200, 'Spend', true, 12, 'cat-spend', 'Child One Spend Bank', [], null, null, null),
+            new ParentTransactionEvent('txn-give', '2026-07-01', -1300, 'Give', true, 12, 'cat-give', 'Child One Give Bank', [], null, null, null),
+            new ParentTransactionEvent('txn-cd', '2026-07-01', -1400, 'CD', true, 12, 'cat-cd', 'Child One Gold CD 2-Month 07/31/26', [], null, null, null)
         ]
 
         when:
@@ -213,8 +213,8 @@ class ParentChildBudgetSyncerSpec extends Specification {
             'cat-regex'  : new CategorySnapshot('cat-regex', 'Child One Bonus Bank', 0)
         ]
         def transactions = [
-            new ParentTransactionEvent('txn-literal', '2026-07-01', -1200, 'Literal', true, 12, 'cat-literal', 'Child One CD (2-Month) [07/31/26]', []),
-            new ParentTransactionEvent('txn-regex', '2026-07-01', -1300, 'Regex', true, 12, 'cat-regex', 'Child One Bonus Bank', [])
+            new ParentTransactionEvent('txn-literal', '2026-07-01', -1200, 'Literal', true, 12, 'cat-literal', 'Child One CD (2-Month) [07/31/26]', [], null, null, null),
+            new ParentTransactionEvent('txn-regex', '2026-07-01', -1300, 'Regex', true, 12, 'cat-regex', 'Child One Bonus Bank', [], null, null, null)
         ]
 
         when:

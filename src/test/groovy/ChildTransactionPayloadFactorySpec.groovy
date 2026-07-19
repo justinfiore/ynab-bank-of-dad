@@ -23,7 +23,8 @@ class ChildTransactionPayloadFactorySpec extends Specification {
         first.cleared == 'cleared'
         !first.approved
         first.import_id == second.import_id
-        first.import_id.startsWith('PCBS:20260701:1200:')
+        first.import_id ==~ /PCBS:[a-f0-9]{31}/
+        first.import_id.size() == 36
     }
 
     def "buildTransaction applies custom prefix and suffix"() {
@@ -67,20 +68,21 @@ class ChildTransactionPayloadFactorySpec extends Specification {
         factory.buildTransaction(emptyMemoPlan, 'acct-1', '  ', '  ').memo == ''
     }
 
-    def "different idempotency keys produce different import ids"() {
+    def "stable source and target identities distinguish import ids"() {
         expect:
         factory.buildImportId(plan('parent|child-one|transaction|txn-1||||cat-1|-1200')) !=
-            factory.buildImportId(plan('parent|child-two|transaction|txn-1||||cat-1|-1200'))
+            factory.buildImportId(plan('parent|child-two|transaction|txn-1||||cat-1|-1200', 'child-two'))
+        factory.buildImportId(plan('parent|child-one|transaction|txn-1||||cat-1|-1200')) !=
+            factory.buildImportId(plan('parent|child-one|transaction|txn-2||||cat-1|-1200', 'child-one', 'txn-2'))
     }
 
     def "import ids are sanitized and bounded"() {
         given:
-        def importId = factory.buildImportId(plan('parent|child one|transaction|txn/with:punctuation and lots of extra characters !@#$%^&*()'))
+        def importId = factory.buildImportId(plan('parent|child one|transaction|txn/with:punctuation and lots of extra characters !@#$%^&*()', 'child one!', 'txn/with:punctuation'))
 
         expect:
-        importId ==~ /PCBS:20260701:1200:[A-Za-z0-9]+/
-        importId.split(':')[-1].size() <= 28
-        importId.size() <= 64
+        importId ==~ /PCBS:[a-f0-9]{31}/
+        importId.size() <= 36
     }
 
     def "extractCreatedTransactionId supports bulk and transaction list response shapes"() {
@@ -90,34 +92,61 @@ class ChildTransactionPayloadFactorySpec extends Specification {
         factory.extractCreatedTransactionId([data: [:]]) == null
     }
 
-    def "buildImportId rejects a missing idempotency key with a useful error"() {
+    def "buildImportId rejects missing stable identity with a useful error"() {
         when:
-        factory.buildImportId(plan(null))
+        def source = plan(null)
+        factory.buildImportId(new ChildTransactionPlan(
+            null, source.targetChildKey, source.targetBudgetName, source.mappingKey,
+            source.parentCategoryName, source.eventType, source.parentTransactionId,
+            source.parentSubtransactionId, source.moneyMovementId, source.moneyMovementGroupId,
+            source.idempotencyKey, source.childAccountName, source.date, source.amount,
+            source.memo, source.payeeName, source.approved
+        ))
 
         then:
         def ex = thrown(IllegalArgumentException)
-        ex.message.contains('idempotency key')
+        ex.message.contains('stable source and target identity')
     }
 
-    def "buildImportId handles the minimum integer amount without a negative absolute value"() {
+    def "buildImportId is unchanged by mutable date amount and idempotency details"() {
         given:
-        def source = plan('minimum-amount-key')
-        def minimum = new ChildTransactionPlan(
+        def source = plan('parent|child-one|transaction|txn-1||||old-category|-1200')
+        def changed = new ChildTransactionPlan(
             source.sourceBudgetId, source.targetChildKey, source.targetBudgetName, source.mappingKey,
             source.parentCategoryName, source.eventType, source.parentTransactionId,
             source.parentSubtransactionId, source.moneyMovementId, source.moneyMovementGroupId,
-            source.idempotencyKey, source.childAccountName, source.date, -2147483647 - 1,
+            'parent|child-one|transaction|txn-1||||new-category|-9999', source.childAccountName, '2026-08-02', -9999,
             source.memo, source.payeeName, source.approved
         )
 
         expect:
-        factory.buildImportId(minimum).contains(':2147483648:')
+        factory.buildImportId(source) == factory.buildImportId(changed)
     }
 
-    private static ChildTransactionPlan plan(String idempotencyKey) {
+    def "money movement import ids distinguish inflow and outflow sides"() {
+        given:
+        def source = plan('parent|child-one|mapping|account|money_movement|||mm-1|inflow|cat|name|500')
+        def inflow = new ChildTransactionPlan(
+            source.sourceBudgetId, source.targetChildKey, source.targetBudgetName, source.mappingKey,
+            source.parentCategoryName, 'money_movement', null, null, 'mm-1', 'group-1',
+            'parent|child-one|mapping|account|money_movement|||mm-1|inflow|cat|name|500',
+            source.childAccountName, source.date, 500, source.memo, source.payeeName, source.approved
+        )
+        def outflow = new ChildTransactionPlan(
+            source.sourceBudgetId, source.targetChildKey, source.targetBudgetName, source.mappingKey,
+            source.parentCategoryName, 'money_movement', null, null, 'mm-1', 'group-1',
+            'parent|child-one|mapping|account|money_movement|||mm-1|outflow|cat|name|500',
+            source.childAccountName, source.date, -500, source.memo, source.payeeName, source.approved
+        )
+
+        expect:
+        factory.buildImportId(inflow) != factory.buildImportId(outflow)
+    }
+
+    private static ChildTransactionPlan plan(String idempotencyKey, String childKey = 'child-one', String transactionId = 'txn-1') {
         new ChildTransactionPlan(
-            'parent-budget', 'child-one', 'Child Budget', 'spend', 'Child One Spend Bank',
-            'transaction', 'txn-1', null, null, null, idempotencyKey, 'Child Checking',
+            'parent-budget', childKey, 'Child Budget', 'spend', 'Child One Spend Bank',
+            'transaction', transactionId, null, null, null, idempotencyKey, 'Child Checking',
             '2026-07-01', -1200, 'Memo', 'Payee', false
         )
     }

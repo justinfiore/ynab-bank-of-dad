@@ -1,6 +1,10 @@
 package ynabbankofdad.sync
 
 import ynabbankofdad.sync.model.ChildTransactionPlan
+import ynabbankofdad.sync.state.SourceEntityKey
+
+import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 
 class ChildTransactionPayloadFactory {
 
@@ -20,13 +24,42 @@ class ChildTransactionPayloadFactory {
     }
 
     String buildImportId(ChildTransactionPlan plan) {
-        if (!plan?.idempotencyKey) {
-            throw new IllegalArgumentException('Child transaction plan must have an idempotency key')
+        if (!plan?.sourceBudgetId || !plan?.targetChildKey || !plan?.eventType) {
+            throw new IllegalArgumentException('Child transaction plan must have stable source and target identity')
         }
-        String compact = plan.idempotencyKey.replaceAll(/[^A-Za-z0-9]/, '').takeRight(28)
-        String datePart = (plan.date ?: '1970-01-01').replace('-', '')
-        BigInteger amountAbs = BigInteger.valueOf((plan.amount ?: 0) as long).abs()
-        "PCBS:${datePart}:${amountAbs}:${compact}"
+        String movementDirection = movementDirection(plan)
+        hashImportIdentity([
+            plan.sourceBudgetId, plan.targetChildKey, plan.eventType,
+            plan.parentTransactionId ?: '', plan.parentSubtransactionId ?: '',
+            plan.moneyMovementId ?: '', movementDirection
+        ])
+    }
+
+    String buildImportId(SourceEntityKey source, String targetBudgetId, String direction) {
+        if (!source?.sourceBudgetId || !source.type || !targetBudgetId || !direction) {
+            throw new IllegalArgumentException('Reconciliation create must have stable source and target identity')
+        }
+        hashImportIdentity([
+            source.sourceBudgetId, targetBudgetId, source.type.databaseValue,
+            source.parentTransactionId ?: '', source.parentSubtransactionId ?: '',
+            source.moneyMovementId ?: '',
+            source.type == ynabbankofdad.sync.state.SourceEntityType.MONEY_MOVEMENT ? direction : ''
+        ])
+    }
+
+    private static String hashImportIdentity(List<String> identityParts) {
+        String stableIdentity = identityParts.join('\u001f')
+        byte[] digest = MessageDigest.getInstance('SHA-256').digest(stableIdentity.getBytes(StandardCharsets.UTF_8))
+        String hash = digest.encodeHex().toString()
+        "PCBS:${hash.substring(0, 31)}"
+    }
+
+    private static String movementDirection(ChildTransactionPlan plan) {
+        if (plan.eventType != 'money_movement') {
+            return ''
+        }
+        List<String> keyParts = (plan.idempotencyKey ?: '').split('\\|', -1) as List
+        keyParts.size() > 8 ? keyParts[8] : ''
     }
 
     String extractCreatedTransactionId(def response) {

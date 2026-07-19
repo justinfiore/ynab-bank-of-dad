@@ -83,6 +83,9 @@ class ParentTransactionEvent {
     String categoryId
     String categoryName
     List<ParentSubtransactionEvent> subtransactions = []
+    String payeeId
+    String payeeName
+    Boolean deleted
 }
 
 @Immutable
@@ -93,6 +96,9 @@ class ParentSubtransactionEvent {
     String memo
     String categoryId
     String categoryName
+    Boolean deleted
+    String payeeId
+    String payeeName
 }
 
 @Immutable
@@ -103,4 +109,55 @@ class MoneyMovementEvent {
     String fromCategoryId
     String toCategoryId
     Integer amount
+}
+
+@Immutable
+class TransactionDelta {
+    List<ParentTransactionEvent> transactions = []
+    Integer serverKnowledge
+}
+
+@Immutable
+class MoneyMovementSnapshot {
+    List<MoneyMovementEvent> movements = []
+    Integer serverKnowledge
+}
+
+@Immutable
+class ChildTransaction {
+    String id
+    String accountId
+    String date
+    Integer amount
+    String payeeId
+    String payeeName
+    String categoryId
+    String memo
+    String cleared
+    Boolean approved
+    String flagColor
+    Boolean deleted
+}
+
+@Immutable
+class ChildTransactionResult {
+    ChildTransaction transaction
+    Integer serverKnowledge
+}
+
+@Immutable
+class ChildTransactionLookupResult {
+    ChildTransaction transaction
+    Integer serverKnowledge
+
+    boolean found() {
+        transaction != null
+    }
+}
+
+@Immutable
+class ChildTransactionDeleteResult {
+    ChildTransaction transaction
+    Integer serverKnowledge
+    Boolean alreadyAbsent
 }
