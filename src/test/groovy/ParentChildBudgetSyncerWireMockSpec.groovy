@@ -815,10 +815,15 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
                 cleared: 'cleared', approved: false, deleted: false
             ]]])))
         def syncer = syncer(false)
+        def auditAppender = new ListAppender<ILoggingEvent>()
+        auditAppender.start()
+        Logger syncerLogger = LoggerFactory.getLogger(ParentChildBudgetSyncer) as Logger
+        syncerLogger.addAppender(auditAppender)
 
         when:
         syncer.runOnce(1)
         syncer.runOnce(2)
+        List<String> auditMessages = auditAppender.list.findAll { it.level.levelStr == 'INFO' }*.formattedMessage
 
         then:
         postedTransactions('child-one-budget-id').size() == 1
@@ -832,6 +837,21 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         tableCount('source_revisions') == 2
         mirrorRows() == [[child_transaction_id: 'child-update', status: 'active']]
         cursorValue('transactions.last_server_knowledge') == 292
+        auditMessages.any {
+            it.contains('Reconciliation decision action=create') &&
+                it.contains('transaction=txn-update') && it.contains('targetBudget=child-one-budget-id')
+        }
+        auditMessages.any {
+            it.contains('Reconciliation decision action=update') &&
+                it.contains('childTransaction=child-update') && it.contains('"amount":"-$1.25"')
+        }
+        auditMessages.findAll { it.contains('Reconciliation decision') }.every {
+            it.contains('operation=') && it.contains('key=') && it.contains('batch=') &&
+                it.contains('sequence=') && it.contains('dependency=') && !it.contains('child-one-token')
+        }
+
+        cleanup:
+        syncerLogger.detachAppender(auditAppender)
     }
 
     def "cross-budget reroute separates tokens deletes once and retries only replacement create"() {

@@ -1,5 +1,6 @@
 package ynabbankofdad.sync
 
+import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
 import groovy.transform.Immutable
 import groovy.util.logging.Slf4j
@@ -8,6 +9,7 @@ import ynabbankofdad.sync.model.ChildTransaction
 import ynabbankofdad.sync.reconcile.DesiredMirrorFactory
 import ynabbankofdad.sync.state.*
 import ynabbankofdad.ynab.YnabBudgetRepository
+import ynabbankofdad.ynab.YnabLogFormatter
 
 @Slf4j
 class ReconciliationOperationApplier {
@@ -110,6 +112,11 @@ class ReconciliationOperationApplier {
             operation.id, operation.intent.sourceEntityId, operation.intent.childMirrorId,
             operation.intent.targetBudgetId, direction, childTransactionId,
             desired.account_id as String, operation.intent.payloadHash, recreation)
+        log.info(
+            'Reconciliation outcome action={} outcome={} operation={} source={} targetBudget={} childTransaction={} direction={} account={} payload={}',
+            recreation ? 'recreate' : 'create', outcome, operation.id, auditSource(operation),
+            operation.intent.targetBudgetId, childTransactionId, direction, desired.account_id,
+            auditPayload(desired))
     }
 
     private void applyUpdate(ReconciliationOperation operation, YnabBudgetRepository repository,
@@ -136,6 +143,10 @@ class ReconciliationOperationApplier {
         stateStore.recordOperationAttempt(operation.id, outcome, null, childId)
         stateStore.completeUpdateOperation(operation.id, operation.intent.childMirrorId,
             desired.account_id as String, operation.intent.payloadHash)
+        log.info(
+            'Reconciliation outcome action=update outcome={} operation={} source={} targetBudget={} childTransaction={} account={} payload={}',
+            outcome, operation.id, auditSource(operation), operation.intent.targetBudgetId, childId,
+            desired.account_id, auditPayload(update))
     }
 
     private void applyDelete(ReconciliationOperation operation, YnabBudgetRepository repository,
@@ -148,6 +159,10 @@ class ReconciliationOperationApplier {
         }
         stateStore.recordOperationAttempt(operation.id, outcome, null, null)
         stateStore.completeDeleteOperation(operation.id, operation.intent.childMirrorId)
+        log.info(
+            'Reconciliation outcome action=delete outcome={} operation={} source={} targetBudget={} childTransaction={}',
+            outcome, operation.id, auditSource(operation), operation.intent.targetBudgetId,
+            operation.intent.childTransactionId)
     }
 
     private ChildSyncContext childContext(String targetBudgetId) {
@@ -189,6 +204,21 @@ class ReconciliationOperationApplier {
     private static List<String> duplicateImportIds(def response) {
         def ids = response?.data?.duplicate_import_ids ?: response?.data?.bulk?.duplicate_import_ids
         ids instanceof List ? ids.collect { it as String } : []
+    }
+
+    private String auditSource(ReconciliationOperation operation) {
+        SourceEntityKey source = stateStore.findSourceEntityKey(operation.intent.sourceEntityId)
+        [
+            budget        : source.sourceBudgetId,
+            type          : source.type.databaseValue,
+            transaction   : source.parentTransactionId,
+            subtransaction: source.parentSubtransactionId,
+            movement      : source.moneyMovementId
+        ].findAll { String ignored, Object value -> value != null }.collect { key, value -> "${key}=${value}" }.join(',')
+    }
+
+    private static String auditPayload(Map<String, Object> payload) {
+        JsonOutput.toJson(YnabLogFormatter.formatAmounts(payload))
     }
 
     private static boolean matches(ChildTransaction actual, Map<String, Object> desired) {

@@ -1,5 +1,6 @@
 package ynabbankofdad.sync
 
+import groovy.json.JsonOutput
 import groovy.util.logging.Slf4j
 import ynabbankofdad.config.*
 import ynabbankofdad.model.CategorySnapshot
@@ -482,7 +483,7 @@ class ParentChildBudgetSyncer {
     }
 
     private long persistOperation(PlannedReconciliationIntent planned, long batchId, long sourceEntityId,
-                                  int sequence, Long dependencyId, String revisionHash) {
+                                   int sequence, Long dependencyId, String revisionHash) {
         ReconciliationOperationType type = planned.action == PlannedAction.CREATE ?
             ReconciliationOperationType.CREATE : planned.action == PlannedAction.DELETE ?
                 ReconciliationOperationType.DELETE : ReconciliationOperationType.UPDATE
@@ -490,11 +491,35 @@ class ParentChildBudgetSyncer {
             batchId, revisionHash, planned.operationKey, sourceEntityId, type.name(),
             planned.targetBudgetId, planned.childTransactionId, planned.payloadHash
         ])
-        reconciliationState.createOperation(new ReconciliationOperationIntent(
+        long operationId = reconciliationState.createOperation(new ReconciliationOperationIntent(
             operationKey, batchId, sourceEntityId,
             planned.childMirrorId != null && planned.childMirrorId > 0 ? planned.childMirrorId : null,
             sequence, type, planned.targetBudgetId, planned.childTransactionId,
             planned.payloadJson, planned.payloadHash, dependencyId))
+        log.info(
+            'Reconciliation decision action={} operation={} key={} batch={} sequence={} source={} targetBudget={} childTransaction={} dependency={} payload={}',
+            planned.action.name().toLowerCase(), operationId, operationKey, batchId, sequence,
+            auditSource(planned.source), planned.targetBudgetId, planned.childTransactionId ?: 'new',
+            dependencyId ?: 'none', auditPayload(planned.payloadJson))
+        operationId
+    }
+
+    private static String auditSource(SourceEntityKey source) {
+        [
+            budget        : source.sourceBudgetId,
+            type          : source.type.databaseValue,
+            transaction   : source.parentTransactionId,
+            subtransaction: source.parentSubtransactionId,
+            movement      : source.moneyMovementId
+        ].findAll { String ignored, Object value -> value != null }.collect { key, value -> "${key}=${value}" }.join(',')
+    }
+
+    private static String auditPayload(String payloadJson) {
+        if (!payloadJson) {
+            return 'none'
+        }
+        Object payload = new groovy.json.JsonSlurper().parseText(payloadJson)
+        JsonOutput.toJson(YnabLogFormatter.formatAmounts(payload))
     }
 
     private void reportDryRun(List<ParentReconciliationResult> transactionResults,

@@ -1,4 +1,8 @@
 import groovy.json.JsonOutput
+import ch.qos.logback.classic.Logger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
+import org.slf4j.LoggerFactory
 import spock.lang.Specification
 import spock.lang.TempDir
 import ynabbankofdad.config.ChildBudgetSyncTarget
@@ -113,6 +117,51 @@ class ReconciliationOperationApplierSpec extends Specification {
         repository.postCalls == 1
         scalar("SELECT outcome FROM operation_attempts WHERE sync_operation_id = ?", deleteId) == 'already_complete'
         store.findMirrorsForParent('parent-budget', 'parent-txn')*.targetBudgetId == ['child-budget']
+    }
+
+    def "every mutation outcome emits an INFO audit record with stable identifiers"() {
+        given:
+        def appender = new ListAppender<ILoggingEvent>()
+        appender.start()
+        Logger logger = LoggerFactory.getLogger(ReconciliationOperationApplier) as Logger
+        logger.addAppender(appender)
+        long updateSource = store.upsertSourceEntity(
+            new SourceEntityKey('parent-budget', SourceEntityType.TRANSACTION, 'update-source', null, null))
+        long recreateSource = store.upsertSourceEntity(
+            new SourceEntityKey('parent-budget', SourceEntityType.TRANSACTION, 'recreate-source', null, null))
+        long deleteSource = store.upsertSourceEntity(
+            new SourceEntityKey('parent-budget', SourceEntityType.TRANSACTION, 'delete-source', null, null))
+        long updateMirror = store.recordMirrorCreated(updateSource, 'child-budget', 'outflow', 'update-child')
+        long recreateMirror = store.recordMirrorCreated(recreateSource, 'child-budget', 'outflow', 'missing-child')
+        long deleteMirror = store.recordMirrorCreated(deleteSource, 'child-budget', 'outflow', 'delete-child')
+        repository.remote['update-child'] = child('update-child', 'old-account', 'child memo', 'uncleared', true)
+        repository.remote['delete-child'] = child('delete-child', 'account-1', 'child memo', 'cleared', false)
+        createOperation('audit-create', ReconciliationOperationType.CREATE, null, null, payload())
+        createOperationForSource('audit-update', updateSource, ReconciliationOperationType.UPDATE,
+            updateMirror, 'update-child', payload())
+        createOperationForSource('audit-recreate', recreateSource, ReconciliationOperationType.UPDATE,
+            recreateMirror, 'missing-child', payload())
+        createOperationForSource('audit-delete', deleteSource, ReconciliationOperationType.DELETE,
+            deleteMirror, 'delete-child', null)
+
+        when:
+        def result = applier(store).applyReadyOperations()
+        List<String> messages = appender.list.findAll { it.level.levelStr == 'INFO' }*.formattedMessage
+
+        then:
+        result.applied == 4
+        ['create', 'update', 'recreate', 'delete'].every { action ->
+            messages.any { it.contains("Reconciliation outcome action=${action}") }
+        }
+        messages.any { it.contains('transaction=update-source') && it.contains('childTransaction=update-child') }
+        messages.any { it.contains('transaction=recreate-source') && it.contains('childTransaction=child-') }
+        messages.any { it.contains('transaction=delete-source') && it.contains('childTransaction=delete-child') }
+        messages.findAll { it.startsWith('Reconciliation outcome') }.every {
+            it.contains('operation=') && it.contains('targetBudget=child-budget') && !it.contains('TOKEN')
+        }
+
+        cleanup:
+        logger.detachAppender(appender)
     }
 
     def "failed child remains retryable while successful sibling is retained"() {
