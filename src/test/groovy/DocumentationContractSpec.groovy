@@ -1,6 +1,20 @@
 import spock.lang.Specification
 
 class DocumentationContractSpec extends Specification {
+    def "README links the complete architecture and review guide"() {
+        given:
+        String readme = new File('README.md').text
+        String architecture = new File('ARCHITECTURE.md').text
+
+        expect:
+        readme.contains('[ARCHITECTURE.md](ARCHITECTURE.md)')
+        ['# Architecture', '## Record Allowance', '## Parent/Child Syncer',
+         '## Parent Transaction Reconciliation', '### Code Review Checklist',
+         '### Review Hotspots And Design Questions'].every { architecture.contains(it) }
+        ['RecordAllowance', 'ParentChildBudgetSyncer', 'ParentTransactionReconciler',
+         'ReconciliationOperationApplier', 'SyncStateStore'].every { architecture.contains(it) }
+    }
+
     def "operator onboarding links the destructive reconciliation guide"() {
         given:
         String readme = new File('README.md').text

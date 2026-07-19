@@ -58,6 +58,7 @@ Before any live run:
 
 If you only want the shortest safe path to a first run, start with [QUICK_START.md](QUICK_START.md).
 For the full configuration guide, see [CONFIGURATION.md](CONFIGURATION.md).
+For the overall system design, code organization, runtime flows, and a detailed reconciliation review guide, see [ARCHITECTURE.md](ARCHITECTURE.md).
 For step-by-step real-account validation before continuous parent/child syncing, use [PARENT_CHILD_SYNC_MANUAL_TESTING.md](PARENT_CHILD_SYNC_MANUAL_TESTING.md).
 
 Before enabling live parent/child syncing, read [PARENT_TRANSACTION_RECONCILIATION.md](PARENT_TRANSACTION_RECONCILIATION.md). It documents parent-authoritative and child-owned fields, destructive transaction and split changes, movement limitations, retries, migration cleanup, dry-run guarantees, and rollback limits.
