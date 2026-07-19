@@ -108,13 +108,13 @@ Alternative considered: directly mutate YNAB and then update the existing mappin
 
 Live `ParentChildBudgetSyncer.main` acquires an exclusive `FileChannel` lock on `<sqlitePath>.lock` before constructing the live syncer and entering the poll loop. A second live process that loses `tryLock` aborts immediately with an error that names the database and lock path. The lock is released in `finally` on normal exit; the OS releases it after crash or `kill -9`, so the next run is not permanently locked out. Dry-run never takes the lock. This is preferred over a SQLite `sync_runs` lease row because abrupt death must not require a heartbeat TTL or manual unlock.
 
-### 8. Cursor advancement remains remote-application gated
+### 8. Cursor advancement remains remote-application gated across all transaction batches
 
-The transaction server-knowledge cursor advances only after the durable ingestion batch and every operation derived from that batch are applied successfully or recognized as idempotently complete. Partial child failures preserve successful sibling results but block the shared parent transaction cursor, allowing retry with stable operation identities. Money-movement operations are independent of transaction-delta work and do not block transaction cursor advancement.
+The transaction server-knowledge cursor advances only when every `transaction_delta` ingestion batch is complete: each batch must have no unfinished operations, and no transaction batch may remain `pending`. Completion is evaluated for the whole kind, not only the batch created for the current response. This closes the restart hole where a later delta from an unadvanced cursor could fully apply while an older retryable batch still blocked correctness. Partial child failures preserve successful sibling results but block the shared parent transaction cursor until every transaction batch is done. Money-movement snapshot batches use the same all-batches-of-kind rule independently and never gate the transaction cursor.
 
 Initial bootstrap may use the configured transaction lookback date. Once a transaction server-knowledge cursor exists, delta reads omit `since_date` unless official YNAB documentation confirms that combining the filters cannot hide old-transaction tombstones or edits.
 
-Alternative considered: advance after operations are durably queued. Rejected to preserve the existing conservative cursor contract and simplify recovery validation.
+Alternative considered: advance after only the current response batch completes. Rejected because two distinct responses can be read from one unadvanced cursor while earlier operations remain retryable.
 
 ### 9. YNAB mutation contracts stay behind the repository boundary
 

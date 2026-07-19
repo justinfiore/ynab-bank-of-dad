@@ -49,6 +49,24 @@ class SyncRunCoordinatorSpec extends Specification {
         state.cursors[SyncRunCoordinator.TRANSACTION_CURSOR_KEY] == 12
     }
 
+    def "cursor advances only when caller reports all transaction batches complete"() {
+        given:
+        def state = new InMemorySyncStateRepository()
+        def coordinator = new SyncRunCoordinator(state, false)
+
+        when: 'a newer response is fully applied but an older batch is still incomplete'
+        coordinator.finishRun(7L, new SyncRunResult(['older transaction batch unfinished']), 200, false)
+
+        then:
+        !state.cursors.containsKey(SyncRunCoordinator.TRANSACTION_CURSOR_KEY)
+
+        when: 'every transaction_delta batch is complete'
+        coordinator.finishRun(8L, SyncRunResult.empty(), 200, true)
+
+        then:
+        state.cursors[SyncRunCoordinator.TRANSACTION_CURSOR_KEY] == 200
+    }
+
     def "movement failure permits cursor when transaction batch completed"() {
         given:
         def state = new InMemorySyncStateRepository()

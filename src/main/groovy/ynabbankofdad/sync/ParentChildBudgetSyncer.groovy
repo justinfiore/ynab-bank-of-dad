@@ -197,15 +197,15 @@ class ParentChildBudgetSyncer {
 
             ReconciliationApplicationResult application = reconciliationApplier.applyReadyOperations()
             boolean transactionComplete = transactionRouting.failures.isEmpty() &&
-                reconciliationState.completeIngestionBatchIfReady(transactionBatchId)
+                reconciliationState.completeIngestionBatchesOfKindIfReady('transaction_delta')
             boolean movementComplete = movementBatchId == null || (movementRouting.failures.isEmpty() &&
-                reconciliationState.completeIngestionBatchIfReady(movementBatchId))
+                reconciliationState.completeIngestionBatchesOfKindIfReady('money_movement_snapshot'))
             List<String> failures = new ArrayList<>(application.failures ?: [])
             if (!transactionComplete && application.failed == 0) {
-                failures << 'transaction reconciliation batch has unfinished operations'
+                failures << 'transaction reconciliation has unfinished ingestion batches or operations'
             }
             if (!movementComplete && application.failed == 0) {
-                failures << 'money movement reconciliation batch has unfinished operations'
+                failures << 'money movement reconciliation has unfinished ingestion batches or operations'
             }
             if (movementReadFailure) {
                 failures << movementReadFailure

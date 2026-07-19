@@ -301,7 +301,7 @@ The following invariants define intended behavior:
 9. Remote mutation intent is durable before the remote call.
 10. Applied sibling operations survive another operation's failure.
 11. Child transaction IDs remain in mirror history after deletion, replacement, or recreation.
-12. Transaction cursor advancement is gated by completion of the current response's transaction batch and routing work. The current implementation does not also query every older pending transaction batch; see the review hotspot below.
+12. Transaction cursor advancement is gated by completion of every `transaction_delta` ingestion batch (including older unfinished batches) and transaction routing success.
 13. Money-movement absence is never treated as deletion evidence.
 14. Movement failures do not block the transaction cursor.
 15. Dry-run performs no child mutation and no SQLite schema or data write.
@@ -324,9 +324,9 @@ runOnce
   -> dry-run: report decisions and stop
   -> live: persist batches, revisions, lifecycle, operations, dependencies
   -> apply globally ready operations
-  -> complete transaction and movement batches independently
+  -> complete all transaction_delta batches and all money_movement_snapshot batches independently
   -> finalize run
-  -> advance transaction cursor only when transaction work is complete
+  -> advance transaction cursor only when every transaction_delta batch is complete
 ```
 
 #### State Initialization
@@ -629,9 +629,11 @@ Movement batch identity includes:
 - response server knowledge;
 - ordered observed movement hashes.
 
-`completeIngestionBatchIfReady` marks a batch complete only when none of its operations remain pending or retryable-failed.
+`completeIngestionBatchIfReady` marks one batch complete only when none of its operations remain pending or retryable-failed.
 
-`SyncRunCoordinator` advances `transactions.last_server_knowledge` only when the current response batch's transaction work and routing are complete. Overall run status can still be partial because movement work failed; that failure does not gate the transaction cursor. Older incomplete transaction batches are not included in this eligibility query, which is called out below as a review hotspot.
+`completeIngestionBatchesOfKindIfReady(sourceKind)` walks every batch of that kind, completes each ready batch, and returns true only when none remain incomplete. Live `runOnce` uses this for `transaction_delta` and `money_movement_snapshot` separately.
+
+`SyncRunCoordinator` advances `transactions.last_server_knowledge` only when transaction routing succeeded and every transaction_delta batch is complete. Overall run status can still be partial because movement work failed; that failure does not gate the transaction cursor.
 
 ### Money-Movement Reconciliation
 
@@ -805,8 +807,8 @@ Use this checklist when reviewing reconciliation changes:
 
 #### Cursor And Dry-Run
 
-- Verify failure in the current response's transaction batch blocks its cursor advancement.
-- Verify whether older incomplete transaction batches must also participate before a later server-knowledge value advances.
+- Verify failure in any unfinished transaction_delta batch blocks cursor advancement.
+- Verify older incomplete transaction batches block a later server-knowledge value until they complete.
 - Verify movement work does not block that cursor.
 - Verify empty deltas can advance server knowledge.
 - Verify dry-run cannot reach any child mutation or state-write method.
@@ -818,7 +820,7 @@ The following areas deserve extra scrutiny. They describe current boundaries or 
 
 #### Cursor Eligibility Across Multiple Pending Batches
 
-`runOnce` checks completion of the transaction batch created or reused for the current response. Review whether cursor advancement also needs an explicit query proving that no older transaction batch after the saved cursor remains incomplete. A useful adversarial case is two distinct responses read from one unadvanced cursor while an operation from the earlier response remains retryable.
+Resolved: `runOnce` advances the transaction cursor only when `completeIngestionBatchesOfKindIfReady('transaction_delta')` is true, so an older unfinished transaction batch blocks a newer server-knowledge value until its operations are applied or recognized as already complete.
 
 #### Multiple Concurrent Syncer Processes
 

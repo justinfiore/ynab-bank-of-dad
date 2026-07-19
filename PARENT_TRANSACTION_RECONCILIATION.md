@@ -169,9 +169,9 @@ Every reconciliation operation attempt remains in operation history for troubles
 
 ## Cursor behavior
 
-Transaction deltas are grouped into durable ingestion batches. The transaction cursor advances only after all operations derived from that batch complete successfully or are recognized as already complete.
+Transaction deltas are grouped into durable ingestion batches. The transaction cursor advances only after **every** transaction-delta batch is complete—not only the batch from the latest response. If an earlier batch still has unfinished create/update/delete work, a later successful delta cannot move the cursor forward until that older work finishes or is recognized as already complete.
 
-An empty successful transaction delta can still advance server knowledge. Money-movement operations are not part of a transaction delta batch and do not block the transaction cursor.
+An empty successful transaction delta can still advance server knowledge when no unfinished transaction batches remain. Money-movement operations use their own batch kind and do not block the transaction cursor.
 
 The configured transaction lookback is used for bootstrap. After a transaction cursor exists, delta requests omit the date filter so the syncer does not intentionally exclude older edits or deletion tombstones. Money movements are read as complete, unfiltered snapshots without an undocumented movement cursor; their ingestion and retries remain independent of the transaction cursor.
 

@@ -38,6 +38,7 @@ interface ReconciliationSyncStateRepository extends ReconciliationOperationState
                               Integer serverKnowledge, long ingestionBatchId)
     long createIngestionBatch(String batchKey, String sourceKind, Integer serverKnowledge)
     boolean completeIngestionBatchIfReady(long batchId)
+    boolean completeIngestionBatchesOfKindIfReady(String sourceKind)
     List<ChildMirrorState> findMirrorsForParent(String sourceBudgetId, String parentTransactionId,
                                                  boolean includeInactive)
     List<ChildMirrorState> findMirrorsForSource(SourceEntityKey source, boolean includeInactive)
@@ -81,6 +82,7 @@ class DryRunSyncStateRepository implements SyncStateRepository, ReconciliationSy
                               Integer serverKnowledge, long ingestionBatchId) { throw dryRunWrite() }
     long createIngestionBatch(String batchKey, String sourceKind, Integer serverKnowledge) { throw dryRunWrite() }
     boolean completeIngestionBatchIfReady(long batchId) { throw dryRunWrite() }
+    boolean completeIngestionBatchesOfKindIfReady(String sourceKind) { throw dryRunWrite() }
     void setSourceLifecycle(long sourceEntityId, String lifecycleStatus) { throw dryRunWrite() }
     long createOperation(ReconciliationOperationIntent intent) { throw dryRunWrite() }
     List<ReconciliationOperation> findReadyOperations(int limit) { [] }
@@ -423,25 +425,55 @@ class SyncStateStore implements SyncStateRepository, ReconciliationSyncStateRepo
 
     boolean completeIngestionBatchIfReady(long batchId) {
         withTransaction { Connection connection ->
-            def pending = connection.prepareStatement('''
-                SELECT COUNT(*) FROM sync_operations
-                WHERE ingestion_batch_id = ? AND status != 'applied'
-            ''')
-            pending.setLong(1, batchId)
-            def result = pending.executeQuery()
-            result.next()
-            if (result.getInt(1) != 0) {
-                return false
-            }
-            def complete = connection.prepareStatement('''
-                UPDATE ingestion_batches SET status = 'completed', completed_at = COALESCE(completed_at, ?)
-                WHERE id = ?
-            ''')
-            complete.setString(1, now())
-            complete.setLong(2, batchId)
-            complete.executeUpdate()
-            true
+            completeBatchIfReady(connection, batchId)
         } as boolean
+    }
+
+    /**
+     * Marks every ingestion batch of {@code sourceKind} complete when it has no unfinished operations.
+     * Returns true only when every batch of that kind is completed (none remain with unfinished work
+     * or pending status). Used so the transaction cursor cannot advance while an older delta batch
+     * is still incomplete.
+     */
+    boolean completeIngestionBatchesOfKindIfReady(String sourceKind) {
+        if (!(sourceKind in ['transaction_delta', 'money_movement_snapshot'])) {
+            throw new IllegalArgumentException("Unsupported ingestion source kind '${sourceKind}'")
+        }
+        withTransaction { Connection connection ->
+            def batches = connection.prepareStatement('''
+                SELECT id FROM ingestion_batches WHERE source_kind = ? ORDER BY id
+            ''')
+            batches.setString(1, sourceKind)
+            def result = batches.executeQuery()
+            boolean allComplete = true
+            while (result.next()) {
+                if (!completeBatchIfReady(connection, result.getLong(1))) {
+                    allComplete = false
+                }
+            }
+            allComplete
+        } as boolean
+    }
+
+    private static boolean completeBatchIfReady(Connection connection, long batchId) {
+        def pending = connection.prepareStatement('''
+            SELECT COUNT(*) FROM sync_operations
+            WHERE ingestion_batch_id = ? AND status != 'applied'
+        ''')
+        pending.setLong(1, batchId)
+        def result = pending.executeQuery()
+        result.next()
+        if (result.getInt(1) != 0) {
+            return false
+        }
+        def complete = connection.prepareStatement('''
+            UPDATE ingestion_batches SET status = 'completed', completed_at = COALESCE(completed_at, ?)
+            WHERE id = ?
+        ''')
+        complete.setString(1, now())
+        complete.setLong(2, batchId)
+        complete.executeUpdate()
+        true
     }
 
     List<ChildMirrorState> findMirrorsForParent(String sourceBudgetId, String parentTransactionId,

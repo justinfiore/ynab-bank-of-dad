@@ -142,7 +142,7 @@ Live mode SHALL acquire an exclusive OS file lock for the configured SQLite stat
 - **THEN** dry-run SHALL proceed without acquiring the exclusive live writer lock
 
 ### Requirement: Reconciliation operations SHALL be durable and cursor-safe
-The syncer SHALL persist a durable ingestion batch, immutable ordered create/update/delete operation intent, and append-only operation attempts before and during live child mutation. Failed operation intent SHALL remain retryable across process restarts, successful sibling operations SHALL remain recorded, and the parent transaction cursor SHALL advance only after every operation derived from that ingestion batch is successfully complete. All mixed replacement transitions SHALL complete obsolete-mirror deletions before dependent creates.
+The syncer SHALL persist a durable ingestion batch, immutable ordered create/update/delete operation intent, and append-only operation attempts before and during live child mutation. Failed operation intent SHALL remain retryable across process restarts, successful sibling operations SHALL remain recorded, and the parent transaction cursor SHALL advance only after every `transaction_delta` ingestion batch is successfully complete (not merely the batch created for the current response). A later response with a higher server knowledge MUST NOT advance the cursor while any older unfinished transaction batch remains pending or has unfinished operations. Money-movement snapshot batches use the same all-batches-of-kind completion rule independently and do not gate the transaction cursor. All mixed replacement transitions SHALL complete obsolete-mirror deletions before dependent creates.
 
 #### Scenario: Update failure blocks cursor
 - **WHEN** a child transaction update fails
@@ -158,6 +158,11 @@ The syncer SHALL persist a durable ingestion batch, immutable ordered create/upd
 #### Scenario: Three process-like cycles recover mutation work
 - **WHEN** a first cycle partially applies reconciliation, a second fresh process retries the failure, and a third fresh process receives new incremental work
 - **THEN** completed operations SHALL not repeat, failed operations SHALL retry, and the final cursor SHALL reflect the newest fully applied server knowledge
+
+#### Scenario: Older incomplete transaction batch blocks newer cursor advancement
+- **WHEN** an earlier transaction_delta batch still has unfinished operations and a later cycle fully applies a newer transaction_delta batch
+- **THEN** the parent transaction cursor SHALL NOT advance to the newer server knowledge
+- **AND** a subsequent cycle that completes the older batch SHALL be allowed to advance the cursor to the newest fully applied transaction server knowledge
 
 #### Scenario: Remote mutation succeeds before local completion write fails
 - **WHEN** a create, update, or delete succeeds remotely but recording local completion fails

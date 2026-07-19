@@ -191,6 +191,44 @@ class ReconciliationStateStoreIntegrationSpec extends Specification {
         rows("SELECT status FROM ingestion_batches WHERE id = ${firstBatch}")*.status == ['completed']
     }
 
+    def "transaction kind completion requires every older unfinished transaction batch"() {
+        given:
+        def store = initializedStore()
+        long source = store.upsertSourceEntity(key())
+        long older = store.createIngestionBatch('older-delta', 'transaction_delta', 10)
+        long newer = store.createIngestionBatch('newer-delta', 'transaction_delta', 20)
+        long movement = store.createIngestionBatch('movement', 'money_movement_snapshot', 20)
+        long mirror = store.recordMirrorCreated(source, 'child', 'outflow', 'child-1')
+        long olderOp = store.createOperation(intent('older-op', older, source, mirror, 0,
+            ReconciliationOperationType.UPDATE, 'child-1', null))
+        long newerOp = store.createOperation(intent('newer-op', newer, source, mirror, 0,
+            ReconciliationOperationType.UPDATE, 'child-1', null))
+
+        expect:
+        !store.completeIngestionBatchesOfKindIfReady('transaction_delta')
+        rows("SELECT status FROM ingestion_batches WHERE id = ${older}")*.status == ['pending']
+        rows("SELECT status FROM ingestion_batches WHERE id = ${newer}")*.status == ['pending']
+
+        when:
+        store.recordOperationAttempt(newerOp, 'applied')
+        store.completeUpdateOperation(newerOp, mirror, 'account', 'hash-newer-op')
+
+        then:
+        !store.completeIngestionBatchesOfKindIfReady('transaction_delta')
+        rows("SELECT status FROM ingestion_batches WHERE id = ${newer}")*.status == ['completed']
+        rows("SELECT status FROM ingestion_batches WHERE id = ${older}")*.status == ['pending']
+
+        when:
+        store.recordOperationAttempt(olderOp, 'applied')
+        store.completeUpdateOperation(olderOp, mirror, 'account', 'hash-older-op')
+
+        then:
+        store.completeIngestionBatchesOfKindIfReady('transaction_delta')
+        store.completeIngestionBatchesOfKindIfReady('money_movement_snapshot')
+        rows("SELECT status FROM ingestion_batches WHERE id IN (${older}, ${newer}, ${movement}) ORDER BY id")*.status ==
+            ['completed', 'completed', 'completed']
+    }
+
     private static SourceEntityKey key() {
         new SourceEntityKey('parent', SourceEntityType.TRANSACTION, 'transaction', null, null)
     }

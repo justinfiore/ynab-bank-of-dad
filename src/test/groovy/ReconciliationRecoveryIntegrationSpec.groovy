@@ -41,8 +41,8 @@ class ReconciliationRecoveryIntegrationSpec extends Specification {
 
         when: 'the first process applies successful siblings and leaves failures durable'
         def first = apply(firstStore, remote)
-        boolean firstTransactionComplete = firstStore.completeIngestionBatchIfReady(transactionBatch)
-        boolean firstMovementComplete = firstStore.completeIngestionBatchIfReady(movementBatch)
+        boolean firstTransactionComplete = firstStore.completeIngestionBatchesOfKindIfReady('transaction_delta')
+        boolean firstMovementComplete = firstStore.completeIngestionBatchesOfKindIfReady('money_movement_snapshot')
 
         then:
         first.applied == 2
@@ -56,8 +56,8 @@ class ReconciliationRecoveryIntegrationSpec extends Specification {
         def secondStore = new SyncStateStore(path)
         secondStore.initialize()
         def second = apply(secondStore, remote)
-        boolean secondTransactionComplete = secondStore.completeIngestionBatchIfReady(transactionBatch)
-        boolean secondMovementComplete = secondStore.completeIngestionBatchIfReady(movementBatch)
+        boolean secondTransactionComplete = secondStore.completeIngestionBatchesOfKindIfReady('transaction_delta')
+        boolean secondMovementComplete = secondStore.completeIngestionBatchesOfKindIfReady('money_movement_snapshot')
         long secondRun = secondStore.startRun(60, 'parent')
         new SyncRunCoordinator(secondStore, false).finishRun(secondRun,
             new SyncRunResult(second.failures), 100, secondTransactionComplete)
@@ -82,8 +82,8 @@ class ReconciliationRecoveryIntegrationSpec extends Specification {
             ReconciliationOperationType.UPDATE, 'movement-update', payload(-500), 0)
         remote.failOnce << 'movement-update'
         def third = apply(thirdStore, remote)
-        boolean thirdTransactionComplete = thirdStore.completeIngestionBatchIfReady(transaction101)
-        boolean thirdMovementComplete = thirdStore.completeIngestionBatchIfReady(movement101)
+        boolean thirdTransactionComplete = thirdStore.completeIngestionBatchesOfKindIfReady('transaction_delta')
+        boolean thirdMovementComplete = thirdStore.completeIngestionBatchesOfKindIfReady('money_movement_snapshot')
         long thirdRun = thirdStore.startRun(60, 'parent')
         new SyncRunCoordinator(thirdStore, false).finishRun(thirdRun,
             new SyncRunResult(third.failures), 101, thirdTransactionComplete)
@@ -97,6 +97,54 @@ class ReconciliationRecoveryIntegrationSpec extends Specification {
         attempts(path, 'txn-delete') == 1
         attempts(path, 'movement-update') == 1
         attempts(path, 'movement-new') == 1
+    }
+
+    def "older incomplete transaction batch blocks cursor while newer batch is fully applied"() {
+        given:
+        String path = tempDir.resolve('older-batch.db').toString()
+        def store = new SyncStateStore(path)
+        store.initialize()
+        def remote = new RecoveringRepository()
+        long olderBatch = store.createIngestionBatch('transaction-100', 'transaction_delta', 100)
+        long newerBatch = store.createIngestionBatch('transaction-200', 'transaction_delta', 200)
+        long source = source(store, SourceEntityType.TRANSACTION, 'txn', null)
+        long olderMirror = mirror(store, source, remote, 'older-child')
+        long newerMirror = mirror(store, source, remote, 'newer-child', 'inflow')
+        operation(store, 'older-update', olderBatch, source, olderMirror,
+            ReconciliationOperationType.UPDATE, 'older-child', payload(-200), 0)
+        operation(store, 'newer-update', newerBatch, source, newerMirror,
+            ReconciliationOperationType.UPDATE, 'newer-child', payload(-300), 0)
+        remote.failOnce << 'older-child'
+
+        when: 'newer work succeeds while older work remains retryable'
+        def first = apply(store, remote)
+        boolean firstComplete = store.completeIngestionBatchesOfKindIfReady('transaction_delta')
+        long firstRun = store.startRun(60, 'parent')
+        new SyncRunCoordinator(store, false).finishRun(firstRun, new SyncRunResult(first.failures), 200, firstComplete)
+
+        then:
+        first.applied == 1
+        first.failed == 1
+        !firstComplete
+        store.getCursor(SyncRunCoordinator.TRANSACTION_CURSOR_KEY) == null
+        !store.completeIngestionBatchIfReady(olderBatch)
+
+        when: 'a later process finishes the older batch and only then advances the cursor'
+        def resumed = new SyncStateStore(path)
+        resumed.initialize()
+        def second = apply(resumed, remote)
+        boolean secondComplete = resumed.completeIngestionBatchesOfKindIfReady('transaction_delta')
+        long secondRun = resumed.startRun(60, 'parent')
+        new SyncRunCoordinator(resumed, false).finishRun(secondRun,
+            new SyncRunResult(second.failures), 200, secondComplete)
+
+        then:
+        second.applied == 1
+        second.failed == 0
+        secondComplete
+        resumed.getCursor(SyncRunCoordinator.TRANSACTION_CURSOR_KEY) == 200
+        resumed.completeIngestionBatchIfReady(olderBatch)
+        resumed.completeIngestionBatchIfReady(newerBatch)
     }
 
     private static long source(SyncStateStore store, SourceEntityType type, String transactionId, String movementId) {
