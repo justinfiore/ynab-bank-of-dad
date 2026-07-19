@@ -28,6 +28,8 @@ class DocumentationContractSpec extends Specification {
         guide.contains('review a `--dry-run --max-cycles 1`')
         guide.contains('delete any database created by an earlier build')
         guide.contains('rejected without mutation')
+        guide.contains('One live process per state database')
+        guide.contains('<sqlitePath>.lock')
     }
 
     def "human guide covers every normative reconciliation area represented by the matrix"() {
@@ -36,6 +38,8 @@ class DocumentationContractSpec extends Specification {
 
         expect:
         ['stable source', 'memo', 'unapproved', 'split', 'missing child', 'retry', 'cursor',
-         'schema_versions', 'dry-run', 'money movement', 'delete', 'update'].every { guide.contains(it) }
+         'schema_versions', 'dry-run', 'money movement', 'delete', 'update', 'live lock'].every {
+            guide.contains(it)
+        }
     }
 }

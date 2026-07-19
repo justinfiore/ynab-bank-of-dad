@@ -33,8 +33,22 @@ class ParentChildBudgetSyncer {
         SyncLoggingBootstrap.configure(config.sync.logging)
         log.info("Starting parent-child budget syncer with config {}", options.configPath)
 
-        ParentChildBudgetSyncer syncer = fromConfig(config, options)
-        syncer.runLoop()
+        String stateDbPath = options.syncStateDbPath ?: config.sync.state.sqlitePath
+        if (options.dryRun) {
+            ParentChildBudgetSyncer syncer = fromConfig(config, options)
+            syncer.runLoop()
+            return
+        }
+
+        SyncStateLock lock = SyncStateLock.acquire(stateDbPath)
+        try {
+            log.info('Acquired live sync state lock at {}', lock.lockPath)
+            ParentChildBudgetSyncer syncer = fromConfig(config, options)
+            syncer.runLoop()
+        } finally {
+            lock.close()
+            log.info('Released live sync state lock at {}', lock.lockPath)
+        }
     }
 
     final RuntimeConfig runtimeConfig

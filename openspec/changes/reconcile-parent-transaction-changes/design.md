@@ -104,7 +104,11 @@ Operations are persisted before remote mutation. Every mixed transition, includi
 
 Alternative considered: directly mutate YNAB and then update the existing mapping row. Rejected because a crash would lose intended work or make multi-step rerouting ambiguous.
 
-### 7. Cursor advancement remains remote-application gated
+### 7. Live mode enforces a single writer with an OS file lock
+
+Live `ParentChildBudgetSyncer.main` acquires an exclusive `FileChannel` lock on `<sqlitePath>.lock` before constructing the live syncer and entering the poll loop. A second live process that loses `tryLock` aborts immediately with an error that names the database and lock path. The lock is released in `finally` on normal exit; the OS releases it after crash or `kill -9`, so the next run is not permanently locked out. Dry-run never takes the lock. This is preferred over a SQLite `sync_runs` lease row because abrupt death must not require a heartbeat TTL or manual unlock.
+
+### 8. Cursor advancement remains remote-application gated
 
 The transaction server-knowledge cursor advances only after the durable ingestion batch and every operation derived from that batch are applied successfully or recognized as idempotently complete. Partial child failures preserve successful sibling results but block the shared parent transaction cursor, allowing retry with stable operation identities. Money-movement operations are independent of transaction-delta work and do not block transaction cursor advancement.
 
@@ -112,13 +116,13 @@ Initial bootstrap may use the configured transaction lookback date. Once a trans
 
 Alternative considered: advance after operations are durably queued. Rejected to preserve the existing conservative cursor contract and simplify recovery validation.
 
-### 8. YNAB mutation contracts stay behind the repository boundary
+### 9. YNAB mutation contracts stay behind the repository boundary
 
 `YnabHttpClient` gains only the HTTP verbs required by verified official endpoints. `YnabBudgetRepository` exposes focused child transaction lookup, update, and delete methods and maps explicit transaction/subtransaction `deleted` fields. Update payloads include only supported mutable fields; `import_id` is used only for creation and is not changed later.
 
 New create import IDs are derived from stable source and target identity using a bounded deterministic hash that conforms to the documented YNAB limit. Existing child transactions retain their historical import IDs.
 
-### 9. State starts fresh and schema evolution is versioned
+### 10. State starts fresh and schema evolution is versioned
 
 The first supported reconciliation database is baseline schema version 1. Initialization of a missing or empty database creates exactly the nine current tables and records version 1 in `schema_versions`. Repeated initialization at the supported version is a no-op.
 
@@ -128,15 +132,15 @@ Future schema changes use migrations numbered consecutively after version 1. Ini
 
 Alternative considered: infer and upgrade an unversioned database. Rejected because its provenance and shape cannot be established safely enough to mutate it automatically.
 
-### 10. Configuration changes are prospective
+### 11. Configuration changes are prospective
 
 The syncer does not scan historical source entities solely when configuration changes. If YNAB later returns a changed source transaction, that revision is reconciled using the then-current mapping configuration. This allows future observed activity to use current configuration without a one-time config edit destructively rewriting all history.
 
-### 11. Dry-run computes but does not persist reconciliation
+### 12. Dry-run computes but does not persist reconciliation
 
 Dry-run reads mirrors and cursors from a supported versioned database, fetches any child state needed to describe an operation, and logs ordered create/update/delete actions. It does not persist revisions or operations, mutate cursors, create a missing database, or call child mutation endpoints. Unsupported existing state is rejected without mutation.
 
-### 12. Money movements use stable observed-state reconciliation
+### 13. Money movements use stable observed-state reconciliation
 
 A money movement entity is identified by `(sourceBudgetId, moneyMovementId)`. Each child mirror is identified by the movement entity, target child budget, and logical `inflow` or `outflow` side. Amount, category, category name, date, group ID, mapping, and target account are mutable revision/routing data rather than identity.
 
@@ -148,9 +152,9 @@ Money-movement reads and operation retries are independent of the transaction in
 
 Alternative considered: infer movement deletion from absence in a complete response. Rejected because YNAB exposes no deletion tombstone or retention guarantee, making destructive cleanup unsafe.
 
-### 13. Human semantics and tests are first-class deliverables
+### 14. Human semantics and tests are first-class deliverables
 
-`PARENT_TRANSACTION_RECONCILIATION.md` explains the authoritative/child-owned boundary, ordinary and split transitions, money-movement limitations, retries, fresh-state requirement, schema versioning, dry-run behavior, and rollout in user language. `README.md` and `QUICK_START.md` link to it.
+`PARENT_TRANSACTION_RECONCILIATION.md` explains the authoritative/child-owned boundary, ordinary and split transitions, money-movement limitations, retries, fresh-state requirement, schema versioning, dry-run behavior, single-writer lock, and rollout in user language. `README.md` and `QUICK_START.md` link to it.
 
 Every normative scenario in the delta specification must map to at least one focused unit test and at least one integration test using WireMock and/or real SQLite. Unit tests prove normalization, planning, payload, state, and retry decisions in isolation; integration tests prove HTTP contracts, persistence, process restarts, operation ordering, and observable side effects. A maintained coverage matrix in the semantics guide or test documentation records both test names for each semantic.
 

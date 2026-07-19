@@ -514,7 +514,7 @@ Baseline schema version 1 contains exactly nine tables.
 | Table | Role |
 |---|---|
 | `schema_versions` | Applied ordered schema versions. |
-| `sync_runs` | Process-cycle status and errors. |
+| `sync_runs` | Process-cycle status and errors. Live singleton enforcement uses `<sqlitePath>.lock`, not this table. |
 | `sync_cursors` | Named cursors, including transaction server knowledge. |
 | `source_entities` | Stable source identity and current lifecycle. |
 | `ingestion_batches` | Cursor-eligible transaction or independent movement work. |
@@ -822,7 +822,7 @@ The following areas deserve extra scrutiny. They describe current boundaries or 
 
 #### Multiple Concurrent Syncer Processes
 
-Ready operations are selected but not atomically claimed. There is no process lease, `in_progress` state, or application-level singleton lock. Stable import IDs and idempotent verification reduce duplicate effects, but two live syncer processes can issue the same remote call and contend on SQLite. Operationally, only one live syncer should use a state database.
+Live `ParentChildBudgetSyncer.main` acquires an exclusive OS file lock on `<sqlitePath>.lock` beside the configured state database before initializing state or entering `runLoop`. A second live process that cannot obtain the lock aborts immediately with a clear message and performs no YNAB mutation or SQLite write. The lock is released in a `finally` block on normal exit; the OS also releases it if the process dies (including `kill -9`), so a later run is not permanently locked out. Dry-run does not take the lock. Ready operations are still not atomically claimed inside SQLite; the process lock is the singleton guard for one live writer per state path.
 
 #### Batch Persistence Atomicity
 
@@ -850,7 +850,7 @@ Applying an operation requires a current child context and token for its target 
 
 ## Operational Boundaries
 
-- Run only one live syncer process per SQLite state database.
+- Live mode enforces one syncer process per SQLite state database via `<sqlitePath>.lock`; a second live process aborts rather than sharing the database.
 - Delete any state database created by an earlier build before first reconciliation; unsupported state is rejected without mutation.
 - Run `--dry-run --max-cycles 1` with the exact live configuration and state path before live rollout.
 - Keep child credentials configured until all operations targeting that child have completed.

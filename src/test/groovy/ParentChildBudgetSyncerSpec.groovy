@@ -110,6 +110,7 @@ class ParentChildBudgetSyncerSpec extends Specification {
         then:
         !dbPath.parent.toFile().exists()
         !dbPath.toFile().exists()
+        !new File(dbPath.toString() + '.lock').exists()
     }
 
     def "fromConfig dry run reads an existing cursor without mutating state"() {

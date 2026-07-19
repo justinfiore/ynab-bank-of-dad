@@ -125,6 +125,22 @@ Whenever a qualifying source with an active mirror is observed, reconciliation S
 - **WHEN** a memo-only or otherwise non-authoritative source edit observes that the recorded child transaction is missing
 - **THEN** the syncer SHALL recreate the mirror even though no authoritative field update was otherwise required
 
+### Requirement: Live reconciliation SHALL enforce a single writer per state database
+Live mode SHALL acquire an exclusive OS file lock for the configured SQLite state path before initializing live state or applying child mutations. The lock file SHALL sit beside the database as `<sqlitePath>.lock`. A second live process that cannot obtain the lock SHALL abort with a clear error and SHALL NOT mutate YNAB or the state database. Dry-run SHALL NOT require or hold the exclusive live lock. Process exit, including abrupt termination such as `kill -9`, SHALL release the lock so a later live process can acquire it and resume from durable state without manual lock cleanup under normal OS behavior.
+
+#### Scenario: Second live process aborts on lock contention
+- **WHEN** a live syncer already holds the exclusive lock for a state database path
+- **THEN** another live syncer started against the same path SHALL abort with a message that names the state path and lock file
+- **AND** it SHALL perform no child mutation and no SQLite write
+
+#### Scenario: Abrupt exit releases the live lock for the next run
+- **WHEN** the process holding the live lock exits without an orderly unlock, including termination equivalent to `kill -9`
+- **THEN** a subsequent live process SHALL be able to acquire the same lock and continue from durable reconciliation state
+
+#### Scenario: Dry-run does not take the live lock
+- **WHEN** a dry-run starts while no live lock is required for planning
+- **THEN** dry-run SHALL proceed without acquiring the exclusive live writer lock
+
 ### Requirement: Reconciliation operations SHALL be durable and cursor-safe
 The syncer SHALL persist a durable ingestion batch, immutable ordered create/update/delete operation intent, and append-only operation attempts before and during live child mutation. Failed operation intent SHALL remain retryable across process restarts, successful sibling operations SHALL remain recorded, and the parent transaction cursor SHALL advance only after every operation derived from that ingestion batch is successfully complete. All mixed replacement transitions SHALL complete obsolete-mirror deletions before dependent creates.
 

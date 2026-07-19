@@ -225,11 +225,17 @@ The SQLite database retains the information needed to investigate a partial run 
 
 Inspect operation intent together with its attempts and mirror lineage before making a manual YNAB correction; do not assume a local failure means the remote mutation failed.
 
+## One live process per state database
+
+Live mode takes an exclusive OS live lock on a file next to the SQLite database (`<sqlitePath>.lock`) for the whole process lifetime. A second live syncer pointed at the same state path aborts immediately with a clear message and does not mutate YNAB or SQLite. Dry-run does not take the lock, so you can inspect planned work while a live process is stopped.
+
+If the live process exits for any reason—including `kill -9`—the operating system releases the lock, so the next cron or manual run can acquire it and resume from durable state. Do not delete the `.lock` file while a live syncer is running. Only consider removing a leftover lock file after confirming no process still holds it.
+
 ## Safe rollout checklist
 
 Before enabling live reconciliation:
 
-1. Stop every syncer process using the configured SQLite path.
+1. Stop every syncer process using the configured SQLite path (a second live process will abort on the lock rather than run in parallel).
 2. If the path contains a database from an earlier build, delete it; this build requires fresh state and will reject it without mutation.
 3. Read this guide and confirm the deletion and unapproval semantics match your expectations.
 4. Run `--dry-run --max-cycles 1` using the exact production config and state path; a missing database must remain missing.
