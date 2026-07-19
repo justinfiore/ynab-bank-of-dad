@@ -49,27 +49,33 @@ jobs:
 
       - name: Upload JUnit XML test results
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: junit-test-results
           path: build/test-results/
           if-no-files-found: error
+          retention-days: 1
 
       - name: Upload HTML test reports
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: html-test-report
           path: build/reports/tests/
           if-no-files-found: error
+          retention-days: 1
 
       - name: Upload installDist output
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: install-dist
           path: build/install/
           if-no-files-found: error
+          retention-days: 1
 
       - name: Publish test result summary to job summary
         if: always()
