@@ -1,6 +1,5 @@
 import spock.lang.Specification
 import spock.lang.TempDir
-import ynabbankofdad.sync.model.ChildTransactionPlan
 import ynabbankofdad.sync.state.*
 
 import java.nio.file.Files
@@ -9,293 +8,219 @@ import java.sql.Connection
 import java.sql.DriverManager
 
 class ReconciliationStateStoreIntegrationSpec extends Specification {
-
     @TempDir
     Path tempDir
 
-    def "empty and repeated initialization applies ordered schema versions"() {
+    def "dry-run missing database reads empty and creates nothing"() {
         given:
-        def store = new SyncStateStore(databasePath())
+        Path database = tempDir.resolve('missing.db')
+        def dry = new DryRunSyncStateRepository(new SyncStateStore(database.toString()), database.toString())
+
+        expect:
+        !dry.reconciliationSchemaAvailable()
+        dry.getCursor('missing') == null
+        dry.findMirrorsForParent('parent', 'transaction').empty
+        dry.findSourceEntities('parent', SourceEntityType.TRANSACTION).empty
 
         when:
-        store.initialize()
-        store.initialize()
+        dry.findSourceEntityKey(1)
 
         then:
-        scalar('SELECT MAX(version) FROM schema_versions') == SyncStateStore.CURRENT_SCHEMA_VERSION
-        scalar('SELECT COUNT(*) FROM schema_versions') == 2
-        tableNames().containsAll([
-            'source_entities', 'source_revisions', 'child_mirrors', 'ingestion_batches',
-            'sync_operations', 'operation_attempts'
-        ])
+        thrown(IllegalStateException)
+        !Files.exists(database)
     }
 
-    def "single successful live legacy transaction becomes one active mirror"() {
+    def "dry-run reads supported state without changing database bytes"() {
         given:
-        def store = legacyStore()
-        addLegacyResult(store, transactionPlan('one', 'txn-1'), 'child-budget', 'child-1',
-            'applied', false, '2026-01-01T00:00:00Z')
-        makeUnversioned()
+        def store = initializedStore()
+        long batch = store.createIngestionBatch('batch', 'transaction_delta', 4)
+        long source = store.upsertSourceEntity(key())
+        store.appendSourceRevision(source, 'revision', '{}', 4, batch)
+        store.setCursor('cursor', 4)
+        store.recordMirrorCreated(source, 'child-budget', 'outflow', 'child')
+        byte[] before = Files.readAllBytes(database())
+        def dry = new DryRunSyncStateRepository(store, database().toString())
 
-        when:
-        store.initialize()
-
-        then:
-        scalar('SELECT COUNT(*) FROM source_entities') == 1
-        rows("SELECT child_transaction_id, status FROM child_mirrors") ==
-            [[child_transaction_id: 'child-1', status: 'active']]
-        scalar('SELECT COUNT(*) FROM sync_operations') == 0
-        scalar('SELECT COUNT(*) FROM applied_transactions') == 1
+        expect:
+        dry.reconciliationSchemaAvailable()
+        dry.getCursor('cursor') == 4
+        dry.findMirrorsForSource(key())*.childTransactionId == ['child']
+        dry.findSourceEntities('parent', SourceEntityType.TRANSACTION) == [key()]
+        Files.readAllBytes(database()) == before
     }
 
-    def "transaction duplicates select newest timestamp then row id and queue distinct deletes"() {
+    def "dry-run rejects unsupported old database without mutation"() {
         given:
-        def store = legacyStore()
-        addLegacyResult(store, transactionPlan('old', 'txn-1'), 'child-budget', 'child-old',
-            'applied', false, '2026-01-01T00:00:00Z')
-        addLegacyResult(store, transactionPlan('winner-low-id', 'txn-1'), 'child-budget', 'child-tied-old',
-            'applied', false, '2026-02-01T00:00:00Z')
-        addLegacyResult(store, transactionPlan('winner-high-id', 'txn-1'), 'child-budget', 'child-winner',
-            'applied', false, '2026-02-01T00:00:00Z')
-        addLegacyResult(store, transactionPlan('repeat-winner', 'txn-1'), 'child-budget', 'child-winner',
-            'applied', false, '2026-01-15T00:00:00Z')
-        makeUnversioned()
+        execute('CREATE TABLE source_events(id INTEGER)')
+        byte[] before = Files.readAllBytes(database())
+        def dry = new DryRunSyncStateRepository(new SyncStateStore(database().toString()), database().toString())
 
         when:
-        store.initialize()
-
-        then:
-        rows('SELECT child_transaction_id, status FROM child_mirrors ORDER BY id') == [
-            [child_transaction_id: 'child-winner', status: 'active'],
-            [child_transaction_id: 'child-tied-old', status: 'superseded'],
-            [child_transaction_id: 'child-old', status: 'superseded']
-        ]
-        rows('SELECT operation_type, child_transaction_id, status FROM sync_operations ORDER BY id') == [
-            [operation_type: 'delete', child_transaction_id: 'child-tied-old', status: 'pending'],
-            [operation_type: 'delete', child_transaction_id: 'child-old', status: 'pending']
-        ]
-        store.findPendingMigrationCleanupOperations()*.intent*.childTransactionId ==
-            ['child-tied-old', 'child-old']
-    }
-
-    def "movement duplicate grouping preserves side and target identity"() {
-        given:
-        def store = legacyStore()
-        addLegacyResult(store, movementPlan('out-old', 'mm-1', -100), 'child-budget', 'movement-out-old',
-            'applied', false, '2026-01-01T00:00:00Z')
-        addLegacyResult(store, movementPlan('out-new', 'mm-1', -100), 'child-budget', 'movement-out-new',
-            'applied', false, '2026-02-01T00:00:00Z')
-        addLegacyResult(store, movementPlan('in', 'mm-1', 100), 'child-budget', 'movement-in',
-            'applied', false, '2026-01-15T00:00:00Z')
-        makeUnversioned()
-
-        when:
-        store.initialize()
-
-        then:
-        scalar('SELECT COUNT(*) FROM source_entities') == 1
-        rows('SELECT direction, child_transaction_id, status FROM child_mirrors ORDER BY direction, status') == [
-            [direction: 'inflow', child_transaction_id: 'movement-in', status: 'active'],
-            [direction: 'outflow', child_transaction_id: 'movement-out-new', status: 'active'],
-            [direction: 'outflow', child_transaction_id: 'movement-out-old', status: 'superseded']
-        ]
-        rows('SELECT child_transaction_id FROM sync_operations') == [[child_transaction_id: 'movement-out-old']]
-    }
-
-    def "failed dry-run and missing child ID history remains legacy-only"() {
-        given:
-        def store = legacyStore()
-        addLegacyResult(store, transactionPlan('failed', 'txn-failed'), 'child-budget', 'failed-child',
-            'failed', false, '2026-01-01T00:00:00Z')
-        addLegacyResult(store, transactionPlan('dry', 'txn-dry'), 'child-budget', 'dry-child',
-            'applied', true, '2026-01-02T00:00:00Z')
-        addLegacyResult(store, transactionPlan('missing', 'txn-missing'), 'child-budget', null,
-            'applied', false, '2026-01-03T00:00:00Z')
-        makeUnversioned()
-
-        when:
-        store.initialize()
-
-        then:
-        scalar('SELECT COUNT(*) FROM applied_transactions') == 3
-        scalar('SELECT COUNT(*) FROM source_entities') == 0
-        scalar('SELECT COUNT(*) FROM child_mirrors') == 0
-        scalar('SELECT COUNT(*) FROM sync_operations') == 0
-    }
-
-    def "dry-run projection reports migration without changing unversioned SQLite bytes"() {
-        given:
-        def store = legacyStore()
-        addLegacyResult(store, transactionPlan('old', 'txn-1'), 'child-budget', 'child-old',
-            'applied', false, '2026-01-01T00:00:00Z')
-        addLegacyResult(store, transactionPlan('new', 'txn-1'), 'child-budget', 'child-new',
-            'applied', false, '2026-02-01T00:00:00Z')
-        makeUnversioned()
-        byte[] before = Files.readAllBytes(Path.of(databasePath()))
-
-        when:
-        MigrationProjection projection = store.projectLegacyMigration()
-
-        then:
-        projection.mirrors*.childTransactionId == ['child-new', 'child-old']
-        projection.mirrors*.active == [true, false]
-        projection.cleanupOperations*.childTransactionId == ['child-old']
-        Files.readAllBytes(Path.of(databasePath())) == before
-        !tableNames().contains('schema_versions')
-    }
-
-    def "migration failure rolls schema and backfill back atomically"() {
-        given:
-        def original = legacyStore()
-        addLegacyResult(original, transactionPlan('one', 'txn-1'), 'child-budget', 'child-1',
-            'applied', false, '2026-01-01T00:00:00Z')
-        makeUnversioned()
-        def failingStore = new SyncStateStore(databasePath(), { int version, Connection ignored ->
-            if (version == 2) throw new IllegalStateException('injected migration failure')
-        })
-
-        when:
-        failingStore.initialize()
+        dry.findMirrorsForParent('parent', 'transaction')
 
         then:
         def failure = thrown(IllegalStateException)
-        failure.message == 'injected migration failure'
-        !tableNames().contains('schema_versions')
-        !tableNames().contains('source_entities')
-        scalar('SELECT COUNT(*) FROM applied_transactions') == 1
+        failure.message.contains('delete it')
+        Files.readAllBytes(database()) == before
+        userTables() == ['source_events'] as Set
     }
 
-    def "stable revisions operations dependencies retries and attempts are deterministic"() {
+    def "batch kinds and non-null batch ownership are constrained"() {
         given:
-        def store = new SyncStateStore(databasePath())
-        store.initialize()
-        def source = new SourceEntityKey('parent', SourceEntityType.TRANSACTION, 'txn-1', null, null)
-        long entityId = store.upsertSourceEntity(source)
-        long batchId = store.createIngestionBatch('batch-1', 'transaction_delta', 42)
+        def store = initializedStore()
+        long source = store.upsertSourceEntity(key())
+        long batch = store.createIngestionBatch('transactions', 'transaction_delta', 1)
+
+        when:
+        store.createIngestionBatch('migration', 'migration', null)
+
+        then:
+        thrown(Exception)
+
+        when:
+        execute("INSERT INTO source_revisions(source_entity_id, revision_hash, normalized_json, ingestion_batch_id, observed_at) VALUES (${source}, 'bad', '{}', NULL, 'now')")
+
+        then:
+        thrown(Exception)
+
+        when:
+        execute("INSERT INTO sync_operations(operation_key, ingestion_batch_id, source_entity_id, operation_sequence, operation_type, target_budget_id, status, created_at) VALUES ('bad', NULL, ${source}, 0, 'create', 'child', 'pending', 'now')")
+
+        then:
+        thrown(Exception)
+
+        when:
+        store.appendSourceRevision(source, 'good', '{}', 1, batch)
+
+        then:
+        noExceptionThrown()
+    }
+
+    def "source revisions attempts operation intent and mirror lineage remain immutable"() {
+        given:
+        def store = initializedStore()
+        long batch = store.createIngestionBatch('batch', 'transaction_delta', 1)
+        long source = store.upsertSourceEntity(key())
+        long revision = store.appendSourceRevision(source, 'revision', '{}', 1, batch)
+        long mirror = store.recordMirrorCreated(source, 'child', 'outflow', 'child-1')
+        long operation = store.createOperation(intent('delete', batch, source, mirror, 0,
+            ReconciliationOperationType.DELETE, 'child-1', null))
+        store.recordOperationAttempt(operation, 'failed', 'temporary')
+
+        when:
+        execute("UPDATE source_revisions SET normalized_json = '{\"changed\":true}' WHERE id = ${revision}")
+
+        then:
+        thrown(Exception)
+
+        when:
+        execute("UPDATE operation_attempts SET outcome = 'applied'")
+
+        then:
+        thrown(Exception)
+
+        when:
+        execute("UPDATE sync_operations SET operation_sequence = 9 WHERE id = ${operation}")
+
+        then:
+        thrown(Exception)
+
+        when:
+        execute("DELETE FROM child_mirrors WHERE id = ${mirror}")
+
+        then:
+        thrown(Exception)
+
+        when:
+        execute("UPDATE child_mirrors SET status = 'superseded' WHERE id = ${mirror}")
+
+        then:
+        thrown(Exception)
+    }
+
+    def "runtime revisions mirrors operations dependencies retries and completion work"() {
+        given:
+        def store = initializedStore()
+        long source = store.upsertSourceEntity(key())
+        long firstBatch = store.createIngestionBatch('first', 'transaction_delta', 10)
+        long secondBatch = store.createIngestionBatch('second', 'money_movement_snapshot', 11)
 
         expect:
-        store.upsertSourceEntity(source) == entityId
-        store.appendSourceRevision(entityId, 'revision-1', '{"amount":1}', 42, batchId) ==
-            store.appendSourceRevision(entityId, 'revision-1', '{"amount":1}', 42, batchId)
-        scalar('SELECT COUNT(*) FROM source_revisions') == 1
+        store.upsertSourceEntity(key()) == source
+        store.appendSourceRevision(source, 'revision', '{}', 10, firstBatch) ==
+            store.appendSourceRevision(source, 'revision', '{}', 10, firstBatch)
 
         when:
-        long mirrorId = store.recordMirrorCreated(entityId, 'old-budget', 'outflow', 'old-child')
-        long deleteId = store.createOperation(operation('delete-1', batchId, entityId, mirrorId, 0,
-            ReconciliationOperationType.DELETE, 'old-budget', 'old-child', null))
-        long createId = store.createOperation(operation('create-1', batchId, entityId, null, 1,
-            ReconciliationOperationType.CREATE, 'new-budget', null, deleteId))
+        long mirror = store.recordMirrorCreated(source, 'child', 'outflow', 'old', 'account', 'old-hash')
+        long delete = store.createOperation(intent('delete', firstBatch, source, mirror, 0,
+            ReconciliationOperationType.DELETE, 'old', null))
+        long create = store.createOperation(intent('create', firstBatch, source, null, 1,
+            ReconciliationOperationType.CREATE, null, delete))
+        long later = store.createOperation(intent('later', secondBatch, source, null, 0,
+            ReconciliationOperationType.CREATE, null, null))
 
         then:
-        store.createOperation(operation('delete-1', batchId, entityId, mirrorId, 0,
-            ReconciliationOperationType.DELETE, 'old-budget', 'old-child', null)) == deleteId
-        store.findReadyOperations()*.id == [deleteId]
+        store.findReadyOperations()*.id == [delete, later]
+        !store.completeIngestionBatchIfReady(firstBatch)
 
         when:
-        store.recordOperationAttempt(deleteId, 'failed', 'temporary')
-        store.markOperationRetryable(deleteId)
+        store.recordOperationAttempt(delete, 'failed', 'temporary')
+        store.markOperationRetryable(delete)
 
         then:
-        store.findReadyOperations()*.id == [deleteId]
+        store.findSuccessfulOperationAttempt(delete) == null
+        store.findReadyOperations()*.id == [delete, later]
 
         when:
-        store.recordOperationAttempt(deleteId, 'applied')
-        store.markOperationApplied(deleteId)
+        store.recordOperationAttempt(delete, 'applied')
+        store.completeDeleteOperation(delete, mirror)
 
         then:
-        store.findReadyOperations()*.id == [createId]
-        scalar('SELECT COUNT(*) FROM operation_attempts') == 2
+        store.findReadyOperations()*.id == [create, later]
+        store.findSuccessfulOperationAttempt(delete).outcome == 'applied'
 
         when:
-        store.markOperationApplied(createId)
+        store.recordOperationAttempt(create, 'applied', null, 'new')
+        store.completeCreateOperation(create, source, null, 'child', 'outflow', 'new', 'account', 'new-hash', false)
 
         then:
-        store.findReadyOperations().empty
+        store.completeIngestionBatchIfReady(firstBatch)
+        store.findMirrorsForSource(key(), true)*.status == ['deleted', 'active']
+        store.findMirrorsForSource(key())*.childTransactionId == ['new']
+        store.findSourceEntityKey(source) == key()
+        rows("SELECT status FROM ingestion_batches WHERE id = ${firstBatch}")*.status == ['completed']
     }
 
-    def "mirror lifecycle retains every child transaction ID in audit history"() {
-        given:
-        def store = new SyncStateStore(databasePath())
-        store.initialize()
-        long entityId = store.upsertSourceEntity(
-            new SourceEntityKey('parent', SourceEntityType.TRANSACTION, 'txn-1', null, null))
-
-        when:
-        long first = store.recordMirrorCreated(entityId, 'child-budget', 'outflow', 'child-1', 'account-1', 'hash-1')
-        store.recordMirrorUpdated(first, 'account-2', 'hash-2')
-        long second = store.recordMirrorReplacement(first, 'child-2', 'child-budget', 'outflow')
-        long third = store.recordMirrorRecreation(second, 'child-3', 'child-budget', 'outflow')
-        store.recordMirrorDeleted(third)
-
-        then:
-        store.findMirrorsForParent('parent', 'txn-1').empty
-        store.findMirrorsForParent('parent', 'txn-1', true)*.childTransactionId == ['child-1', 'child-2', 'child-3']
-        store.findMirrorsForParent('parent', 'txn-1', true)*.status == ['replaced', 'missing', 'deleted']
-        rows('SELECT target_account_id, authoritative_payload_hash FROM child_mirrors WHERE id = ?', first) ==
-            [[target_account_id: 'account-2', authoritative_payload_hash: 'hash-2']]
+    private static SourceEntityKey key() {
+        new SourceEntityKey('parent', SourceEntityType.TRANSACTION, 'transaction', null, null)
     }
 
-    private SyncStateStore legacyStore() {
-        def store = new SyncStateStore(databasePath())
+    private static ReconciliationOperationIntent intent(String operationKey, long batch, long source,
+                                                         Long mirror, int sequence,
+                                                         ReconciliationOperationType type, String child,
+                                                         Long dependency) {
+        new ReconciliationOperationIntent(operationKey, batch, source, mirror, sequence, type,
+            'child', child, type == ReconciliationOperationType.DELETE ? null : '{}',
+            type == ReconciliationOperationType.DELETE ? null : "hash-${operationKey}", dependency)
+    }
+
+    private SyncStateStore initializedStore() {
+        def store = new SyncStateStore(database().toString())
         store.initialize()
         store
     }
 
-    private void addLegacyResult(SyncStateStore store, ChildTransactionPlan plan, String targetBudgetId,
-                                 String childTransactionId, String status, boolean dryRun, String appliedAt) {
-        long eventId = store.recordSourceEvent(plan)
-        long mappingId = store.recordMapping(eventId, plan, targetBudgetId, 'account-1')
-        long runId = store.startRun(dryRun, 60, 'parent')
-        store.recordAppliedTransaction(mappingId, runId, targetBudgetId, childTransactionId, status,
-            status == 'failed' ? 'failed' : null, dryRun)
-        execute("UPDATE applied_transactions SET applied_at = ? WHERE id = (SELECT MAX(id) FROM applied_transactions)", appliedAt)
+    private Path database() {
+        tempDir.resolve('state.db')
     }
 
-    private void makeUnversioned() {
-        ['operation_attempts', 'sync_operations', 'child_mirrors', 'source_revisions',
-         'ingestion_batches', 'source_entities', 'schema_versions'].each { String table ->
-            execute("DROP TABLE ${table}")
-        }
+    private Set<String> userTables() {
+        rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")*.name as Set
     }
 
-    private static ChildTransactionPlan transactionPlan(String idempotencyKey, String transactionId) {
-        new ChildTransactionPlan('parent', 'child', 'Child', 'spend', 'Spend', 'transaction',
-            transactionId, null, null, null, idempotencyKey, 'Checking', '2026-01-01', -100,
-            'memo', 'payee', true)
-    }
-
-    private static ChildTransactionPlan movementPlan(String idempotencyKey, String movementId, int amount) {
-        new ChildTransactionPlan('parent', 'child', 'Child', 'spend', 'Spend', 'money_movement',
-            null, null, movementId, 'group', idempotencyKey, 'Checking', '2026-01-01', amount,
-            'memo', 'payee', true)
-    }
-
-    private static ReconciliationOperationIntent operation(String key, Long batchId, long entityId,
-                                                            Long mirrorId, int sequence,
-                                                            ReconciliationOperationType type,
-                                                            String budgetId, String childId,
-                                                            Long dependencyId) {
-        new ReconciliationOperationIntent(key, batchId, entityId, mirrorId, sequence, type, budgetId,
-            childId, null, null, dependencyId)
-    }
-
-    private String databasePath() {
-        tempDir.resolve('state.db').toString()
-    }
-
-    private List<String> tableNames() {
-        rows("SELECT name FROM sqlite_master WHERE type = 'table'")*.name
-    }
-
-    private Object scalar(String sql) {
-        rows(sql)[0].values().first()
-    }
-
-    private List<Map<String, Object>> rows(String sql, Object... parameters) {
+    private List<Map<String, Object>> rows(String sql) {
         withConnection { Connection connection ->
-            def statement = connection.prepareStatement(sql)
-            parameters.eachWithIndex { Object parameter, int index -> statement.setObject(index + 1, parameter) }
-            def result = statement.executeQuery()
+            def result = connection.createStatement().executeQuery(sql)
             List<Map<String, Object>> found = []
             while (result.next()) {
                 Map<String, Object> row = [:]
@@ -308,17 +233,15 @@ class ReconciliationStateStoreIntegrationSpec extends Specification {
         }
     }
 
-    private void execute(String sql, Object... parameters) {
+    private void execute(String sql) {
         withConnection { Connection connection ->
             connection.createStatement().execute('PRAGMA foreign_keys = ON')
-            def statement = connection.prepareStatement(sql)
-            parameters.eachWithIndex { Object parameter, int index -> statement.setObject(index + 1, parameter) }
-            statement.executeUpdate()
+            connection.createStatement().execute(sql)
         }
     }
 
     private Object withConnection(Closure work) {
-        Connection connection = DriverManager.getConnection("jdbc:sqlite:${databasePath()}")
+        Connection connection = DriverManager.getConnection("jdbc:sqlite:${database()}")
         try {
             work(connection)
         } finally {

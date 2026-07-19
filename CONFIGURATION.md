@@ -52,9 +52,9 @@ At runtime, the syncer:
 3. finds the latest parent budget matching `sync.parentBudget.budgetName`
 4. polls approved parent-budget transactions and recent parent money movements
 5. maps configured parent categories to one or more child targets
-6. derives child transaction plans with idempotency keys
-7. posts child-budget transactions unless `--dry-run` is enabled
-8. writes replay-protection and run-history state into SQLite unless `--dry-run` is enabled
+6. derives durable create, update, and delete reconciliation operations
+7. applies child-budget operations unless `--dry-run` is enabled
+8. writes source, mirror, operation, run, and cursor state into SQLite unless `--dry-run` is enabled
 
 Created child transactions are sent as cleared. Their memos use each child target's optional prefix/suffix configuration; the complete decorated memo is trimmed. This does not affect parent-budget or allowance transactions.
 
@@ -79,13 +79,19 @@ The parent/child syncer is intended to be rolled out in this order:
 7. only then allow continuous polling
 
 The syncer uses SQLite state for:
+- `schema_versions` — contiguous applied schema versions, beginning with baseline version 1
 - `sync_runs` — run lifecycle/audit trail
-- `source_events` — parent-event fingerprints
-- `sync_mappings` — planned parent→child mapping records
-- `applied_transactions` — child-transaction application records
 - `sync_cursors` — incremental-read cursors such as transaction server knowledge
+- `source_entities` — stable transaction, subtransaction, and movement identities
+- `ingestion_batches` — transaction-delta and movement-snapshot completion state
+- `source_revisions` — append-only normalized source observations
+- `child_mirrors` — active and historical child transaction lineage
+- `sync_operations` — immutable ordered remote mutation intent
+- `operation_attempts` — append-only applied, failed, and already-complete outcomes
 
-If live syncing has already started, do not delete the SQLite file casually; doing so removes replay-protection history and cursors.
+These are the nine baseline tables. A missing or empty database is initialized transactionally at version 1. Before adopting this build, delete any state database created by an earlier build; separately review child transactions already created by an earlier syncer because deleting state does not remove them. Nonempty unversioned databases, version histories with gaps, newer schemas, and unsupported table, index, or trigger shapes are rejected without mutation. Future migrations are contiguous, ordered, and committed with their `schema_versions` rows in one transaction; failure rolls the initialization attempt back, and repeated initialization at the current version is unchanged.
+
+After live syncing has started on the supported schema, do not delete the SQLite file casually; doing so removes replay-protection history and cursors.
 
 ---
 
@@ -600,6 +606,7 @@ Operational guidance:
 - keep this file on persistent storage if you want long-lived replay protection
 - treat deleting or relocating the file as an operational reset
 - dry-run mode does not persist mutable sync state
+- dry-run creates no database at a missing path, reads a supported database without changing its bytes, and rejects unsupported state without mutation
 
 ---
 

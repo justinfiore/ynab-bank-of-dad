@@ -11,7 +11,7 @@ class ReconciliationCoverageContractSpec extends Specification {
         List<Map<String, String>> rows = matrixRows()
 
         expect:
-        normative.size() == 50
+        normative.size() == 53
         rows*.scenario == normative
         rows*.scenario.unique().size() == normative.size()
         rows.every { it.unit && it.integration }
@@ -20,7 +20,7 @@ class ReconciliationCoverageContractSpec extends Specification {
     def "matrix references exact executable focused features"() {
         expect:
         matrixRows().every { row ->
-            featureExists(row.unit, false) && featureExists(row.integration, true)
+            featureExists(row.unit, null) && featureExists(row.integration, true)
         }
     }
 
@@ -41,10 +41,12 @@ class ReconciliationCoverageContractSpec extends Specification {
         [spec: value.substring(0, separator), feature: value.substring(separator + 2)]
     }
 
-    static boolean featureExists(Map<String, String> reference, boolean integration) {
+    static boolean featureExists(Map<String, String> reference, Boolean integration) {
         boolean namedIntegration = reference.spec.endsWith('IntegrationSpec') || reference.spec.endsWith('WireMockSpec')
-        assert namedIntegration == integration:
-            "${reference.spec} is assigned to the wrong Gradle test layer"
+        if (integration != null) {
+            assert namedIntegration == integration:
+                "${reference.spec} is assigned to the wrong Gradle test layer"
+        }
         File source = new File("src/test/groovy/${reference.spec}.groovy")
         assert source.isFile(): "Missing referenced spec ${reference.spec}"
         String declaration = "def \"${reference.feature}\"()"

@@ -31,48 +31,6 @@ class ChildSyncContext {
 }
 
 @Immutable
-class ChildTransactionPlan {
-    String sourceBudgetId
-    String targetChildKey
-    String targetBudgetName
-    String mappingKey
-    String parentCategoryName
-    String eventType
-    String parentTransactionId
-    String parentSubtransactionId
-    String moneyMovementId
-    String moneyMovementGroupId
-    String idempotencyKey
-    String childAccountName
-    String date
-    Integer amount
-    String memo
-    String payeeName
-    Boolean approved
-
-    Map<String, Object> toSummaryMap() {
-        [
-            sourceBudgetId        : sourceBudgetId,
-            targetChildKey        : targetChildKey,
-            targetBudgetName      : targetBudgetName,
-            mappingKey            : mappingKey,
-            parentCategoryName    : parentCategoryName,
-            eventType             : eventType,
-            parentTransactionId   : parentTransactionId,
-            parentSubtransactionId: parentSubtransactionId,
-            moneyMovementId       : moneyMovementId,
-            moneyMovementGroupId  : moneyMovementGroupId,
-            childAccountName      : childAccountName,
-            date                  : date,
-            amount                : amount,
-            memo                  : memo,
-            payeeName             : payeeName,
-            approved              : approved
-        ]
-    }
-}
-
-@Immutable
 class ParentTransactionEvent {
     String id
     String date

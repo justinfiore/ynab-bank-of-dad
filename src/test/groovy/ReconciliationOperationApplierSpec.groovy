@@ -23,10 +23,12 @@ class ReconciliationOperationApplierSpec extends Specification {
     SyncStateStore store
     FakeChildRepository repository
     long sourceId
+    long transactionBatchId
 
     def setup() {
         store = new CrashWindowStateStore(tempDir.resolve('state.db').toString())
         store.initialize()
+        transactionBatchId = store.createIngestionBatch('transaction-delta', 'transaction_delta', 1)
         sourceId = store.upsertSourceEntity(
             new SourceEntityKey('parent-budget', SourceEntityType.TRANSACTION, 'parent-txn', null, null))
         repository = new FakeChildRepository()
@@ -288,7 +290,7 @@ class ReconciliationOperationApplierSpec extends Specification {
                                           Long mirrorId, String childId, Map transaction,
                                           String budgetId = 'child-budget', Long dependencyId = null) {
         store.createOperation(new ReconciliationOperationIntent(
-            key, null, entityId, mirrorId, 0, type, budgetId, childId,
+            key, transactionBatchId, entityId, mirrorId, 0, type, budgetId, childId,
             transaction == null ? null : JsonOutput.toJson(transaction), "hash-${key}", dependencyId))
     }
 

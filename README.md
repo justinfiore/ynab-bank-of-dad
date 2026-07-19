@@ -54,14 +54,14 @@ Before any live run:
 - run a dry run first
 - inspect the generated transactions carefully
 - for the syncer, verify every parent/child token environment variable and category mapping before allowing continuous live polling
-- before the syncer's first live reconciliation, back up its SQLite state and run `--dry-run --max-cycles 1` with the exact live config and state path
+- before the syncer's first live reconciliation, delete any state database from an earlier build and run `--dry-run --max-cycles 1` with the exact live config and state path
 
 If you only want the shortest safe path to a first run, start with [QUICK_START.md](QUICK_START.md).
 For the full configuration guide, see [CONFIGURATION.md](CONFIGURATION.md).
 For the overall system design, code organization, runtime flows, and a detailed reconciliation review guide, see [ARCHITECTURE.md](ARCHITECTURE.md).
 For step-by-step real-account validation before continuous parent/child syncing, use [PARENT_CHILD_SYNC_MANUAL_TESTING.md](PARENT_CHILD_SYNC_MANUAL_TESTING.md).
 
-Before enabling live parent/child syncing, read [PARENT_TRANSACTION_RECONCILIATION.md](PARENT_TRANSACTION_RECONCILIATION.md). It documents parent-authoritative and child-owned fields, destructive transaction and split changes, movement limitations, retries, migration cleanup, dry-run guarantees, and rollback limits.
+Before enabling live parent/child syncing, read [PARENT_TRANSACTION_RECONCILIATION.md](PARENT_TRANSACTION_RECONCILIATION.md). It documents parent-authoritative and child-owned fields, destructive transaction and split changes, movement limitations, retries, fresh-state schema versioning, dry-run guarantees, and rollback limits.
 
 ## Required runtime inputs
 
@@ -146,7 +146,7 @@ echo "$JAVA_HOME"
 
 ### Recommended dry-run-first invocation
 
-Stop any running syncer and back up the configured SQLite state first. This is required before the first live reconciliation because migration can queue destructive cleanup of older legacy duplicate child transactions.
+Stop any running syncer. If the configured SQLite path contains a database from an earlier build, delete it before using this build; old databases are not converted. Deleting state does not delete child transactions created by an earlier syncer, so review the first dry run for potential duplicate financial effects before live mode. Nonempty unversioned, newer, noncontiguous, and otherwise unsupported schemas are rejected without mutation.
 
 ```bash
 export YNAB_PARENT_TOKEN='parent-token'
@@ -176,11 +176,12 @@ export YNAB_CHILD_TWO_TOKEN='child-two-token'
 
 ### Syncer state and logging behavior
 - the default SQLite state path comes from `sync.state.sqlitePath` and defaults to `syncstate.db` in the example config
-- `sync_runs` records each live run lifecycle
-- `source_events`, `sync_mappings`, and `applied_transactions` provide replay protection and auditability for mirrored child transactions
+- `schema_versions` records the contiguous applied schema versions; baseline version 1 is created transactionally
 - `sync_cursors` stores incremental read cursors such as transaction server knowledge
+- `sync_runs` records each live run lifecycle
 - `source_entities`, `source_revisions`, and `child_mirrors` retain stable source observations and child transaction ID lineage
 - `ingestion_batches`, `sync_operations`, and `operation_attempts` retain cursor eligibility, ordered mutation intent, outcomes, and failure reasons for retry and manual recovery
+- the baseline contains exactly those nine tables; old databases must be deleted, and unsupported existing schemas are rejected without mutation
 - the syncer bootstrap writes to the configured rolling log file path such as `logs/parent-child-sync.log`
 - dry-run mode intentionally suppresses live YNAB writes and SQLite mutation while still exercising config loading, planning, and logging/bootstrap behavior
 - memo decoration applies when a child mirror is created; later reconciliation preserves its child-owned memo, while automatic updates restore cleared and unapproved state

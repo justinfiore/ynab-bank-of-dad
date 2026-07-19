@@ -17,10 +17,12 @@ class ReconciliationMutationIntegrationSpec extends Specification {
     SyncStateStore store
     StatefulChildRepository child
     long sourceId
+    long transactionBatchId
 
     def setup() {
         store = new SyncStateStore(tempDir.resolve('mutations.db').toString())
         store.initialize()
+        transactionBatchId = store.createIngestionBatch('transaction-delta', 'transaction_delta', 1)
         sourceId = store.upsertSourceEntity(new SourceEntityKey(
             'parent-budget', SourceEntityType.TRANSACTION, 'parent-transaction', null, null))
         child = new StatefulChildRepository()
@@ -176,7 +178,7 @@ class ReconciliationMutationIntegrationSpec extends Specification {
 
     private long operation(String key, long entityId, ReconciliationOperationType type, Long mirrorId,
                            String childId, Map values, String budgetId = 'child-budget', Long dependency = null) {
-        store.createOperation(new ReconciliationOperationIntent(key, null, entityId, mirrorId, 0, type,
+        store.createOperation(new ReconciliationOperationIntent(key, transactionBatchId, entityId, mirrorId, 0, type,
             budgetId, childId, values == null ? null : JsonOutput.toJson(values), "hash-${key}", dependency))
     }
 

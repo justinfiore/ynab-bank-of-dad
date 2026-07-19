@@ -220,7 +220,7 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         cursorValue('transactions.last_server_knowledge') == 101
     }
 
-    def "second live cycle uses saved transaction cursor and duplicate idempotency state prevents reposting"() {
+    def "second live cycle uses saved transaction cursor and durable reconciliation state prevents reposting"() {
         given:
         stubCommonBudgetDiscovery()
         stubParentCategories()
@@ -338,9 +338,6 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
                 it.contains('"cleared":"cleared"')
         }
         tableCount('sync_runs') == 0
-        tableCount('source_events') == 0
-        tableCount('sync_mappings') == 0
-        tableCount('applied_transactions') == 0
         cursorValue('transactions.last_server_knowledge') == null
         Files.readAllBytes(tempDir.resolve('syncstate-wiremock.db')) == databaseBefore
 
@@ -348,7 +345,7 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         logger.detachAppender(appender)
     }
 
-    def "child API failure records failed applied transaction state and continues other child targets"() {
+    def "child API failure records retryable operation state and continues other child targets"() {
         given:
         stubCommonBudgetDiscovery()
         stubParentCategories()
@@ -668,9 +665,6 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         verify(0, getRequestedFor(urlMatching('/v1/plans/child-.*-budget-id/accounts')))
         verify(0, postRequestedFor(urlMatching('/v1/plans/.*/transactions/bulk')))
         tableCount('sync_runs') == 1
-        tableCount('source_events') == 0
-        tableCount('sync_mappings') == 0
-        tableCount('applied_transactions') == 0
         cursorValue('transactions.last_server_knowledge') == 91
     }
 
@@ -1377,27 +1371,6 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
             List rows = []
             while (rs.next()) rows << [source_kind: rs.getString(1), server_knowledge: rs.getObject(2),
                                        status: rs.getString(3)]
-            rows
-        }
-    }
-
-    private List<Map> mappingRows() {
-        withDb { connection ->
-            def rs = connection.createStatement().executeQuery('''
-                SELECT target_child_key, target_mapping_key, target_account_name, target_account_id, idempotency_key
-                FROM sync_mappings
-                ORDER BY id
-            ''')
-            List rows = []
-            while (rs.next()) {
-                rows << [
-                    target_child_key : rs.getString('target_child_key'),
-                    target_mapping_key: rs.getString('target_mapping_key'),
-                    target_account_name: rs.getString('target_account_name'),
-                    target_account_id: rs.getString('target_account_id'),
-                    idempotency_key: rs.getString('idempotency_key')
-                ]
-            }
             rows
         }
     }

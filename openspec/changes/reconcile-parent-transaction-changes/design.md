@@ -1,6 +1,6 @@
 ## Context
 
-The syncer currently derives a create-only `ChildTransactionPlan` and uses an idempotency key containing mutable category and amount values. As a result, date and memo edits are skipped, amount and category edits can create additional child transactions, removed split components remain mirrored, and YNAB deletion tombstones are not represented. The SQLite schema records attempted plans and child creates but does not model a stable parent entity, its revisions, the current child mirror, or update/delete operations.
+The reconciliation design tracks stable parent entities, their revisions, current child mirrors, and durable create/update/delete operations. Stable identity is required so date, amount, category, split-composition, and deletion changes reconcile one lineage rather than creating unrelated financial effects.
 
 This change makes the parent budget authoritative for transaction existence, date, amount, payee, and routing. Child memos are initialized from the parent with the configured prefix/suffix, then remain child-owned. Child transactions remain cleared and are reset to unapproved whenever an automatic update occurs. The implementation must preserve independent child-token failure isolation, dry-run safety, restart-safe retries, and the Java 25 / Gradle 9 / Groovy 5 baseline.
 
@@ -18,7 +18,8 @@ Money movements have a weaker official contract than transactions. The current Y
 - Support ordinary-to-split, split-to-ordinary, split-add, split-edit, and split-remove transitions.
 - Reconcile observed same-ID money-movement changes without inventing unsupported deletion semantics.
 - Persist source revisions, current child mirror correlations, and retryable mutation operations.
-- Migrate populated legacy state without discarding audit history and clean up known duplicate child mirrors through the normal operation pipeline.
+- Initialize reconciliation state only in a new empty database and reject unsupported existing state without mutation.
+- Preserve an ordered transactional schema-version mechanism for future upgrades.
 - Prevent cursor advancement until all derived remote operations have succeeded or reached an idempotent already-complete result.
 - Provide complete human-facing semantics documentation and require both unit and integration coverage for every semantic.
 
@@ -52,7 +53,7 @@ A top-level source identity is `(sourceBudgetId, parentTransactionId)`. A split 
 
 Each changed parent transaction is normalized and persisted as a source revision before reconciliation. A normalized revision hash avoids generating operations for repeated equivalent deltas while preserving append-only history when meaningful source state changes.
 
-Alternative considered: repair the current idempotency key while retaining create-only planning. Rejected because stable duplicate prevention alone cannot represent deletion, split-set changes, rerouting, or retryable updates.
+Alternative considered: rely only on stable duplicate prevention. Rejected because identity alone cannot represent deletion, split-set changes, rerouting, or retryable updates.
 
 ### 2. Reconcile the complete desired mirror set for each changed parent transaction
 
@@ -105,7 +106,7 @@ Alternative considered: directly mutate YNAB and then update the existing mappin
 
 ### 7. Cursor advancement remains remote-application gated
 
-The transaction server-knowledge cursor advances only after the durable ingestion batch and every operation derived from that batch are applied successfully or recognized as idempotently complete. Partial child failures preserve successful sibling results but block the shared parent transaction cursor, allowing retry with stable operation identities. Migration cleanup operations are not transaction-delta work and do not block transaction cursor advancement.
+The transaction server-knowledge cursor advances only after the durable ingestion batch and every operation derived from that batch are applied successfully or recognized as idempotently complete. Partial child failures preserve successful sibling results but block the shared parent transaction cursor, allowing retry with stable operation identities. Money-movement operations are independent of transaction-delta work and do not block transaction cursor advancement.
 
 Initial bootstrap may use the configured transaction lookback date. Once a transaction server-knowledge cursor exists, delta reads omit `since_date` unless official YNAB documentation confirms that combining the filters cannot hide old-transaction tombstones or edits.
 
@@ -117,15 +118,15 @@ Alternative considered: advance after operations are durably queued. Rejected to
 
 New create import IDs are derived from stable source and target identity using a bounded deterministic hash that conforms to the documented YNAB limit. Existing child transactions retain their historical import IDs.
 
-### 9. Schema migration is versioned and remote cleanup is deferred
+### 9. State starts fresh and schema evolution is versioned
 
-SQLite initialization gains transactional schema versioning. Migration preserves existing tables and backfills stable entities/mirrors from successful historical rows with child transaction IDs. For multiple successful mirrors sharing one stable source and target, the newest is selected by `applied_at`, with the highest row ID as a deterministic tie-breaker. Older mirrors become pending delete operations; migration itself never calls YNAB.
+The first supported reconciliation database is baseline schema version 1. Initialization of a missing or empty database creates exactly the nine current tables and records version 1 in `schema_versions`. Repeated initialization at the supported version is a no-op.
 
-Migration identity uses event type plus parent transaction/subtransaction IDs for transaction sources, and movement ID plus target child and direction for money movements. Successful non-dry-run rows with child IDs are eligible active-mirror candidates; rows without child IDs and failed/dry-run attempts remain historical only. Missing child IDs remain historical records but cannot become active mirrors. Failed-only legacy mappings remain retryable according to current source data rather than being assumed applied.
+Existing databases from earlier builds are not upgraded. Operators must delete them and let the syncer create a fresh database. A nonempty database without `schema_versions`, a noncontiguous version history, or a schema newer than this binary supports is rejected before any schema or data mutation. Dry-run follows the same compatibility checks for an existing file, reads a supported database without changing its bytes, and creates no file when the configured database is absent.
 
-Dry-run against an unversioned database computes an in-memory migration projection so it can report legacy cleanup without modifying SQLite. Live startup applies the same migration transactionally before remote work.
+Future schema changes use migrations numbered consecutively after version 1. Initialization validates a contiguous applied-version history, runs every pending migration in ascending order, and records each version in the same SQLite transaction. Any failure rolls back all schema changes and version rows from that initialization attempt. A binary must reject a database whose highest contiguous version is newer than `CURRENT_SCHEMA_VERSION` rather than attempting a downgrade.
 
-Alternative considered: delete duplicates during migration. Rejected because schema initialization must remain local, transactional, and safe during dry runs.
+Alternative considered: infer and upgrade an unversioned database. Rejected because its provenance and shape cannot be established safely enough to mutate it automatically.
 
 ### 10. Configuration changes are prospective
 
@@ -133,7 +134,7 @@ The syncer does not scan historical source entities solely when configuration ch
 
 ### 11. Dry-run computes but does not persist reconciliation
 
-Dry-run reads existing mirrors and cursors, fetches any child state needed to describe an operation, and logs ordered create/update/delete actions. It does not persist revisions or operations, mutate cursors, run destructive legacy cleanup, or call child mutation endpoints.
+Dry-run reads mirrors and cursors from a supported versioned database, fetches any child state needed to describe an operation, and logs ordered create/update/delete actions. It does not persist revisions or operations, mutate cursors, create a missing database, or call child mutation endpoints. Unsupported existing state is rejected without mutation.
 
 ### 12. Money movements use stable observed-state reconciliation
 
@@ -149,36 +150,36 @@ Alternative considered: infer movement deletion from absence in a complete respo
 
 ### 13. Human semantics and tests are first-class deliverables
 
-`PARENT_TRANSACTION_RECONCILIATION.md` explains the authoritative/child-owned boundary, ordinary and split transitions, money-movement limitations, retries, migration, dry-run behavior, and rollout in user language. `README.md` and `QUICK_START.md` link to it. Until implementation lands, all three references clearly label the behavior as proposed.
+`PARENT_TRANSACTION_RECONCILIATION.md` explains the authoritative/child-owned boundary, ordinary and split transitions, money-movement limitations, retries, fresh-state requirement, schema versioning, dry-run behavior, and rollout in user language. `README.md` and `QUICK_START.md` link to it.
 
 Every normative scenario in the delta specification must map to at least one focused unit test and at least one integration test using WireMock and/or real SQLite. Unit tests prove normalization, planning, payload, state, and retry decisions in isolation; integration tests prove HTTP contracts, persistence, process restarts, operation ordering, and observable side effects. A maintained coverage matrix in the semantics guide or test documentation records both test names for each semantic.
 
 ## Risks / Trade-offs
 
 - [Destructive parent authority can remove reviewed child records] → Document the policy prominently, reset edited mirrors to unapproved, require dry-run review before first live reconciliation, and retain operation audit history.
+- [Deleting old state does not remove child transactions created by an earlier syncer] → Treat first-run creates as possible duplicate financial effects for previously deployed installations and require operators to remove or otherwise account for those transactions before live mode.
 - [Crash after remote mutation but before local success recording] → Use stable operation identities, idempotent delete handling, child transaction IDs, and create import IDs; add recovery tests around each mutation type.
-- [Legacy duplicates may represent intentional records] → Select deterministically, expose every planned cleanup in dry-run, and execute cleanup only through normal live operations.
+- [Deleting old local state removes replay history] → Require operators to stop the syncer, delete the unsupported database deliberately, and review a one-cycle dry run before the first live run.
 - [Delta filter behavior could hide old edits or tombstones] → Verify the official contract and omit `since_date` after cursor establishment unless combined-filter safety is documented.
 - [Cross-budget rerouting can temporarily remove a mirror before recreate succeeds] → Persist ordered operations, retry the create, block cursor advancement, and retain the old child transaction ID in audit history.
 - [Child memo preservation requires partial updates] → Verify update semantics and omit memo rather than reading and rewriting it whenever the API permits.
-- [State-model expansion increases brownfield complexity] → Add versioned migrations incrementally, retain existing audit tables, and cover populated migration fixtures with real SQLite.
+- [Future schema changes can partially apply] → Require contiguous versions, execute pending migrations and version inserts in one transaction, and cover rollback with real SQLite.
 - [Active OpenSpec overlap] → Complete `cleared-transactions` before applying this change and rebase the payload/update rules on its final behavior.
 - [Money-movement disappearance is ambiguous] → Never delete from absence; log unconfirmed movements and reconcile only re-observed stable IDs.
 - [Complete movement snapshots may be expensive] → Fetch once per cycle, normalize deterministically, and avoid child calls when snapshots are unchanged.
 - [Large semantic surface can drift from user expectations] → Maintain the linked semantics guide and require paired unit/integration tests for every normative scenario.
 
-## Migration Plan
+## Rollout Plan
 
 1. Complete and archive or synchronize prerequisite parent/child and cleared-transaction specifications.
-2. Add transactional schema versioning and new reconciliation tables without deleting current tables.
-3. Backfill stable source entities and current child mirrors from existing successful application rows.
-4. Persist pending cleanup operations for older duplicate mirrors, but make no remote calls during migration.
-5. Deploy the new binary and run at least one `--dry-run --max-cycles 1` against the migrated database.
-6. Review planned legacy deletions, updates, and creates before enabling a live cycle.
-7. Review the human semantics guide and paired test-coverage matrix before enabling the implementation.
-8. Run one live cycle, verify operation outcomes and cursor movement, then resume continuous polling.
+2. Stop every process using the configured state path.
+3. Delete any state database created by an earlier build; it is intentionally unsupported and will not be modified by this binary.
+4. Deploy the new binary and run `--dry-run --max-cycles 1` with the intended path. A missing database remains absent during dry-run.
+5. Review planned deletions, updates, and creates before enabling a live cycle.
+6. Run one live cycle so baseline schema version 1 is created, then verify the nine tables, operation outcomes, and cursor movement.
+7. Resume continuous polling only after the human semantics guide and test-coverage matrix have been reviewed.
 
-Rollback before a live reconciliation consists of restoring a database backup and the prior binary. After live updates or deletions, rollback cannot reconstruct remote child state automatically; operation history must be used for manual recovery.
+After the version-1 live run, rollback cannot use an old incompatible state database with this binary. After live updates or deletions, restoring local files cannot reconstruct remote child state automatically; operation history must be used for manual recovery.
 
 ## Open Questions
 

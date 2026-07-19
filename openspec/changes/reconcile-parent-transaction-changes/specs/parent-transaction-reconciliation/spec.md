@@ -148,42 +148,54 @@ The syncer SHALL persist a durable ingestion batch, immutable ordered create/upd
 - **THEN** the next cycle SHALL recover without creating a second financial effect
 - **AND** it SHALL record a new operation attempt while preserving prior attempt history
 
-#### Scenario: Migration cleanup does not block transaction cursor
-- **WHEN** pending legacy cleanup exists independently of a transaction delta ingestion batch
-- **THEN** that cleanup SHALL remain retryable without preventing completion of unrelated transaction cursor batches
+### Requirement: Reconciliation state SHALL start fresh and evolve transactionally
+SQLite initialization SHALL create baseline schema version 1 only in a missing or empty database. The baseline SHALL contain exactly `schema_versions`, `sync_runs`, `sync_cursors`, `source_entities`, `ingestion_batches`, `source_revisions`, `child_mirrors`, `sync_operations`, and `operation_attempts`. Operators SHALL delete databases created by earlier builds; the syncer SHALL NOT infer, upgrade, copy, or clean old state. Deleting local state SHALL NOT be represented as deleting child transactions created by an earlier syncer. A nonempty unversioned database, noncontiguous version history, schema newer than the binary supports, or unsupported current table/index/trigger shape SHALL be rejected without mutation.
 
-### Requirement: Reconciliation state SHALL migrate populated legacy databases safely
-SQLite initialization SHALL use transactional schema versioning and SHALL preserve existing audit tables. Migration SHALL backfill stable source entities and active child mirrors only from successful, non-dry-run historical rows with child transaction IDs. Transaction rows SHALL be grouped by event type and stable transaction/subtransaction identity plus target child budget. Money-movement rows SHALL be grouped by movement ID, target child budget, and direction. If multiple eligible successful legacy mirrors exist for one stable source and target, the newest SHALL remain active and older mirrors SHALL become pending delete operations rather than being deleted during migration.
+Future migrations SHALL have contiguous integer versions after version 1. Initialization SHALL validate applied versions, execute every pending migration in ascending order, and insert its `schema_versions` row in one transaction. A failure SHALL roll back the complete initialization attempt, and initialization at the current supported version SHALL be repeatable without adding version rows.
 
-#### Scenario: Single successful legacy mirror is backfilled
-- **WHEN** migration reads one successful legacy mapping with a child transaction ID
-- **THEN** it SHALL create one active child mirror correlated to the stable parent source
+#### Scenario: Fresh initialization creates baseline version 1
+- **WHEN** live initialization opens a missing or empty state database
+- **THEN** it SHALL create exactly the nine baseline tables and one `schema_versions` row for version 1
 
-#### Scenario: Duplicate successful legacy mirrors are normalized
-- **WHEN** migration finds multiple successful child transaction IDs for one stable parent source and target
-- **THEN** it SHALL select the row with the newest applied timestamp, using the highest row ID as a tie-breaker
-- **AND** it SHALL queue delete operations for the older child transaction IDs
+#### Scenario: Repeated initialization is unchanged
+- **WHEN** initialization runs more than once against a supported version-1 database
+- **THEN** it SHALL leave the table set and single version row unchanged
 
-#### Scenario: Migration failure rolls back
-- **WHEN** a schema or backfill migration step fails
-- **THEN** the migration transaction SHALL roll back without leaving a partially upgraded schema version
+#### Scenario: Nonempty unversioned database is rejected unchanged
+- **WHEN** initialization opens a nonempty database without `schema_versions`
+- **THEN** it SHALL direct the operator to delete the old database and SHALL leave its bytes and tables unchanged
 
-#### Scenario: Failed dry-run and missing-ID history is preserved but inactive
-- **WHEN** migration encounters failed attempts, dry-run attempts, or successful rows without child transaction IDs
-- **THEN** it SHALL preserve those rows as audit history without creating active mirrors from them
+#### Scenario: Schema version history must be contiguous
+- **WHEN** `schema_versions` contains a gap
+- **THEN** initialization SHALL reject the database without inserting, deleting, or reordering version rows
+
+#### Scenario: Newer schema version is rejected unchanged
+- **WHEN** a database has a contiguous schema version newer than this binary supports
+- **THEN** initialization SHALL reject it without attempting a downgrade or changing version rows
+
+#### Scenario: Baseline failure rolls back atomically
+- **WHEN** any baseline schema step fails before version 1 is committed
+- **THEN** the initialization transaction SHALL roll back all baseline tables and the version row
 
 ### Requirement: Dry-run SHALL report reconciliation without side effects
-Dry-run reconciliation SHALL read existing source, mirror, cursor, and required child state and SHALL report ordered create, update, delete, reroute, recreation, and legacy cleanup operations. For an unversioned database it SHALL compute the migration and cleanup projection in memory. It SHALL NOT mutate YNAB, change the SQLite file or schema, persist source revisions or operations, execute legacy cleanup, or advance cursors.
+Dry-run reconciliation SHALL read existing source, mirror, cursor, and required child state from a supported database and SHALL report ordered create, update, delete, reroute, and recreation operations. It SHALL NOT mutate YNAB, create a missing SQLite file, change SQLite bytes or schema, persist source revisions or operations, or advance cursors. It SHALL reject unsupported existing state without mutation.
 
 #### Scenario: Dry-run reports destructive work
-- **WHEN** a dry-run observes a parent deletion, reroute, or queued legacy duplicate cleanup
+- **WHEN** a dry-run observes a parent deletion or reroute
 - **THEN** it SHALL identify every child transaction that would be deleted or replaced
 - **AND** it SHALL perform no child mutation or SQLite write
 
-#### Scenario: Dry-run projects legacy migration without changing SQLite
-- **WHEN** dry-run opens a populated unversioned legacy database
-- **THEN** it SHALL report projected active mirrors and duplicate cleanup
-- **AND** the database schema and contents SHALL remain byte-for-byte unchanged
+#### Scenario: Dry-run missing database creates nothing
+- **WHEN** dry-run uses a state path that does not exist
+- **THEN** it SHALL read empty state and SHALL NOT create a database file
+
+#### Scenario: Dry-run reads supported state without changing bytes
+- **WHEN** dry-run opens a supported version-1 database
+- **THEN** it SHALL read cursors, sources, and mirrors while leaving the database byte-for-byte unchanged
+
+#### Scenario: Dry-run rejects unsupported state without mutation
+- **WHEN** dry-run opens a nonempty unversioned or otherwise unsupported database
+- **THEN** it SHALL reject the database and leave its bytes and tables unchanged
 
 ### Requirement: Child mutation API contracts SHALL be verified and isolated
 The implementation SHALL use the official YNAB transaction lookup, update, and delete contracts through repository methods backed by the local HTTP client. It SHALL treat supported successful response shapes explicitly, SHALL surface non-idempotent API failures with child context, and SHALL never log access tokens.
@@ -247,7 +259,7 @@ Money-movement snapshot ingestion and retryable child operations SHALL use indep
 - **THEN** stable observation and operation identities SHALL prevent duplicate child mutations
 
 ### Requirement: Reconciliation semantics SHALL be documented for human operators
-The repository SHALL provide `PARENT_TRANSACTION_RECONCILIATION.md` with plain-language tables and examples covering authoritative parent fields, child-owned memos, deletion and unapproval, mapping changes, ordinary/split transitions, money-movement capabilities and limitations, missing child transactions, retries, migration cleanup, dry-run behavior, and rollout safety. `README.md` and `QUICK_START.md` SHALL link to that guide. Before implementation lands, those references SHALL clearly label the semantics as proposed.
+The repository SHALL provide `PARENT_TRANSACTION_RECONCILIATION.md` with plain-language tables and examples covering authoritative parent fields, child-owned memos, deletion and unapproval, mapping changes, ordinary/split transitions, money-movement capabilities and limitations, missing child transactions, retries, the fresh-state requirement, versioned schema evolution, dry-run behavior, and rollout safety. `README.md` and `QUICK_START.md` SHALL link to that guide.
 
 #### Scenario: Operator reviews destructive semantics before rollout
 - **WHEN** an operator follows README or quick-start sync guidance
@@ -255,7 +267,7 @@ The repository SHALL provide `PARENT_TRANSACTION_RECONCILIATION.md` with plain-l
 - **AND** the guide SHALL explain destructive cases with concrete examples
 
 ### Requirement: Every reconciliation semantic SHALL have unit and integration coverage
-Every normative scenario in this capability SHALL map to at least one focused unit test and at least one integration test. Unit coverage SHALL directly exercise the responsible normalization, reconciliation, payload, state, operation, migration, or coordinator behavior. Integration coverage SHALL exercise the semantic through simulated YNAB HTTP interactions and/or real SQLite persistence, including observable operation ordering and process-restart behavior. A maintained coverage matrix SHALL name both tests for each semantic.
+Every normative scenario in this capability SHALL map to a focused executable test and at least one integration test. Behavioral coverage SHALL use focused unit tests for normalization, reconciliation, payload, operation, and coordinator decisions. Schema initialization, transactional rollback, compatibility rejection, and byte-preservation scenarios SHALL use their exact real-SQLite integration features because those guarantees depend on SQLite behavior. Integration coverage SHALL exercise semantics through simulated YNAB HTTP interactions and/or real SQLite persistence, including observable operation ordering and process-restart behavior. A maintained coverage matrix SHALL name both references for each semantic.
 
 #### Scenario: Coverage matrix is complete
 - **WHEN** implementation is considered complete

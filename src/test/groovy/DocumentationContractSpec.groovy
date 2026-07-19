@@ -26,7 +26,8 @@ class DocumentationContractSpec extends Specification {
         quickStart.contains('[PARENT_TRANSACTION_RECONCILIATION.md](PARENT_TRANSACTION_RECONCILIATION.md)')
         guide.contains('Approval, deletion, and destructive behavior')
         guide.contains('review a `--dry-run --max-cycles 1`')
-        guide.toLowerCase().contains('back up the configured sqlite')
+        guide.contains('delete any database created by an earlier build')
+        guide.contains('rejected without mutation')
     }
 
     def "human guide covers every normative reconciliation area represented by the matrix"() {
@@ -35,6 +36,6 @@ class DocumentationContractSpec extends Specification {
 
         expect:
         ['stable source', 'memo', 'unapproved', 'split', 'missing child', 'retry', 'cursor',
-         'migration', 'dry-run', 'money movement', 'delete', 'update'].every { guide.contains(it) }
+         'schema_versions', 'dry-run', 'money movement', 'delete', 'update'].every { guide.contains(it) }
     }
 }

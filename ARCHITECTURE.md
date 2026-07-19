@@ -94,9 +94,6 @@ src/main/groovy/ynabbankofdad/
 │   ├── SyncCliOptions.groovy
 │   ├── SyncLoggingBootstrap.groovy
 │   ├── ChildTransactionPayloadFactory.groovy
-│   ├── ChildSyncPlanner.groovy               # legacy create-only path
-│   ├── ChildSyncApplier.groovy               # legacy create-only path
-│   ├── ChildSyncIdempotency.groovy           # legacy create-only path
 │   ├── model/
 │   │   ├── SyncModels.groovy
 │   │   └── SyncResults.groovy
@@ -266,16 +263,6 @@ Each child context caches its resolved YNAB budget ID and account IDs for the pr
 
 Parent plan, category, transaction-delta, full-detail transaction, and unrecoverable pre-run read failures propagate out of `runOnce`. Because `runLoop` does not catch them, they terminate the polling process before a `sync_runs` row is created. Money-movement reads, per-child routing failures, and per-operation failures are isolated so successfully reconciled transaction work can still advance the transaction cursor where its current batch is eligible.
 
-### Current Versus Legacy Sync Paths
-
-The production `runOnce` method uses the reconciliation path described below. The following create-only classes remain in the repository:
-
-- `ChildSyncPlanner`;
-- `ChildSyncApplier`;
-- `ChildSyncIdempotency`.
-
-`ParentChildBudgetSyncer.buildPlans` and `applyPlans` still expose them for compatibility tests, and their legacy SQLite rows are migration input. They are not called by the live `runOnce` flow. Reviewers should avoid inferring production behavior from these classes.
-
 ## Parent Transaction Reconciliation
 
 ### Review Orientation
@@ -286,7 +273,7 @@ The reconciliation implementation is split into four layers:
 |---|---|---|
 | YNAB ingestion and mutation boundary | `SyncModels.groovy`, `YnabBudgetRepository.groovy`, `YnabHttpClient.groovy` | Are the documented YNAB request and response contracts represented exactly? |
 | Pure normalization and planning | `sync/reconcile/*.groovy` | Does stable source state produce the complete and correctly ordered desired operation set? |
-| Durable state | `SyncStateStore.groovy`, `ReconciliationStateModels.groovy` | Is intent persisted, immutable, retryable, and migration-safe? |
+| Durable state | `SyncStateStore.groovy`, `ReconciliationStateModels.groovy` | Is intent persisted, immutable, retryable, and schema-version safe? |
 | Orchestration and application | `ParentChildBudgetSyncer.groovy`, `ReconciliationOperationApplier.groovy`, `SyncRunCoordinator.groovy` | Are reads, persistence, remote effects, retries, and cursor advancement ordered safely? |
 
 A productive review order is:
@@ -316,7 +303,7 @@ The following invariants define intended behavior:
 11. Child transaction IDs remain in mirror history after deletion, replacement, or recreation.
 12. Transaction cursor advancement is gated by completion of the current response's transaction batch and routing work. The current implementation does not also query every older pending transaction batch; see the review hotspot below.
 13. Money-movement absence is never treated as deletion evidence.
-14. Movement and migration-cleanup failures do not block the transaction cursor.
+14. Movement failures do not block the transaction cursor.
 15. Dry-run performs no child mutation and no SQLite schema or data write.
 
 ### One Reconciliation Cycle
@@ -344,7 +331,7 @@ runOnce
 
 #### State Initialization
 
-Live `SyncStateStore.initialize` recognizes fresh, current, and unversioned legacy databases, then applies ordered migrations in one SQLite transaction. Dry-run initialization is a no-op. An unversioned dry-run database is read and projected in memory rather than migrated.
+Live `SyncStateStore.initialize` creates baseline version 1 in a missing or empty database. It validates a current database's contiguous `schema_versions` history and applies any future pending versions in order in one SQLite transaction. It rejects nonempty unversioned databases, version gaps, newer schemas, and unsupported shapes without mutation. Dry-run creates no missing database, reads supported state without changing bytes, and rejects unsupported existing state unchanged.
 
 #### Parent Reads
 
@@ -520,27 +507,19 @@ The 36-character format respects the documented YNAB limit. Existing child trans
 
 ### Durable SQLite Model
 
-The schema preserves legacy audit tables and adds reconciliation tables.
+Baseline schema version 1 contains exactly nine tables.
 
-#### Legacy Tables
-
-| Table | Role |
-|---|---|
-| `sync_runs` | Process-cycle status and errors. |
-| `source_events` | Legacy create-only source fingerprints. |
-| `sync_mappings` | Legacy planned source-to-child creates. |
-| `applied_transactions` | Legacy create attempts and returned child IDs. |
-| `sync_cursors` | Named cursors, including transaction server knowledge. |
-
-#### Reconciliation Tables
+#### Version 1 Tables
 
 | Table | Role |
 |---|---|
 | `schema_versions` | Applied ordered schema versions. |
+| `sync_runs` | Process-cycle status and errors. |
+| `sync_cursors` | Named cursors, including transaction server knowledge. |
 | `source_entities` | Stable source identity and current lifecycle. |
+| `ingestion_batches` | Cursor-eligible transaction or independent movement work. |
 | `source_revisions` | Append-only, deduplicated canonical semantic revisions with first-observation metadata. |
 | `child_mirrors` | Current and historical child transaction lineage. |
-| `ingestion_batches` | Cursor-eligible transaction or independent movement work. |
 | `sync_operations` | Immutable ordered create/update/delete intent and dependency. |
 | `operation_attempts` | Append-only remote attempt outcomes and failure reasons. |
 
@@ -555,7 +534,7 @@ active | deleted | unconfirmed
 Mirror lifecycle:
 
 ```text
-active | deleted | replaced | missing | superseded
+active | deleted | replaced | missing
 ```
 
 Operation status:
@@ -572,23 +551,11 @@ applied | failed | already_complete
 
 SQLite triggers prevent mutation or deletion of append-only revisions and attempts, prevent changes to immutable operation intent, and preserve mirror identity/history rows.
 
-### Migration And Legacy Backfill
+### Schema Initialization And Future Migrations
 
-Schema initialization is transactional. A failure rolls back schema, backfill, cleanup-operation creation, and version advancement.
+Version 1 is the first supported state schema. Operators must delete databases created by earlier builds; initialization does not inspect their rows to infer a conversion. Deleting SQLite state does not delete child transactions that an earlier syncer already created, so a previously deployed installation must inspect the complete first dry-run and remove or otherwise account for those transactions before enabling live reconciliation. A nonempty database without `schema_versions` is rejected and left byte-for-byte unchanged.
 
-Legacy backfill considers only successful, non-dry-run rows with a nonblank returned child transaction ID. It groups transaction mirrors by stable transaction/subtransaction source and target child budget. Movement grouping additionally includes logical direction.
-
-Within a group:
-
-1. newest `applied_at` wins;
-2. highest applied-row ID breaks timestamp ties;
-3. the winning distinct child ID becomes active;
-4. older distinct child IDs become superseded mirrors;
-5. a pending delete operation is queued for each superseded child ID.
-
-Migration never calls YNAB. Cleanup executes later through the normal operation pipeline. Cleanup operations are not attached to a transaction ingestion batch and therefore do not block transaction cursor advancement.
-
-In dry-run, the same selection and cleanup intent are projected in memory. A migrated database's already-persisted pending cleanup is also reported without changing its operation state.
+`schema_versions` is an ordered migration ledger. Applied versions must be contiguous from 1. On startup, initialization validates that history and the current table, index, and trigger shape, rejects a highest version greater than `CURRENT_SCHEMA_VERSION`, and executes each pending migration in ascending order. Schema statements and their version inserts share one transaction, so any failure rolls back the complete initialization attempt. Repeated initialization at the current version adds no rows and changes no tables.
 
 ### Applying Durable Operations
 
@@ -664,7 +631,7 @@ Movement batch identity includes:
 
 `completeIngestionBatchIfReady` marks a batch complete only when none of its operations remain pending or retryable-failed.
 
-`SyncRunCoordinator` advances `transactions.last_server_knowledge` only when the current response batch's transaction work and routing are complete. Overall run status can still be partial because movement or migration cleanup failed; those failures do not gate the transaction cursor. Older incomplete transaction batches are not included in this eligibility query, which is called out below as a review hotspot.
+`SyncRunCoordinator` advances `transactions.last_server_knowledge` only when the current response batch's transaction work and routing are complete. Overall run status can still be partial because movement work failed; that failure does not gate the transaction cursor. Older incomplete transaction batches are not included in this eligibility query, which is called out below as a review hotspot.
 
 ### Money-Movement Reconciliation
 
@@ -696,7 +663,7 @@ Transaction routing failure blocks transaction batch completion and cursor advan
 `DryRunSyncStateRepository` is a read-only facade:
 
 - initialization does not create or migrate a database;
-- cursor, source, mirror, and pending-cleanup reads are allowed when state exists;
+- cursor, source, and mirror reads are allowed when supported state exists;
 - every reconciliation write method either does nothing where appropriate or throws a dry-run write error;
 - no operation applier is constructed.
 
@@ -710,7 +677,6 @@ Dry-run reports:
 - cross-budget replacements;
 - existence checks;
 - missing-child recreations;
-- projected or persisted legacy duplicate cleanup;
 - unconfirmed money movements.
 
 ### Auditability
@@ -739,8 +705,6 @@ For normal transaction and movement operations passed through `persistOperation`
 - target budget and child transaction ID;
 - dependency ID;
 - formatted payload.
-
-Migration cleanup operations are inserted directly during backfill, so their durable SQLite intent exists without this initial INFO decision record. They do emit the normal outcome record when applied.
 
 When an operation resolves, INFO logging records:
 
@@ -786,7 +750,7 @@ The reconciliation tests are intentionally split by responsibility.
 |---|---|
 | Stable identities and revision hashes | `SourceRevisionNormalizerSpec`, `MoneyMovementNormalizerSpec` |
 | Desired-state decisions | `ParentTransactionReconcilerSpec`, `MoneyMovementReconcilerSpec` |
-| SQLite schema, migration, dependencies, lineage | `ReconciliationStateStoreIntegrationSpec`, `LegacyMigrationSelectionSpec` |
+| SQLite baseline, version checks, dependencies, lineage | `SyncStateStoreIntegrationSpec`, `ReconciliationStateStoreIntegrationSpec` |
 | Create/update/delete/recreation and crash windows | `ReconciliationOperationApplierSpec`, `ReconciliationMutationIntegrationSpec` |
 | Process restart and cursor recovery | `ReconciliationRecoveryIntegrationSpec`, `SyncRunCoordinatorSpec` |
 | Full transaction/split planning | `ReconciliationPlanningIntegrationSpec` |
@@ -827,8 +791,8 @@ Use this checklist when reviewing reconciliation changes:
 - Verify repeated non-create keys describe identical intent, and review whether the narrower replayed-create comparison is safe for mirror, sequence, and dependency differences.
 - Verify every remote effect is preceded by persisted intent.
 - Verify append-only triggers and uniqueness constraints match domain invariants.
-- Verify migration eligibility excludes failed, dry-run, and missing-child-ID rows.
-- Verify migration queues, rather than performs, remote cleanup.
+- Verify baseline version 1 creates exactly the nine documented tables.
+- Verify unsupported state is rejected without mutation and future versions remain contiguous and transactional.
 
 #### Application And Recovery
 
@@ -843,10 +807,10 @@ Use this checklist when reviewing reconciliation changes:
 
 - Verify failure in the current response's transaction batch blocks its cursor advancement.
 - Verify whether older incomplete transaction batches must also participate before a later server-knowledge value advances.
-- Verify movement and migration cleanup do not block that cursor.
+- Verify movement work does not block that cursor.
 - Verify empty deltas can advance server knowledge.
 - Verify dry-run cannot reach any child mutation or state-write method.
-- Verify byte-identical dry-run behavior against both legacy and migrated state.
+- Verify dry-run creates no missing database, preserves supported database bytes, and rejects unsupported state unchanged.
 
 ### Review Hotspots And Design Questions
 
@@ -862,7 +826,7 @@ Ready operations are selected but not atomically claimed. There is no process le
 
 #### Batch Persistence Atomicity
 
-Schema migrations and operation completion are transactional, but ingestion batch creation, revision insertion, lifecycle updates, and operation insertion are separate state calls/connections. Deterministic keys support restart recovery, but reviewers should reason through crashes between every persistence step.
+Schema initialization/migrations and operation completion are transactional, but ingestion batch creation, revision insertion, lifecycle updates, and operation insertion are separate state calls/connections. Deterministic keys support restart recovery, but reviewers should reason through crashes between every persistence step.
 
 #### Per-Source Routing Failure State
 
@@ -870,7 +834,7 @@ Planning blocks only sources affected by failed child routing. The transaction p
 
 #### Operation Limit And Backlog Ordering
 
-The applier handles at most 100 distinct operations per invocation. Large transaction batches can require later cycles, and batched operations sort ahead of unbatched migration cleanup. Review expected backlog behavior and whether the limit should become configuration.
+The applier handles at most 100 distinct operations per invocation. Large transaction batches can require later cycles. Review expected backlog behavior and whether the limit should become configuration.
 
 #### Pending Intent Versus Configuration Changes
 
@@ -884,14 +848,10 @@ Recreation intentionally reuses stable source/target import identity. Review YNA
 
 Applying an operation requires a current child context and token for its target budget. Removing a child from configuration while delete/update work remains pending can strand that operation. Operators should retain target credentials until operation backlog is empty.
 
-#### Legacy Path Drift
-
-The retained create-only planner and applier have different identity and mutation semantics. Future changes should target the reconciliation path unless explicitly maintaining migration or compatibility behavior. A later cleanup can remove the old runtime surface once no callers or migration fixtures depend on it.
-
 ## Operational Boundaries
 
 - Run only one live syncer process per SQLite state database.
-- Back up SQLite, including sidecar state or through SQLite's backup facility, before first reconciliation migration.
+- Delete any state database created by an earlier build before first reconciliation; unsupported state is rejected without mutation.
 - Run `--dry-run --max-cycles 1` with the exact live configuration and state path before live rollout.
 - Keep child credentials configured until all operations targeting that child have completed.
 - Do not delete the state database after live use; it contains replay protection, cursor state, and manual recovery history.

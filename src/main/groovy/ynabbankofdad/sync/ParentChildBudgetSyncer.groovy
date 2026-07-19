@@ -45,8 +45,6 @@ class ParentChildBudgetSyncer {
     final YnabBudgetRepository parentRepository
     final SyncStateRepository stateStore
     final List<ChildSyncContext> childContexts
-    final ChildSyncPlanner planner
-    final ChildSyncApplier applier
     final SyncRunCoordinator coordinator
     final ReconciliationSyncStateRepository reconciliationState
     final ReconciliationOperationApplier reconciliationApplier
@@ -69,8 +67,6 @@ class ParentChildBudgetSyncer {
         this.parentRepository = parentRepository
         this.stateStore = stateStore
         this.childContexts = childContexts
-        this.planner = new ChildSyncPlanner(childContexts)
-        this.applier = new ChildSyncApplier(stateStore, new ChildTransactionPayloadFactory(), dryRun)
         this.coordinator = new SyncRunCoordinator(stateStore, dryRun)
         if (!(stateStore instanceof ReconciliationSyncStateRepository)) {
             throw new IllegalArgumentException('Parent-child reconciliation requires reconciliation-capable sync state')
@@ -163,7 +159,7 @@ class ParentChildBudgetSyncer {
         RoutingResolution transactionRouting = resolveChildRouting(transactionCategoryNames)
         RoutingResolution movementRouting = resolveChildRouting(movementCategoryNames)
 
-        long runId = dryRun ? -1L : stateStore.startRun(dryRun, syncConfig.pollingIntervalSeconds, parentBudgetId)
+        long runId = dryRun ? -1L : stateStore.startRun(syncConfig.pollingIntervalSeconds, parentBudgetId)
         try {
             log.info('Cycle {} read {} parent transactions and {} money movements', cycleNumber,
                 completeTransactionDelta.transactions.size(), movementSnapshot?.movements?.size() ?: 0)
@@ -202,8 +198,7 @@ class ParentChildBudgetSyncer {
             }
             failures.addAll(transactionRouting.failures)
             failures.addAll(movementRouting.failures)
-            SyncRunResult result = new SyncRunResult(application.applied, 0,
-                application.failed + (failures.size() - application.failures.size()), failures)
+            SyncRunResult result = new SyncRunResult(failures)
             coordinator.finishRun(runId, result, transactionDelta.serverKnowledge, transactionComplete)
         } catch (Exception ex) {
             coordinator.failRun(runId, ex)
@@ -213,19 +208,6 @@ class ParentChildBudgetSyncer {
 
     private Integer transactionCursor() {
         stateStore.getCursor(SyncRunCoordinator.TRANSACTION_CURSOR_KEY)
-    }
-
-    List<ChildTransactionPlan> buildPlans(
-        String parentBudgetId,
-        Map<String, CategorySnapshot> parentCategoriesById,
-        List<ParentTransactionEvent> transactions,
-        List<MoneyMovementEvent> moneyMovements
-    ) {
-        planner.buildPlans(parentBudgetId, parentCategoriesById, transactions, moneyMovements)
-    }
-
-    SyncRunResult applyPlans(long runId, List<ChildTransactionPlan> plans) {
-        applier.applyPlans(runId, plans, childContexts)
     }
 
     private RoutingResolution resolveChildRouting(Set<String> categoryNames) {
@@ -312,10 +294,6 @@ class ParentChildBudgetSyncer {
     ) {
         List<SourceEntityKey> prior = reconciliationState.findSourceEntities(
             parentBudgetId, SourceEntityType.MONEY_MOVEMENT)
-        prior.addAll(legacyMirrors().findAll {
-            it.source.sourceBudgetId == parentBudgetId && it.source.type == SourceEntityType.MONEY_MOVEMENT
-        }*.source)
-        prior = prior.unique()
         MovementSnapshotObservation observation = new MoneyMovementNormalizer().normalizeSnapshot(
             parentBudgetId, snapshot.movements, categoriesById, prior, snapshot.serverKnowledge)
         List<ActiveMirrorReference> mirrors = prior.collectMany { SourceEntityKey source ->
@@ -333,35 +311,17 @@ class ParentChildBudgetSyncer {
 
     private List<ActiveMirrorReference> activeMirrorsForParent(String budgetId, String transactionId) {
         List<ChildMirrorState> mirrors = reconciliationState.findMirrorsForParent(budgetId, transactionId, false)
-        legacyMirrors().findAll {
-            it.source.sourceBudgetId == budgetId && it.source.parentTransactionId == transactionId && it.active
-        }.eachWithIndex { LegacyMirrorProjection legacy, int index ->
-            mirrors << new ChildMirrorState(-(index + 1L), 0L, legacy.targetBudgetId, legacy.direction,
-                legacy.childTransactionId, null, null, 'active', null, null)
-        }
         mirrors.collect { ChildMirrorState mirror ->
-            SourceEntityKey source = mirror.sourceEntityId > 0 ?
-                reconciliationState.findSourceEntityKey(mirror.sourceEntityId) :
-                legacyMirrors().find { it.childTransactionId == mirror.childTransactionId }?.source
+            SourceEntityKey source = reconciliationState.findSourceEntityKey(mirror.sourceEntityId)
             new ActiveMirrorReference(source, mirror, childKey(mirror.targetBudgetId), null, null)
         }
     }
 
     private List<ActiveMirrorReference> activeMirrorsForSource(SourceEntityKey source) {
         List<ChildMirrorState> mirrors = reconciliationState.findMirrorsForSource(source, false)
-        legacyMirrors().findAll { it.source == source && it.active }.eachWithIndex {
-            LegacyMirrorProjection legacy, int index ->
-                mirrors << new ChildMirrorState(-(index + 1L), 0L, legacy.targetBudgetId, legacy.direction,
-                    legacy.childTransactionId, null, null, 'active', null, null)
-        }
         mirrors.collect { ChildMirrorState mirror ->
             new ActiveMirrorReference(source, mirror, childKey(mirror.targetBudgetId), mirror.direction, null)
         }
-    }
-
-    private List<LegacyMirrorProjection> legacyMirrors() {
-        dryRun && !reconciliationState.reconciliationSchemaAvailable() ?
-            reconciliationState.projectLegacyMigration().mirrors : []
     }
 
     private String childKey(String budgetId) {
@@ -524,13 +484,6 @@ class ParentChildBudgetSyncer {
 
     private void reportDryRun(List<ParentReconciliationResult> transactionResults,
                               MovementPlanning movementPlanning) {
-        List<ReconciliationOperationIntent> cleanupOperations = reconciliationState.reconciliationSchemaAvailable() ?
-            reconciliationState.findPendingMigrationCleanupOperations()*.intent :
-            reconciliationState.projectLegacyMigration().cleanupOperations
-        cleanupOperations.each { ReconciliationOperationIntent cleanup ->
-            log.info('[DRY RUN] legacy cleanup delete child transaction {} from budget {}',
-                cleanup.childTransactionId, cleanup.targetBudgetId)
-        }
         List<PlannedReconciliationIntent> intents = transactionResults.collectMany { it.intents }
         if (movementPlanning) {
             intents.addAll(movementPlanning.decisions.collectMany { it.intents })

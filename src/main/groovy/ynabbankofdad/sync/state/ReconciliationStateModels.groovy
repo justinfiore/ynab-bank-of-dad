@@ -50,7 +50,7 @@ class ChildMirrorState {
 @Immutable
 class ReconciliationOperationIntent {
     String operationKey
-    Long ingestionBatchId
+    long ingestionBatchId
     long sourceEntityId
     Long childMirrorId
     int operationSequence
@@ -79,19 +79,4 @@ class ReconciliationOperationAttempt {
     String failureReason
     String returnedChildTransactionId
     String attemptedAt
-}
-
-@Immutable
-class LegacyMirrorProjection {
-    SourceEntityKey source
-    String targetBudgetId
-    String direction
-    String childTransactionId
-    boolean active
-}
-
-@Immutable
-class MigrationProjection {
-    List<LegacyMirrorProjection> mirrors
-    List<ReconciliationOperationIntent> cleanupOperations
 }

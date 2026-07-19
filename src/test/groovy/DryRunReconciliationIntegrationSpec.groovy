@@ -13,6 +13,7 @@ import org.slf4j.LoggerFactory
 
 import java.nio.file.Files
 import java.nio.file.Path
+import java.sql.DriverManager
 
 class DryRunReconciliationIntegrationSpec extends Specification {
     @TempDir
@@ -71,42 +72,24 @@ class DryRunReconciliationIntegrationSpec extends Specification {
         logger.detachAppender(appender)
     }
 
-    def "dry run reports persisted retryable migration cleanup without writing migrated SQLite"() {
+    def "dry run rejects a nonempty unversioned database without modifying it"() {
         given:
-        Path database = tempDir.resolve('migrated-cleanup.db')
-        def persistent = new SyncStateStore(database.toString())
-        persistent.initialize()
-        long entityId = persistent.upsertSourceEntity(new SourceEntityKey(
-            'parent', SourceEntityType.TRANSACTION, 'legacy-source', null, null))
-        long mirrorId = persistent.recordMirrorCreated(entityId, 'child-budget', 'outflow', 'legacy-duplicate')
-        long operationId = persistent.createOperation(new ReconciliationOperationIntent(
-            'legacy-cleanup', null, entityId, mirrorId, 0, ReconciliationOperationType.DELETE,
-            'child-budget', 'legacy-duplicate', null, null, null))
-        persistent.markOperationRetryable(operationId)
+        Path database = tempDir.resolve('unversioned.db')
+        def connection = DriverManager.getConnection("jdbc:sqlite:${database}")
+        connection.createStatement().execute('CREATE TABLE legacy_state (id INTEGER PRIMARY KEY)')
+        connection.createStatement().execute('INSERT INTO legacy_state(id) VALUES (1)')
+        connection.close()
         byte[] before = Files.readAllBytes(database)
+        def persistent = new SyncStateStore(database.toString())
         def dryState = new DryRunSyncStateRepository(persistent, database.toString())
-        def syncer = new ParentChildBudgetSyncer(new RuntimeConfig(sync: config(database)), config(database),
-            true, database.toString(), 1, null, dryState, [])
-        Logger logger = LoggerFactory.getLogger(ParentChildBudgetSyncer) as Logger
-        def appender = new ListAppender<ILoggingEvent>()
-        appender.start()
-        logger.addAppender(appender)
 
         when:
-        def method = ParentChildBudgetSyncer.getDeclaredMethod('reportDryRun', List,
-            Class.forName('ynabbankofdad.sync.MovementPlanning'))
-        method.accessible = true
-        method.invoke(syncer, [], null)
+        dryState.reconciliationSchemaAvailable()
 
         then:
-        appender.list*.formattedMessage.any {
-            it.contains('[DRY RUN] legacy cleanup delete child transaction legacy-duplicate from budget child-budget')
-        }
+        def failure = thrown(IllegalStateException)
+        failure.message.contains('unversioned and unsupported')
         Files.readAllBytes(database) == before
-        persistent.findPendingMigrationCleanupOperations()*.status == ['retryable_failed']
-
-        cleanup:
-        logger.detachAppender(appender)
     }
 
     private SyncConfig config(Path database) {

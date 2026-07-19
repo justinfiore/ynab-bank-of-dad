@@ -15,6 +15,7 @@ class MoneyMovementReconciliationIntegrationSpec extends Specification {
 
     SyncStateStore store
     MoneyMovementNormalizer normalizer = new MoneyMovementNormalizer()
+    long movementBatchId
     Map categories = [from: new CategorySnapshot('from', 'From', 0),
                       to: new CategorySnapshot('to', 'To', 0),
                       rerouted: new CategorySnapshot('rerouted', 'Rerouted', 0)]
@@ -22,6 +23,7 @@ class MoneyMovementReconciliationIntegrationSpec extends Specification {
     def setup() {
         store = new SyncStateStore(tempDir.resolve('movements.db').toString())
         store.initialize()
+        movementBatchId = store.createIngestionBatch('movement-snapshot', 'money_movement_snapshot', 2)
     }
 
     def "same movement ID edits retain persisted lineage and update both independent sides"() {
@@ -31,13 +33,13 @@ class MoneyMovementReconciliationIntegrationSpec extends Specification {
         def mirrors = initial.desiredMirrors.collect { persist(it) }
         long entityId = store.upsertSourceEntity(initial.source)
         store.appendSourceRevision(entityId, snapshot(movement(amount: 100)).observations.first().revisionHash,
-            snapshot(movement(amount: 100)).observations.first().normalizedJson, 1, null)
+            snapshot(movement(amount: 100)).observations.first().normalizedJson, 1, movementBatchId)
 
         when:
         def changedObservation = snapshot(movement(amount: 250, eventDate: '2026-07-02'))
         def changed = reconciler.reconcile(changedObservation, mirrors).first()
         store.appendSourceRevision(entityId, changedObservation.observations.first().revisionHash,
-            changedObservation.observations.first().normalizedJson, 2, null)
+            changedObservation.observations.first().normalizedJson, 2, movementBatchId)
 
         then:
         changed.source == initial.source

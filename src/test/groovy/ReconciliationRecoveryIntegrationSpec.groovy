@@ -58,9 +58,9 @@ class ReconciliationRecoveryIntegrationSpec extends Specification {
         def second = apply(secondStore, remote)
         boolean secondTransactionComplete = secondStore.completeIngestionBatchIfReady(transactionBatch)
         boolean secondMovementComplete = secondStore.completeIngestionBatchIfReady(movementBatch)
-        long secondRun = secondStore.startRun(false, 60, 'parent')
+        long secondRun = secondStore.startRun(60, 'parent')
         new SyncRunCoordinator(secondStore, false).finishRun(secondRun,
-            new SyncRunResult(second.applied, 0, second.failed, second.failures), 100, secondTransactionComplete)
+            new SyncRunResult(second.failures), 100, secondTransactionComplete)
 
         then:
         second.applied == 2
@@ -84,9 +84,9 @@ class ReconciliationRecoveryIntegrationSpec extends Specification {
         def third = apply(thirdStore, remote)
         boolean thirdTransactionComplete = thirdStore.completeIngestionBatchIfReady(transaction101)
         boolean thirdMovementComplete = thirdStore.completeIngestionBatchIfReady(movement101)
-        long thirdRun = thirdStore.startRun(false, 60, 'parent')
+        long thirdRun = thirdStore.startRun(60, 'parent')
         new SyncRunCoordinator(thirdStore, false).finishRun(thirdRun,
-            new SyncRunResult(third.applied, 0, third.failed, third.failures), 101, thirdTransactionComplete)
+            new SyncRunResult(third.failures), 101, thirdTransactionComplete)
 
         then:
         third.applied == 1
@@ -99,34 +99,6 @@ class ReconciliationRecoveryIntegrationSpec extends Specification {
         attempts(path, 'movement-new') == 1
     }
 
-    def "independent legacy cleanup remains retryable without blocking transaction cursor"() {
-        given:
-        String path = tempDir.resolve('cleanup.db').toString()
-        def store = new SyncStateStore(path)
-        store.initialize()
-        long cleanupSource = source(store, SourceEntityType.TRANSACTION, 'legacy-source', null)
-        long cleanupMirror = store.recordMirrorCreated(cleanupSource, 'child-budget', 'outflow', 'legacy-duplicate')
-        operation(store, 'legacy-cleanup', null, cleanupSource, cleanupMirror,
-            ReconciliationOperationType.DELETE, 'legacy-duplicate', null, 0)
-        long transactionBatch = store.createIngestionBatch('empty-transaction', 'transaction_delta', 77)
-        def remote = new RecoveringRepository()
-        remote.failOnce << 'legacy-duplicate'
-
-        when:
-        def application = apply(store, remote)
-        boolean transactionComplete = store.completeIngestionBatchIfReady(transactionBatch)
-        long runId = store.startRun(false, 60, 'parent')
-        new SyncRunCoordinator(store, false).finishRun(runId,
-            new SyncRunResult(application.applied, 0, application.failed, application.failures),
-            77, transactionComplete)
-
-        then:
-        application.failed == 1
-        transactionComplete
-        store.getCursor(SyncRunCoordinator.TRANSACTION_CURSOR_KEY) == 77
-        attempts(path, 'legacy-cleanup') == 1
-    }
-
     private static long source(SyncStateStore store, SourceEntityType type, String transactionId, String movementId) {
         store.upsertSourceEntity(new SourceEntityKey('parent', type, transactionId, null, movementId))
     }
@@ -137,7 +109,7 @@ class ReconciliationRecoveryIntegrationSpec extends Specification {
         store.recordMirrorCreated(sourceId, 'child-budget', direction, childId, 'account', 'old')
     }
 
-    private static long operation(SyncStateStore store, String key, Long batch, long sourceId, long mirrorId,
+    private static long operation(SyncStateStore store, String key, long batch, long sourceId, long mirrorId,
                                   ReconciliationOperationType type, String childId, Map payload, int sequence) {
         store.createOperation(new ReconciliationOperationIntent(key, batch, sourceId, mirrorId, sequence,
             type, 'child-budget', childId, payload == null ? null : JsonOutput.toJson(payload),

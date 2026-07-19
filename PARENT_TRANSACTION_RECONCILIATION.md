@@ -79,7 +79,7 @@ The following parent changes are destructive in the child budget:
 
 The syncer deletes the corresponding child transaction rather than adding a compensating reversal. This keeps the child budget aligned with the current qualifying parent ledger, but it means a reviewed child transaction can be removed later.
 
-Before the first live reconciliation, back up the configured SQLite database and review a `--dry-run --max-cycles 1` using the exact live configuration and state path. Migration can queue deletion of legacy duplicate child transactions, so this requirement also applies to an existing database that predates reconciliation.
+Before the first live reconciliation, review a `--dry-run --max-cycles 1` using the exact live configuration and state path. If that path contains a database from an earlier build, stop the syncer and delete the database first. Reconciliation supports only a fresh database or the current versioned schema; it never converts old state.
 
 ## Split transactions
 
@@ -171,23 +171,29 @@ Every reconciliation operation attempt remains in operation history for troubles
 
 Transaction deltas are grouped into durable ingestion batches. The transaction cursor advances only after all operations derived from that batch complete successfully or are recognized as already complete.
 
-An empty successful transaction delta can still advance server knowledge. Migration cleanup and money-movement operations are not part of a transaction delta batch and do not block the transaction cursor.
+An empty successful transaction delta can still advance server knowledge. Money-movement operations are not part of a transaction delta batch and do not block the transaction cursor.
 
 The configured transaction lookback is used for bootstrap. After a transaction cursor exists, delta requests omit the date filter so the syncer does not intentionally exclude older edits or deletion tombstones. Money movements are read as complete, unfiltered snapshots without an undocumented movement cursor; their ingestion and retries remain independent of the transaction cursor.
 
-## Existing SQLite state and duplicate cleanup
+## Fresh SQLite state and schema versions
 
-The syncer applies a transactional, versioned migration to existing sync databases.
+Reconciliation intentionally starts from a fresh SQLite database. Before using this build, stop every syncer process and delete any database created by an earlier build. There is no conversion, row copying, financial-event reconstruction, or automatic remote cleanup from old state. Deleting the database does not remove child transactions created by an earlier syncer; for a previously deployed installation, the first dry run can therefore propose duplicate financial effects. Remove or otherwise account for those transactions before enabling live mode.
 
-Migration:
+On the first live initialization, the syncer creates baseline schema version 1. The baseline has exactly nine tables:
 
-1. preserve current audit tables and rows;
-2. create stable source and active mirror records from successful live rows with child transaction IDs;
-3. ignore failed, dry-run, and missing-child-ID rows as active mirrors while preserving their history;
-4. keep the newest successful mirror when older mutable identities produced duplicates;
-5. queue deletion of older duplicate child transactions through normal operation handling.
+1. `schema_versions`;
+2. `sync_runs`;
+3. `sync_cursors`;
+4. `source_entities`;
+5. `ingestion_batches`;
+6. `source_revisions`;
+7. `child_mirrors`;
+8. `sync_operations`;
+9. `operation_attempts`.
 
-Schema migration itself never calls YNAB. It queues older duplicate IDs as pending delete operations; normal live operation handling later sends those destructive deletes. A dry run projects migration and cleanup in memory without changing the SQLite file. Back up the SQLite state and review that projection before a live migrated run.
+Initialization rejects a nonempty unversioned database, a version history with gaps, a schema newer than the binary supports, and any other unsupported table, index, or trigger shape. Unsupported state is rejected without mutation: schema rows, data, and file bytes remain unchanged. Delete the rejected database only after confirming that discarding its local replay and audit history is intentional.
+
+Future schema changes are numbered consecutively after version 1. Initialization validates that `schema_versions` is contiguous, applies all pending versions in order, and records their version rows in one SQLite transaction. Any failure rolls the whole initialization attempt back. Starting repeatedly at the current supported version leaves the schema and version rows unchanged. A newer schema is never downgraded.
 
 ## Dry-run guarantees
 
@@ -199,8 +205,7 @@ Dry-run reports planned:
 - cross-budget replacements;
 - missing-child recreation;
 - split transitions;
-- same-ID money-movement changes;
-- legacy duplicate cleanup.
+- same-ID money-movement changes.
 
 Dry-run performs no child mutation and no SQLite schema, row, operation, mirror, revision, or cursor write.
 
@@ -213,22 +218,23 @@ The SQLite database retains the information needed to investigate a partial run 
 | `sync_runs` | Run start/completion, status, and error summary |
 | `source_entities` | Stable parent transaction, subtransaction, or movement identity and current lifecycle |
 | `source_revisions` | Append-only normalized parent observations, revision hashes, and server knowledge |
-| `child_mirrors` | Every recorded child transaction ID, target budget/account, status, and lineage timestamps, including replaced, missing, superseded, and deleted mirrors |
+| `child_mirrors` | Every recorded child transaction ID, target budget/account, status, and lineage timestamps, including replaced, missing, and deleted mirrors |
 | `ingestion_batches` | Transaction-delta or movement-snapshot server knowledge and completion status |
 | `sync_operations` | Immutable ordered create/update/delete intent, target budget, child ID, payload, dependency, and current status |
 | `operation_attempts` | Append-only attempt time, outcome, failure reason, and returned child transaction ID |
 
-The older `source_events`, `sync_mappings`, and `applied_transactions` tables are preserved as legacy audit history. Inspect operation intent together with its attempts and mirror lineage before making a manual YNAB correction; do not assume a local failure means the remote mutation failed.
+Inspect operation intent together with its attempts and mirror lineage before making a manual YNAB correction; do not assume a local failure means the remote mutation failed.
 
 ## Safe rollout checklist
 
 Before enabling live reconciliation:
 
-1. Stop the syncer and back up the configured SQLite state database, including any SQLite sidecar files or by using SQLite's backup facility.
-2. Read this guide and confirm the deletion and unapproval semantics match your expectations.
-3. Run `--dry-run --max-cycles 1` using the exact production config and state path.
-4. Review every planned update, deletion, reroute, recreation, and legacy cleanup.
-5. Run one live cycle and inspect child budgets and operation history.
-6. Enable continuous polling only after that verification succeeds.
+1. Stop every syncer process using the configured SQLite path.
+2. If the path contains a database from an earlier build, delete it; this build requires fresh state and will reject it without mutation.
+3. Read this guide and confirm the deletion and unapproval semantics match your expectations.
+4. Run `--dry-run --max-cycles 1` using the exact production config and state path; a missing database must remain missing.
+5. Review every planned update, deletion, reroute, and recreation.
+6. Run one live cycle, confirm schema version 1 and the nine tables, and inspect child budgets and operation history.
+7. Enable continuous polling only after that verification succeeds.
 
-Before any live child mutation, rollback is the prior binary plus the SQLite backup. After a remote create, update, or delete succeeds, restoring an older binary or database cannot undo or reconstruct that remote child state automatically. Use `sync_operations`, `operation_attempts`, `child_mirrors`, and `source_revisions` to identify the financial effect and make any required manual YNAB correction.
+After supported state exists, a backup can preserve local audit and replay data, but it is not a remote rollback mechanism. After a remote create, update, or delete succeeds, restoring a binary or database cannot undo or reconstruct that remote child state automatically. Use `sync_operations`, `operation_attempts`, `child_mirrors`, and `source_revisions` to identify the financial effect and make any required manual YNAB correction.

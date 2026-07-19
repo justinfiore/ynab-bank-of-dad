@@ -1,8 +1,5 @@
 package ynabbankofdad.sync.state
 
-import groovy.json.JsonOutput
-import ynabbankofdad.sync.model.ChildTransactionPlan
-
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
@@ -15,12 +12,8 @@ import java.time.ZoneOffset
 
 interface SyncStateRepository {
     void initialize()
-    long startRun(boolean dryRun, int pollingIntervalSeconds, String sourceBudgetId)
+    long startRun(int pollingIntervalSeconds, String sourceBudgetId)
     void finishRun(long runId, String status, String errorSummary)
-    long recordSourceEvent(ChildTransactionPlan plan)
-    long recordMapping(long sourceEventId, ChildTransactionPlan plan, String targetBudgetId, String accountId)
-    void recordAppliedTransaction(long mappingId, long runId, String targetBudgetId, String createdChildTransactionId, String status, String failureReason, boolean dryRun)
-    boolean hasAppliedIdempotencyKey(String idempotencyKey)
     Integer getCursor(String key)
     void setCursor(String key, Integer value)
 }
@@ -42,7 +35,7 @@ interface ReconciliationSyncStateRepository extends ReconciliationOperationState
     boolean reconciliationSchemaAvailable()
     long upsertSourceEntity(SourceEntityKey key)
     long appendSourceRevision(long sourceEntityId, String revisionHash, String normalizedJson,
-                              Integer serverKnowledge, Long ingestionBatchId)
+                              Integer serverKnowledge, long ingestionBatchId)
     long createIngestionBatch(String batchKey, String sourceKind, Integer serverKnowledge)
     boolean completeIngestionBatchIfReady(long batchId)
     List<ChildMirrorState> findMirrorsForParent(String sourceBudgetId, String parentTransactionId,
@@ -51,8 +44,6 @@ interface ReconciliationSyncStateRepository extends ReconciliationOperationState
     List<SourceEntityKey> findSourceEntities(String sourceBudgetId, SourceEntityType type)
     void setSourceLifecycle(long sourceEntityId, String lifecycleStatus)
     long createOperation(ReconciliationOperationIntent intent)
-    List<ReconciliationOperation> findPendingMigrationCleanupOperations()
-    MigrationProjection projectLegacyMigration()
 }
 
 class DryRunSyncStateRepository implements SyncStateRepository, ReconciliationSyncStateRepository {
@@ -65,16 +56,10 @@ class DryRunSyncStateRepository implements SyncStateRepository, ReconciliationSy
     }
 
     void initialize() {}
-    long startRun(boolean dryRun, int pollingIntervalSeconds, String sourceBudgetId) { -1L }
+    long startRun(int pollingIntervalSeconds, String sourceBudgetId) { -1L }
     void finishRun(long runId, String status, String errorSummary) {}
-    long recordSourceEvent(ChildTransactionPlan plan) { -1L }
-    long recordMapping(long sourceEventId, ChildTransactionPlan plan, String targetBudgetId, String accountId) { -1L }
-    void recordAppliedTransaction(long mappingId, long runId, String targetBudgetId, String createdChildTransactionId, String status, String failureReason, boolean dryRun) {}
-    boolean hasAppliedIdempotencyKey(String idempotencyKey) {
-        Files.exists(databasePath) && existingState.hasAppliedIdempotencyKey(idempotencyKey)
-    }
     Integer getCursor(String key) {
-        Files.exists(databasePath) ? existingState.getCursor(key) : null
+        reconciliationSchemaAvailable() ? existingState.getCursor(key) : null
     }
     void setCursor(String key, Integer value) {}
     boolean reconciliationSchemaAvailable() {
@@ -91,21 +76,21 @@ class DryRunSyncStateRepository implements SyncStateRepository, ReconciliationSy
     List<SourceEntityKey> findSourceEntities(String sourceBudgetId, SourceEntityType type) {
         reconciliationSchemaAvailable() ? existingState.findSourceEntities(sourceBudgetId, type) : []
     }
-    List<ReconciliationOperation> findPendingMigrationCleanupOperations() {
-        reconciliationSchemaAvailable() ? existingState.findPendingMigrationCleanupOperations() : []
-    }
-    MigrationProjection projectLegacyMigration() { existingState.projectLegacyMigration() }
-
     long upsertSourceEntity(SourceEntityKey key) { throw dryRunWrite() }
     long appendSourceRevision(long sourceEntityId, String revisionHash, String normalizedJson,
-                              Integer serverKnowledge, Long ingestionBatchId) { throw dryRunWrite() }
+                              Integer serverKnowledge, long ingestionBatchId) { throw dryRunWrite() }
     long createIngestionBatch(String batchKey, String sourceKind, Integer serverKnowledge) { throw dryRunWrite() }
     boolean completeIngestionBatchIfReady(long batchId) { throw dryRunWrite() }
     void setSourceLifecycle(long sourceEntityId, String lifecycleStatus) { throw dryRunWrite() }
     long createOperation(ReconciliationOperationIntent intent) { throw dryRunWrite() }
     List<ReconciliationOperation> findReadyOperations(int limit) { [] }
     ReconciliationOperationAttempt findSuccessfulOperationAttempt(long operationId) { null }
-    SourceEntityKey findSourceEntityKey(long sourceEntityId) { existingState.findSourceEntityKey(sourceEntityId) }
+    SourceEntityKey findSourceEntityKey(long sourceEntityId) {
+        if (!reconciliationSchemaAvailable()) {
+            throw new IllegalStateException("Source entity ${sourceEntityId} does not exist")
+        }
+        existingState.findSourceEntityKey(sourceEntityId)
+    }
     void recordOperationAttempt(long operationId, String outcome, String failureReason, String childId) { throw dryRunWrite() }
     void markOperationRetryable(long operationId) { throw dryRunWrite() }
     void completeCreateOperation(long operationId, long sourceEntityId, Long oldMirrorId,
@@ -120,7 +105,7 @@ class DryRunSyncStateRepository implements SyncStateRepository, ReconciliationSy
 }
 
 class SyncStateStore implements SyncStateRepository, ReconciliationSyncStateRepository {
-    static final int CURRENT_SCHEMA_VERSION = 2
+    static final int CURRENT_SCHEMA_VERSION = 1
     final String databasePath
     private final Closure migrationStepHook
 
@@ -141,19 +126,11 @@ class SyncStateStore implements SyncStateRepository, ReconciliationSyncStateRepo
         withConnection { Connection connection ->
             connection.autoCommit = false
             try {
-                int version = schemaVersion(connection)
-                if (version > CURRENT_SCHEMA_VERSION) {
-                    throw new IllegalStateException("State schema version ${version} is newer than supported version ${CURRENT_SCHEMA_VERSION}")
-                }
-                if (version < 1) {
-                    migrateLegacySchema(connection)
-                    migrationStepHook?.call(1, connection)
-                    recordSchemaVersion(connection, 1)
-                }
-                if (version < 2) {
-                    migrateReconciliationSchema(connection)
-                    migrationStepHook?.call(2, connection)
-                    recordSchemaVersion(connection, 2)
+                int version = validateSchemaVersion(connection)
+                for (int nextVersion = version + 1; nextVersion <= CURRENT_SCHEMA_VERSION; nextVersion++) {
+                    migration(nextVersion).call(connection)
+                    migrationStepHook?.call(nextVersion, connection)
+                    recordSchemaVersion(connection, nextVersion)
                 }
                 connection.commit()
             } catch (Throwable failure) {
@@ -169,97 +146,43 @@ class SyncStateStore implements SyncStateRepository, ReconciliationSyncStateRepo
         if (!Files.exists(Paths.get(databasePath))) {
             return false
         }
-        withConnection { Connection connection -> tableExists(connection, 'sync_operations') }
+        withReadOnlyConnection { Connection connection ->
+            validateSchemaVersion(connection) == CURRENT_SCHEMA_VERSION
+        }
     }
 
-    private static void migrateLegacySchema(Connection connection) {
+    private static Closure migration(int version) {
+        switch (version) {
+            case 1: return SyncStateStore.&createBaselineSchema
+            default: throw new IllegalStateException("No state migration is defined for version ${version}")
+        }
+    }
+
+    private static void createBaselineSchema(Connection connection) {
         connection.createStatement().execute('''
-            CREATE TABLE IF NOT EXISTS schema_versions (
+            CREATE TABLE schema_versions (
                 version INTEGER PRIMARY KEY,
                 applied_at TEXT NOT NULL
             )
         ''')
         connection.createStatement().execute('''
-                CREATE TABLE IF NOT EXISTS sync_runs (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    started_at TEXT NOT NULL,
-                    completed_at TEXT NULL,
-                    dry_run INTEGER NOT NULL,
-                    status TEXT NOT NULL CHECK(status IN ('running', 'succeeded', 'partial', 'failed')),
-                    error_summary TEXT NULL,
-                    polling_interval_seconds INTEGER NULL,
-                    source_budget_id TEXT NOT NULL
-                )
+            CREATE TABLE sync_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                started_at TEXT NOT NULL,
+                completed_at TEXT NULL,
+                status TEXT NOT NULL CHECK(status IN ('running', 'succeeded', 'partial', 'failed')),
+                error_summary TEXT NULL,
+                polling_interval_seconds INTEGER NULL,
+                source_budget_id TEXT NOT NULL
+            )
         ''')
         connection.createStatement().execute('''
-                CREATE TABLE IF NOT EXISTS source_events (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    source_budget_id TEXT NOT NULL,
-                    event_type TEXT NOT NULL CHECK(event_type IN ('transaction', 'subtransaction', 'money_movement')),
-                    parent_transaction_id TEXT NULL,
-                    parent_subtransaction_id TEXT NULL,
-                    money_movement_id TEXT NULL,
-                    money_movement_group_id TEXT NULL,
-                    event_date TEXT NULL,
-                    ynab_server_knowledge INTEGER NULL,
-                    fingerprint TEXT NOT NULL UNIQUE,
-                    raw_summary_json TEXT NULL,
-                    created_at TEXT NOT NULL,
-                    CHECK(
-                        (event_type = 'transaction' AND parent_transaction_id IS NOT NULL AND parent_subtransaction_id IS NULL AND money_movement_id IS NULL)
-                        OR (event_type = 'subtransaction' AND parent_transaction_id IS NOT NULL AND parent_subtransaction_id IS NOT NULL AND money_movement_id IS NULL)
-                        OR (event_type = 'money_movement' AND parent_transaction_id IS NULL AND parent_subtransaction_id IS NULL AND money_movement_id IS NOT NULL)
-                    )
-                )
+            CREATE TABLE sync_cursors (
+                key TEXT PRIMARY KEY,
+                value_integer INTEGER NOT NULL,
+                updated_at TEXT NOT NULL
+            )
         ''')
-        connection.createStatement().execute('''
-                CREATE TABLE IF NOT EXISTS sync_mappings (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    source_event_id INTEGER NOT NULL,
-                    target_budget_id TEXT NOT NULL,
-                    target_child_key TEXT NOT NULL,
-                    target_mapping_key TEXT NULL,
-                    target_account_name TEXT NULL,
-                    target_account_id TEXT NULL,
-                    direction TEXT NOT NULL CHECK(direction IN ('inflow', 'outflow')),
-                    planned_amount INTEGER NOT NULL,
-                    planned_date TEXT NOT NULL,
-                    planned_payee_name TEXT NULL,
-                    planned_memo TEXT NULL,
-                    planned_category_id TEXT NULL,
-                    idempotency_key TEXT NOT NULL UNIQUE,
-                    last_planned_at TEXT NOT NULL,
-                    FOREIGN KEY(source_event_id) REFERENCES source_events(id) ON DELETE CASCADE
-                )
-        ''')
-        connection.createStatement().execute('''
-                CREATE TABLE IF NOT EXISTS applied_transactions (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    sync_mapping_id INTEGER NOT NULL,
-                    sync_run_id INTEGER NOT NULL,
-                    target_budget_id TEXT NOT NULL,
-                    created_child_transaction_id TEXT NULL,
-                    applied_at TEXT NULL,
-                    status TEXT NOT NULL CHECK(status IN ('applied', 'failed')),
-                    failure_reason TEXT NULL,
-                    dry_run INTEGER NOT NULL,
-                    FOREIGN KEY(sync_mapping_id) REFERENCES sync_mappings(id) ON DELETE CASCADE,
-                    FOREIGN KEY(sync_run_id) REFERENCES sync_runs(id) ON DELETE CASCADE
-                )
-        ''')
-        connection.createStatement().execute('''
-                CREATE TABLE IF NOT EXISTS sync_cursors (
-                    key TEXT PRIMARY KEY,
-                    value_text TEXT NULL,
-                    value_integer INTEGER NULL,
-                    updated_at TEXT NOT NULL
-                )
-        ''')
-        ensureColumn(connection, 'sync_mappings', 'target_mapping_key', 'TEXT NULL')
-        ensureColumn(connection, 'sync_mappings', 'target_account_name', 'TEXT NULL')
-    }
-
-    private static void migrateReconciliationSchema(Connection connection) {
         connection.createStatement().execute('''
             CREATE TABLE source_entities (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -280,28 +203,28 @@ class SyncStateStore implements SyncStateRepository, ReconciliationSyncStateRepo
             )
         ''')
         connection.createStatement().execute('''
+            CREATE TABLE ingestion_batches (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                batch_key TEXT NOT NULL UNIQUE,
+                source_kind TEXT NOT NULL CHECK(source_kind IN ('transaction_delta', 'money_movement_snapshot')),
+                ynab_server_knowledge INTEGER NULL,
+                status TEXT NOT NULL CHECK(status IN ('pending', 'completed')),
+                created_at TEXT NOT NULL,
+                completed_at TEXT NULL
+            )
+        ''')
+        connection.createStatement().execute('''
             CREATE TABLE source_revisions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 source_entity_id INTEGER NOT NULL,
                 revision_hash TEXT NOT NULL,
                 normalized_json TEXT NOT NULL,
                 ynab_server_knowledge INTEGER NULL,
-                ingestion_batch_id INTEGER NULL,
+                ingestion_batch_id INTEGER NOT NULL,
                 observed_at TEXT NOT NULL,
                 UNIQUE(source_entity_id, revision_hash),
                 FOREIGN KEY(source_entity_id) REFERENCES source_entities(id),
                 FOREIGN KEY(ingestion_batch_id) REFERENCES ingestion_batches(id)
-            )
-        ''')
-        connection.createStatement().execute('''
-            CREATE TABLE ingestion_batches (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                batch_key TEXT NOT NULL UNIQUE,
-                source_kind TEXT NOT NULL CHECK(source_kind IN ('transaction_delta', 'money_movement_snapshot', 'migration')),
-                ynab_server_knowledge INTEGER NULL,
-                status TEXT NOT NULL CHECK(status IN ('pending', 'completed')),
-                created_at TEXT NOT NULL,
-                completed_at TEXT NULL
             )
         ''')
         connection.createStatement().execute('''
@@ -313,7 +236,7 @@ class SyncStateStore implements SyncStateRepository, ReconciliationSyncStateRepo
                 child_transaction_id TEXT NOT NULL,
                 target_account_id TEXT NULL,
                 authoritative_payload_hash TEXT NULL,
-                status TEXT NOT NULL CHECK(status IN ('active', 'deleted', 'replaced', 'missing', 'superseded')),
+                status TEXT NOT NULL CHECK(status IN ('active', 'deleted', 'replaced', 'missing')),
                 created_at TEXT NOT NULL,
                 ended_at TEXT NULL,
                 FOREIGN KEY(source_entity_id) REFERENCES source_entities(id)
@@ -328,7 +251,7 @@ class SyncStateStore implements SyncStateRepository, ReconciliationSyncStateRepo
             CREATE TABLE sync_operations (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 operation_key TEXT NOT NULL UNIQUE,
-                ingestion_batch_id INTEGER NULL,
+                ingestion_batch_id INTEGER NOT NULL,
                 source_entity_id INTEGER NOT NULL,
                 child_mirror_id INTEGER NULL,
                 operation_sequence INTEGER NOT NULL CHECK(operation_sequence >= 0),
@@ -350,7 +273,7 @@ class SyncStateStore implements SyncStateRepository, ReconciliationSyncStateRepo
         ''')
         connection.createStatement().execute('''
             CREATE INDEX ready_sync_operations
-            ON sync_operations(status, operation_sequence, id)
+            ON sync_operations(status, ingestion_batch_id, operation_sequence, id)
         ''')
         connection.createStatement().execute('''
             CREATE TABLE operation_attempts (
@@ -424,7 +347,6 @@ class SyncStateStore implements SyncStateRepository, ReconciliationSyncStateRepo
                 SELECT RAISE(ABORT, 'child mirror identity is immutable');
             END
         ''')
-        backfillLegacyState(connection)
     }
 
     long upsertSourceEntity(SourceEntityKey key) {
@@ -451,7 +373,7 @@ class SyncStateStore implements SyncStateRepository, ReconciliationSyncStateRepo
     }
 
     long appendSourceRevision(long sourceEntityId, String revisionHash, String normalizedJson,
-                              Integer serverKnowledge = null, Long ingestionBatchId = null) {
+                              Integer serverKnowledge, long ingestionBatchId) {
         withConnection { Connection connection ->
             def statement = connection.prepareStatement('''
                 INSERT INTO source_revisions(source_entity_id, revision_hash, normalized_json,
@@ -630,25 +552,10 @@ class SyncStateStore implements SyncStateRepository, ReconciliationSyncStateRepo
                 LEFT JOIN sync_operations dependency ON dependency.id = operation.depends_on_operation_id
                 WHERE operation.status IN ('pending', 'retryable_failed')
                   AND (operation.depends_on_operation_id IS NULL OR dependency.status = 'applied')
-                ORDER BY CASE WHEN operation.ingestion_batch_id IS NULL THEN 1 ELSE 0 END,
-                         operation.ingestion_batch_id, operation.operation_sequence, operation.id
+                ORDER BY operation.ingestion_batch_id, operation.operation_sequence, operation.id
                 LIMIT ?
             ''')
             statement.setInt(1, limit)
-            operations(statement.executeQuery())
-        }
-    }
-
-    List<ReconciliationOperation> findPendingMigrationCleanupOperations() {
-        withConnection { Connection connection ->
-            def statement = connection.prepareStatement('''
-                SELECT operation.*
-                FROM sync_operations operation
-                WHERE operation.ingestion_batch_id IS NULL
-                  AND operation.operation_type = 'delete'
-                  AND operation.status IN ('pending', 'retryable_failed')
-                ORDER BY operation.operation_sequence, operation.id
-            ''')
             operations(statement.executeQuery())
         }
     }
@@ -822,29 +729,16 @@ class SyncStateStore implements SyncStateRepository, ReconciliationSyncStateRepo
             targetAccountId, payloadHash, 'missing')
     }
 
-    MigrationProjection projectLegacyMigration() {
-        if (!Files.exists(Paths.get(databasePath))) {
-            return new MigrationProjection([], [])
-        }
-        withConnection { Connection connection ->
-            if (!tableExists(connection, 'applied_transactions')) {
-                return new MigrationProjection([], [])
-            }
-            legacyProjection(connection)
-        }
-    }
-
-    long startRun(boolean dryRun, int pollingIntervalSeconds, String sourceBudgetId) {
+    long startRun(int pollingIntervalSeconds, String sourceBudgetId) {
         withConnection { Connection connection ->
             def statement = connection.prepareStatement('''
-                INSERT INTO sync_runs(started_at, dry_run, status, polling_interval_seconds, source_budget_id)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO sync_runs(started_at, status, polling_interval_seconds, source_budget_id)
+                VALUES (?, ?, ?, ?)
             ''', java.sql.Statement.RETURN_GENERATED_KEYS)
             statement.setString(1, now())
-            statement.setInt(2, dryRun ? 1 : 0)
-            statement.setString(3, 'running')
-            statement.setInt(4, pollingIntervalSeconds)
-            statement.setString(5, sourceBudgetId)
+            statement.setString(2, 'running')
+            statement.setInt(3, pollingIntervalSeconds)
+            statement.setString(4, sourceBudgetId)
             statement.executeUpdate()
             def keys = statement.generatedKeys
             keys.next()
@@ -864,99 +758,6 @@ class SyncStateStore implements SyncStateRepository, ReconciliationSyncStateRepo
             statement.setString(3, errorSummary)
             statement.setLong(4, runId)
             statement.executeUpdate()
-        }
-    }
-
-    long recordSourceEvent(ChildTransactionPlan plan) {
-        String fingerprint = plan.idempotencyKey
-        Long existingId = findSourceEventIdByFingerprint(fingerprint)
-        if (existingId != null) {
-            return existingId
-        }
-        withConnection { Connection connection ->
-            def statement = connection.prepareStatement('''
-                INSERT INTO source_events(source_budget_id, event_type, parent_transaction_id, parent_subtransaction_id, money_movement_id, money_movement_group_id, event_date, ynab_server_knowledge, fingerprint, raw_summary_json, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', java.sql.Statement.RETURN_GENERATED_KEYS)
-            statement.setString(1, plan.sourceBudgetId)
-            statement.setString(2, plan.eventType)
-            statement.setString(3, plan.parentTransactionId)
-            statement.setString(4, plan.parentSubtransactionId)
-            statement.setString(5, plan.moneyMovementId)
-            statement.setString(6, plan.moneyMovementGroupId)
-            statement.setString(7, plan.date)
-            statement.setObject(8, null)
-            statement.setString(9, fingerprint)
-            statement.setString(10, JsonOutput.toJson(plan.toSummaryMap()))
-            statement.setString(11, now())
-            statement.executeUpdate()
-            def keys = statement.generatedKeys
-            keys.next()
-            keys.getLong(1)
-        }
-    }
-
-    long recordMapping(long sourceEventId, ChildTransactionPlan plan, String targetBudgetId, String accountId) {
-        Long existingId = findMappingIdByIdempotencyKey(plan.idempotencyKey)
-        if (existingId != null) {
-            return existingId
-        }
-        withConnection { Connection connection ->
-            def statement = connection.prepareStatement('''
-                INSERT INTO sync_mappings(source_event_id, target_budget_id, target_child_key, target_mapping_key, target_account_name, target_account_id, direction, planned_amount, planned_date, planned_payee_name, planned_memo, planned_category_id, idempotency_key, last_planned_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', java.sql.Statement.RETURN_GENERATED_KEYS)
-            statement.setLong(1, sourceEventId)
-            statement.setString(2, targetBudgetId)
-            statement.setString(3, plan.targetChildKey)
-            statement.setString(4, plan.mappingKey)
-            statement.setString(5, plan.childAccountName)
-            statement.setString(6, accountId)
-            statement.setString(7, plan.amount >= 0 ? 'inflow' : 'outflow')
-            statement.setInt(8, plan.amount)
-            statement.setString(9, plan.date)
-            statement.setString(10, plan.payeeName)
-            statement.setString(11, plan.memo)
-            statement.setObject(12, null)
-            statement.setString(13, plan.idempotencyKey)
-            statement.setString(14, now())
-            statement.executeUpdate()
-            def keys = statement.generatedKeys
-            keys.next()
-            keys.getLong(1)
-        }
-    }
-
-    void recordAppliedTransaction(long mappingId, long runId, String targetBudgetId, String createdChildTransactionId, String status, String failureReason, boolean dryRun) {
-        withConnection { Connection connection ->
-            def statement = connection.prepareStatement('''
-                INSERT INTO applied_transactions(sync_mapping_id, sync_run_id, target_budget_id, created_child_transaction_id, applied_at, status, failure_reason, dry_run)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''')
-            statement.setLong(1, mappingId)
-            statement.setLong(2, runId)
-            statement.setString(3, targetBudgetId)
-            statement.setString(4, createdChildTransactionId)
-            statement.setString(5, now())
-            statement.setString(6, status)
-            statement.setString(7, failureReason)
-            statement.setInt(8, dryRun ? 1 : 0)
-            statement.executeUpdate()
-        }
-    }
-
-    boolean hasAppliedIdempotencyKey(String idempotencyKey) {
-        withConnection { Connection connection ->
-            def statement = connection.prepareStatement('''
-                SELECT 1
-                FROM sync_mappings mapping
-                JOIN applied_transactions applied ON applied.sync_mapping_id = mapping.id
-                WHERE mapping.idempotency_key = ?
-                  AND applied.status = 'applied'
-                LIMIT 1
-            ''')
-            statement.setString(1, idempotencyKey)
-            statement.executeQuery().next()
         }
     }
 
@@ -983,24 +784,6 @@ class SyncStateStore implements SyncStateRepository, ReconciliationSyncStateRepo
             statement.setInt(2, value)
             statement.setString(3, now())
             statement.executeUpdate()
-        }
-    }
-
-    private Long findSourceEventIdByFingerprint(String fingerprint) {
-        withConnection { Connection connection ->
-            def statement = connection.prepareStatement('SELECT id FROM source_events WHERE fingerprint = ?')
-            statement.setString(1, fingerprint)
-            def rs = statement.executeQuery()
-            rs.next() ? rs.getLong(1) : null
-        }
-    }
-
-    private Long findMappingIdByIdempotencyKey(String idempotencyKey) {
-        withConnection { Connection connection ->
-            def statement = connection.prepareStatement('SELECT id FROM sync_mappings WHERE idempotency_key = ?')
-            statement.setString(1, idempotencyKey)
-            def rs = statement.executeQuery()
-            rs.next() ? rs.getLong(1) : null
         }
     }
 
@@ -1107,13 +890,119 @@ class SyncStateStore implements SyncStateRepository, ReconciliationSyncStateRepo
         }
     }
 
-    private static int schemaVersion(Connection connection) {
+    private static int validateSchemaVersion(Connection connection) {
         if (!tableExists(connection, 'schema_versions')) {
+            if (hasUserTables(connection)) {
+                throw unversionedDatabase()
+            }
             return 0
         }
-        def result = connection.createStatement().executeQuery('SELECT COALESCE(MAX(version), 0) FROM schema_versions')
-        result.next()
-        result.getInt(1)
+
+        def result = connection.createStatement().executeQuery('SELECT version FROM schema_versions ORDER BY version')
+        List<Integer> versions = []
+        while (result.next()) {
+            versions << result.getInt(1)
+        }
+        if (versions.empty) {
+            throw unversionedDatabase()
+        }
+        versions.eachWithIndex { int version, int index ->
+            int expected = index + 1
+            if (version != expected) {
+                throw new IllegalStateException(
+                    "State schema versions must be contiguous from 1; expected ${expected} but found ${version}")
+            }
+        }
+        int version = versions.last()
+        if (version > CURRENT_SCHEMA_VERSION) {
+            throw new IllegalStateException(
+                "State schema version ${version} is newer than supported version ${CURRENT_SCHEMA_VERSION}")
+        }
+        if (version == CURRENT_SCHEMA_VERSION) {
+            validateCurrentSchema(connection)
+        }
+        version
+    }
+
+    private static void validateCurrentSchema(Connection connection) {
+        Map<String, List<String>> expectedColumns = [
+            schema_versions   : ['version', 'applied_at'],
+            sync_runs         : ['id', 'started_at', 'completed_at', 'status', 'error_summary',
+                                 'polling_interval_seconds', 'source_budget_id'],
+            sync_cursors      : ['key', 'value_integer', 'updated_at'],
+            source_entities   : ['id', 'identity_key', 'source_budget_id', 'entity_type',
+                                 'parent_transaction_id', 'parent_subtransaction_id', 'money_movement_id',
+                                 'lifecycle_status', 'created_at', 'updated_at'],
+            ingestion_batches: ['id', 'batch_key', 'source_kind', 'ynab_server_knowledge', 'status',
+                                 'created_at', 'completed_at'],
+            source_revisions  : ['id', 'source_entity_id', 'revision_hash', 'normalized_json',
+                                 'ynab_server_knowledge', 'ingestion_batch_id', 'observed_at'],
+            child_mirrors     : ['id', 'source_entity_id', 'target_budget_id', 'direction',
+                                 'child_transaction_id', 'target_account_id', 'authoritative_payload_hash',
+                                 'status', 'created_at', 'ended_at'],
+            sync_operations   : ['id', 'operation_key', 'ingestion_batch_id', 'source_entity_id',
+                                 'child_mirror_id', 'operation_sequence', 'operation_type', 'target_budget_id',
+                                 'child_transaction_id', 'payload_json', 'payload_hash',
+                                 'depends_on_operation_id', 'status', 'created_at', 'completed_at'],
+            operation_attempts: ['id', 'sync_operation_id', 'attempted_at', 'outcome', 'failure_reason',
+                                 'returned_child_transaction_id']
+        ]
+        def result = connection.createStatement().executeQuery('''
+            SELECT name FROM sqlite_master
+            WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+        ''')
+        Set<String> actual = [] as Set
+        while (result.next()) {
+            actual << result.getString(1)
+        }
+        if (actual != expectedColumns.keySet()) {
+            throw new IllegalStateException(
+                'Existing sync state database is not the supported fresh schema; delete it and run again')
+        }
+        expectedColumns.each { String table, List<String> expected ->
+            def columns = connection.createStatement().executeQuery("PRAGMA table_info(${table})")
+            List<String> actualColumns = []
+            while (columns.next()) {
+                actualColumns << columns.getString('name')
+            }
+            if (actualColumns != expected) {
+                throw new IllegalStateException(
+                    'Existing sync state database is not the supported fresh schema; delete it and run again')
+            }
+        }
+        validateSchemaObjects(connection, 'index', ['one_active_child_mirror', 'ready_sync_operations'] as Set)
+        validateSchemaObjects(connection, 'trigger', [
+            'source_revisions_are_append_only', 'source_revisions_cannot_be_deleted',
+            'operation_attempts_are_append_only', 'operation_attempts_cannot_be_deleted',
+            'operation_intent_is_immutable', 'child_mirror_lineage_cannot_be_deleted',
+            'child_mirror_identity_is_immutable'
+        ] as Set)
+    }
+
+    private static void validateSchemaObjects(Connection connection, String type, Set<String> expected) {
+        def result = connection.createStatement().executeQuery(
+            "SELECT name FROM sqlite_master WHERE type = '${type}' AND sql IS NOT NULL")
+        Set<String> actual = [] as Set
+        while (result.next()) {
+            actual << result.getString(1)
+        }
+        if (actual != expected) {
+            throw new IllegalStateException(
+                'Existing sync state database is not the supported fresh schema; delete it and run again')
+        }
+    }
+
+    private static boolean hasUserTables(Connection connection) {
+        connection.createStatement().executeQuery('''
+            SELECT 1 FROM sqlite_master
+            WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+            LIMIT 1
+        ''').next()
+    }
+
+    private static IllegalStateException unversionedDatabase() {
+        new IllegalStateException(
+            'Existing sync state database is unversioned and unsupported; delete it and run again')
     }
 
     private static void recordSchemaVersion(Connection connection, int version) {
@@ -1179,7 +1068,7 @@ class SyncStateStore implements SyncStateRepository, ReconciliationSyncStateRepo
             throw new IllegalStateException("Operation ${operationId} does not exist")
         }
         new ReconciliationOperationIntent(
-            result.getString('operation_key'), nullableLong(result, 'ingestion_batch_id'),
+            result.getString('operation_key'), result.getLong('ingestion_batch_id'),
             result.getLong('source_entity_id'), nullableLong(result, 'child_mirror_id'),
             result.getInt('operation_sequence'),
             ReconciliationOperationType.valueOf(result.getString('operation_type').toUpperCase()),
@@ -1203,7 +1092,7 @@ class SyncStateStore implements SyncStateRepository, ReconciliationSyncStateRepo
     private static List<ReconciliationOperation> operations(ResultSet result) {
         List<ReconciliationOperation> found = []
         while (result.next()) {
-            Long batchId = nullableLong(result, 'ingestion_batch_id')
+            long batchId = result.getLong('ingestion_batch_id')
             Long mirrorId = nullableLong(result, 'child_mirror_id')
             Long dependencyId = nullableLong(result, 'depends_on_operation_id')
             def intent = new ReconciliationOperationIntent(
@@ -1223,179 +1112,19 @@ class SyncStateStore implements SyncStateRepository, ReconciliationSyncStateRepo
         result.wasNull() ? null : value
     }
 
-    private static void backfillLegacyState(Connection connection) {
-        Map<String, List<Map<String, Object>>> groups = eligibleLegacyRows(connection).groupBy { legacyGroupKey(it) }
-        groups.keySet().sort().each { String groupKey ->
-            List<Map<String, Object>> rows = groups[groupKey]
-            SourceEntityKey source = legacySourceKey(rows[0])
-            long entityId = upsertMigratedEntity(connection, source)
-            Set<String> seenChildIds = [] as LinkedHashSet
-            int cleanupSequence = 0
-            rows.each { Map<String, Object> row ->
-                String childId = row.child_transaction_id as String
-                if (!seenChildIds.add(childId)) {
-                    return
-                }
-                boolean active = seenChildIds.size() == 1
-                long mirrorId = insertMigratedMirror(connection, entityId, row, active)
-                if (!active) {
-                    String operationKey = legacyCleanupKey(source, row.target_budget_id as String,
-                        row.direction as String, childId)
-                    def statement = connection.prepareStatement('''
-                        INSERT INTO sync_operations(operation_key, source_entity_id, child_mirror_id,
-                                                    operation_sequence, operation_type, target_budget_id,
-                                                    child_transaction_id, status, created_at)
-                        VALUES (?, ?, ?, ?, 'delete', ?, ?, 'pending', ?)
-                    ''')
-                    statement.setString(1, operationKey)
-                    statement.setLong(2, entityId)
-                    statement.setLong(3, mirrorId)
-                    statement.setInt(4, cleanupSequence++)
-                    statement.setString(5, row.target_budget_id as String)
-                    statement.setString(6, childId)
-                    statement.setString(7, now())
-                    statement.executeUpdate()
-                }
-            }
-        }
-    }
-
-    private static MigrationProjection legacyProjection(Connection connection) {
-        List<LegacyMirrorProjection> mirrors = []
-        List<ReconciliationOperationIntent> cleanup = []
-        Map<String, List<Map<String, Object>>> groups = eligibleLegacyRows(connection).groupBy { legacyGroupKey(it) }
-        groups.keySet().sort().each { String groupKey ->
-            List<Map<String, Object>> rows = groups[groupKey]
-            SourceEntityKey source = legacySourceKey(rows[0])
-            Set<String> seenChildIds = [] as LinkedHashSet
-            int sequence = 0
-            rows.each { Map<String, Object> row ->
-                String childId = row.child_transaction_id as String
-                if (!seenChildIds.add(childId)) {
-                    return
-                }
-                boolean active = seenChildIds.size() == 1
-                mirrors << new LegacyMirrorProjection(source, row.target_budget_id as String,
-                    row.direction as String, childId, active)
-                if (!active) {
-                    cleanup << new ReconciliationOperationIntent(
-                        legacyCleanupKey(source, row.target_budget_id as String, row.direction as String, childId),
-                        null, 0L, null, sequence++, ReconciliationOperationType.DELETE,
-                        row.target_budget_id as String, childId, null, null, null)
-                }
-            }
-        }
-        new MigrationProjection(mirrors, cleanup)
-    }
-
-    private static List<Map<String, Object>> eligibleLegacyRows(Connection connection) {
-        def result = connection.createStatement().executeQuery('''
-            SELECT applied.id AS applied_id, applied.applied_at,
-                   applied.target_budget_id, applied.created_child_transaction_id AS child_transaction_id,
-                   mapping.direction, mapping.target_account_id,
-                   event.source_budget_id, event.event_type, event.parent_transaction_id,
-                   event.parent_subtransaction_id, event.money_movement_id
-            FROM applied_transactions applied
-            JOIN sync_mappings mapping ON mapping.id = applied.sync_mapping_id
-            JOIN source_events event ON event.id = mapping.source_event_id
-            WHERE applied.status = 'applied' AND applied.dry_run = 0
-              AND applied.created_child_transaction_id IS NOT NULL
-              AND TRIM(applied.created_child_transaction_id) != ''
-            ORDER BY applied.applied_at DESC, applied.id DESC
-        ''')
-        List<Map<String, Object>> rows = []
-        while (result.next()) {
-            rows << [
-                applied_id: result.getLong('applied_id'), applied_at: result.getString('applied_at'),
-                target_budget_id: result.getString('target_budget_id'),
-                child_transaction_id: result.getString('child_transaction_id'),
-                direction: result.getString('direction'), target_account_id: result.getString('target_account_id'),
-                source_budget_id: result.getString('source_budget_id'), event_type: result.getString('event_type'),
-                parent_transaction_id: result.getString('parent_transaction_id'),
-                parent_subtransaction_id: result.getString('parent_subtransaction_id'),
-                money_movement_id: result.getString('money_movement_id')
-            ]
-        }
-        rows
-    }
-
-    private static SourceEntityKey legacySourceKey(Map<String, Object> row) {
-        new SourceEntityKey(row.source_budget_id as String,
-            SourceEntityType.valueOf((row.event_type as String).toUpperCase()),
-            row.parent_transaction_id as String, row.parent_subtransaction_id as String,
-            row.money_movement_id as String)
-    }
-
-    private static String legacyGroupKey(Map<String, Object> row) {
-        SourceEntityKey source = legacySourceKey(row)
-        String direction = source.type == SourceEntityType.MONEY_MOVEMENT ? row.direction as String : ''
-        [sourceIdentity(source), row.target_budget_id as String, direction]
-            .collect { String value -> "${value.length()}:${value}" }.join('|')
-    }
-
-    private static long upsertMigratedEntity(Connection connection, SourceEntityKey source) {
-        String timestamp = now()
-        def statement = connection.prepareStatement('''
-            INSERT INTO source_entities(identity_key, source_budget_id, entity_type, parent_transaction_id,
-                                        parent_subtransaction_id, money_movement_id, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(identity_key) DO NOTHING
-        ''')
-        statement.setString(1, sourceIdentity(source))
-        statement.setString(2, source.sourceBudgetId)
-        statement.setString(3, source.type.databaseValue)
-        statement.setString(4, source.parentTransactionId)
-        statement.setString(5, source.parentSubtransactionId)
-        statement.setString(6, source.moneyMovementId)
-        statement.setString(7, timestamp)
-        statement.setString(8, timestamp)
-        statement.executeUpdate()
-        selectLong(connection, 'SELECT id FROM source_entities WHERE identity_key = ?', sourceIdentity(source))
-    }
-
-    private static long insertMigratedMirror(Connection connection, long entityId, Map<String, Object> row,
-                                             boolean active) {
-        def statement = connection.prepareStatement('''
-            INSERT INTO child_mirrors(source_entity_id, target_budget_id, direction, child_transaction_id,
-                                      target_account_id, status, created_at, ended_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ''', Statement.RETURN_GENERATED_KEYS)
-        statement.setLong(1, entityId)
-        statement.setString(2, row.target_budget_id as String)
-        statement.setString(3, row.direction as String)
-        statement.setString(4, row.child_transaction_id as String)
-        statement.setString(5, row.target_account_id as String)
-        statement.setString(6, active ? 'active' : 'superseded')
-        statement.setString(7, row.applied_at as String ?: now())
-        statement.setString(8, active ? null : now())
-        statement.executeUpdate()
-        def keys = statement.generatedKeys
-        keys.next()
-        keys.getLong(1)
-    }
-
-    private static String legacyCleanupKey(SourceEntityKey source, String targetBudgetId,
-                                           String direction, String childTransactionId) {
-        'legacy-delete|' + [sourceIdentity(source), targetBudgetId, direction, childTransactionId]
-            .collect { String value -> "${value.length()}:${value}" }.join('|')
-    }
-
-    private static void ensureColumn(Connection connection, String tableName, String columnName, String definition) {
-        def columns = connection.createStatement().executeQuery("PRAGMA table_info(${tableName})")
-        boolean exists = false
-        while (columns.next()) {
-            if (columns.getString('name') == columnName) {
-                exists = true
-                break
-            }
-        }
-        if (!exists) {
-            connection.createStatement().execute("ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}")
-        }
-    }
-
     private <T> T withConnection(Closure<T> closure) {
         Connection connection = DriverManager.getConnection("jdbc:sqlite:${databasePath}")
+        try {
+            connection.createStatement().execute('PRAGMA foreign_keys = ON')
+            closure.call(connection)
+        } finally {
+            connection.close()
+        }
+    }
+
+    private <T> T withReadOnlyConnection(Closure<T> closure) {
+        String uriPath = Paths.get(databasePath).toAbsolutePath().toUri().rawPath
+        Connection connection = DriverManager.getConnection("jdbc:sqlite:file:${uriPath}?mode=ro")
         try {
             connection.createStatement().execute('PRAGMA foreign_keys = ON')
             closure.call(connection)

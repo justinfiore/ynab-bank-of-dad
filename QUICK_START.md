@@ -8,7 +8,7 @@ This repo now has **two** safe-first flows:
 
 For the full field-by-field configuration reference, active allowance modeling, and syncer-specific YAML guidance, see [CONFIGURATION.md](CONFIGURATION.md).
 
-Before enabling live parent/child syncing, read [PARENT_TRANSACTION_RECONCILIATION.md](PARENT_TRANSACTION_RECONCILIATION.md). It explains parent-authoritative and child-owned fields, destructive cases, split transitions, retries and cursors, migration cleanup, money-movement limitations, and rollback limits.
+Before enabling live parent/child syncing, read [PARENT_TRANSACTION_RECONCILIATION.md](PARENT_TRANSACTION_RECONCILIATION.md). It explains parent-authoritative and child-owned fields, destructive cases, split transitions, retries and cursors, fresh-state schema versioning, money-movement limitations, and rollback limits.
 
 ## 1. Install prerequisites
 
@@ -92,7 +92,7 @@ Specific date:
 
 ## 5. Do a safe parent/child sync dry run
 
-Stop any running syncer and back up the configured SQLite state database first, including SQLite sidecar files or by using SQLite's backup facility. This is required before the first live reconciliation: migrating legacy state can queue deletion of older duplicate child transactions.
+Stop any running syncer. If `syncstate.db` was created by an earlier build, delete it first. This build does not convert old state and rejects nonempty unversioned, newer, noncontiguous, or otherwise unsupported schemas without mutation. Deleting state does not delete child transactions created by an earlier syncer; treat matching creates in the first dry run as potential duplicate financial effects and resolve them before live mode.
 
 Recommended one-cycle dry run:
 
@@ -115,7 +115,7 @@ RunParentChildSync.bat config.yaml syncstate.db
 What this validates safely:
 1. config loading
 2. sync logging bootstrap
-3. existing SQLite state reads and any in-memory migration/legacy-cleanup projection
+3. read-only access to a supported versioned SQLite database, or empty state when the path is missing
 4. parent/child mapping construction
 5. planned child-budget mutations without live posting
 
@@ -136,7 +136,7 @@ Before any live run, verify:
 2. each child token env var name points to the intended secret
 3. parent category mappings match the child you expect to mirror into
 4. planned creates and updates have the expected date, amount, payee, account, cleared, and unapproved behavior
-5. planned deletions, split transitions, cross-budget replacements, missing-child recreations, money-movement changes, and legacy duplicate cleanup are expected
+5. planned deletions, split transitions, cross-budget replacements, missing-child recreations, and money-movement changes are expected
 6. custom/default memo decoration is trimmed on creation and existing child memos remain child-owned on later updates
 7. the SQLite path is where you want long-lived replay-protection, cursor, mirror-lineage, and operation-attempt history to live
 8. the rolling log path is where you want continuous sync logs written
@@ -170,7 +170,7 @@ If that looks correct, you can allow continuous polling:
 ```
 
 Live syncer rollout guidance:
-- keep the pre-reconciliation SQLite backup until live verification is complete
+- confirm a database from an earlier build was deleted before rollout; it cannot be used by this build
 - do not skip the single-cycle dry run
 - prefer a single-cycle live verification before running continuously
 - do not delete `syncstate.db` casually once live syncing has started, because it contains replay-protection and cursor state

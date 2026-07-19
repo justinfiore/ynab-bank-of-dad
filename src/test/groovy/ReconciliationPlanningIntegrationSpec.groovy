@@ -14,10 +14,12 @@ class ReconciliationPlanningIntegrationSpec extends Specification {
 
     SyncStateStore store
     SourceRevisionNormalizer normalizer = new SourceRevisionNormalizer()
+    long transactionBatchId
 
     def setup() {
         store = new SyncStateStore(tempDir.resolve('planning.db').toString())
         store.initialize()
+        transactionBatchId = store.createIngestionBatch('transaction-delta', 'transaction_delta', 2)
     }
 
     def "stable ordinary split and component identities remain distinct in SQLite lineage"() {
@@ -28,9 +30,9 @@ class ReconciliationPlanningIntegrationSpec extends Specification {
         when:
         long ordinaryId = store.upsertSourceEntity(ordinary)
         long splitId = store.upsertSourceEntity(split)
-        store.appendSourceRevision(ordinaryId, 'ordinary-v1', '{"amount":100}', 1, null)
-        store.appendSourceRevision(ordinaryId, 'ordinary-v2', '{"amount":200}', 2, null)
-        store.appendSourceRevision(splitId, 'split-v1', '{"amount":50}', 2, null)
+        store.appendSourceRevision(ordinaryId, 'ordinary-v1', '{"amount":100}', 1, transactionBatchId)
+        store.appendSourceRevision(ordinaryId, 'ordinary-v2', '{"amount":200}', 2, transactionBatchId)
+        store.appendSourceRevision(splitId, 'split-v1', '{"amount":50}', 2, transactionBatchId)
 
         then:
         ordinaryId != splitId
@@ -109,12 +111,14 @@ class ReconciliationPlanningIntegrationSpec extends Specification {
         def desired = reconciler.reconcile(oldRevision).desiredMirrors.first()
         def mirror = persistedMirror(desired, 'child-memo')
         long entityId = store.upsertSourceEntity(oldRevision.parentSource)
-        store.appendSourceRevision(entityId, oldRevision.revisionHash, oldRevision.normalizedJson, 1, null)
+        store.appendSourceRevision(entityId, oldRevision.revisionHash, oldRevision.normalizedJson, 1,
+            transactionBatchId)
 
         when:
         def newRevision = revision(memo: 'new memo')
         def result = reconciler.reconcile(newRevision, [mirror])
-        store.appendSourceRevision(entityId, newRevision.revisionHash, newRevision.normalizedJson, 2, null)
+        store.appendSourceRevision(entityId, newRevision.revisionHash, newRevision.normalizedJson, 2,
+            transactionBatchId)
 
         then:
         result.intents*.action == [PlannedAction.NO_OP]
