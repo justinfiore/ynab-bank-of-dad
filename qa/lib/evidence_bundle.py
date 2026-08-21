@@ -14,7 +14,9 @@ from typing import Iterable
 from .campaign_matrix import SCENARIOS
 
 
-AUTH_VALUE = re.compile(r"authorization\s*:\s*([^\r\n]+)", re.IGNORECASE)
+AUTH_VALUE = re.compile(
+    r"(authorization\s*:\s*(?>(?:bearer\s+)?))([^\s<\"']+)", re.IGNORECASE
+)
 FULL_UUID = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", re.IGNORECASE)
 
 
@@ -43,9 +45,7 @@ def scan_evidence(root: Path, tokens: Iterable[str]) -> dict[str, object]:
         except UnicodeDecodeError:
             continue
         for match in AUTH_VALUE.finditer(text):
-            value = match.group(1).strip()
-            if value.lower().startswith("bearer "):
-                value = value[7:].strip()
+            value = match.group(2).strip()
             if not value.startswith("[REDACTED]"):
                 problems.append(f"Authorization header value: {path.relative_to(root)}")
                 break
@@ -62,6 +62,34 @@ def scan_evidence(root: Path, tokens: Iterable[str]) -> dict[str, object]:
     }
 
 
+def sanitize_evidence_text(root: Path, tokens: Iterable[str]) -> None:
+    """Redact values copied from generated logs/reports; source files are never touched."""
+    token_values = [value for value in tokens if value]
+    for path in [candidate for candidate in root.rglob("*") if candidate.is_file()]:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        redacted = text
+        for token in token_values:
+            redacted = redacted.replace(token, "[REDACTED]")
+        redacted = AUTH_VALUE.sub(lambda match: match.group(1) + "[REDACTED]", redacted)
+        redacted = FULL_UUID.sub("[REDACTED-UUID]", redacted)
+        if redacted != text:
+            path.write_text(redacted, encoding="utf-8")
+
+    for capture_path in root.glob("scenarios/**/*-capture.json"):
+        capture = json.loads(capture_path.read_text(encoding="utf-8"))
+        log_path = Path(capture.get("log", ""))
+        if not log_path.is_absolute():
+            log_path = Path.cwd() / log_path
+        if log_path.is_file():
+            capture["sha256"] = _sha256(log_path)
+            capture_path.write_text(
+                json.dumps(capture, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            )
+
+
 def finalize_campaign(root: Path, tokens: Iterable[str]) -> tuple[Path, Path]:
     environment = json.loads((root / "environment.json").read_text(encoding="utf-8"))
     manifest_path = root / "campaign-manifest.json"
@@ -75,6 +103,7 @@ def finalize_campaign(root: Path, tokens: Iterable[str]) -> tuple[Path, Path]:
     if any(item.get("safety", {}).get("api_write_attempts") != 0 for item in receipts):
         raise EvidenceSafetyError("Blocked campaign contains a nonzero API write attempt count")
     counts = Counter(item["status"] for item in receipts)
+    sanitize_evidence_text(root, tokens)
     scan = scan_evidence(root, tokens)
     manifest["secret_scan"] = "PASS"
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
