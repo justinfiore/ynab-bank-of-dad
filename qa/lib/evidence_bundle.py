@@ -107,9 +107,6 @@ def finalize_campaign(root: Path, tokens: Iterable[str]) -> tuple[Path, Path]:
     scan = scan_evidence(root, tokens)
     manifest["secret_scan"] = "PASS"
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    (root / "secret-scan.json").write_text(
-        json.dumps(scan, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
     missing_categories = environment.get("missing_parent_categories", [])
     summary = f"""# YNAB Bank of Dad QA campaign {root.name}
 
@@ -129,6 +126,16 @@ def finalize_campaign(root: Path, tokens: Iterable[str]) -> tuple[Path, Path]:
     (root / "SUMMARY.md").write_text(summary, encoding="utf-8")
 
     checksum_path = root / "SHA256SUMS"
+    secret_scan_path = root / "secret-scan.json"
+    files_before_checksum = [
+        path for path in root.rglob("*") if path.is_file() and path != checksum_path
+    ]
+    scan["files_scanned"] = (
+        len(files_before_checksum) + (0 if secret_scan_path in files_before_checksum else 1) + 1
+    )
+    secret_scan_path.write_text(
+        json.dumps(scan, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     artifact_files = [
         path for path in sorted(root.rglob("*")) if path.is_file() and path != checksum_path
     ]
@@ -136,7 +143,8 @@ def finalize_campaign(root: Path, tokens: Iterable[str]) -> tuple[Path, Path]:
         "".join(f"{_sha256(path)}  {path.relative_to(root)}\n" for path in artifact_files),
         encoding="utf-8",
     )
-    scan_evidence(root, tokens)
+    if scan_evidence(root, tokens) != scan:
+        raise EvidenceSafetyError("Recorded evidence scan does not match delivered campaign files")
 
     zip_path = root.parent / f"{root.name}.zip"
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
