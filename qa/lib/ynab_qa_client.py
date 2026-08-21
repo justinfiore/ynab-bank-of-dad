@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Minimal YNAB QA client with exact-plan and manifest-bound transaction guards.
+"""Minimal YNAB QA client with exact-plan and manifest-bound write guards.
 
-The client intentionally has no account/category mutation methods. Transaction
-writes are rejected unless the plan identity is allowlisted, live confirmation
-is exact, and exactly one expected manifest operation matches the request.
+The client has transaction fixture methods plus category-create methods for the
+one QA parent plan. It intentionally has no account-create, category-rename, or
+generic mutation method.
 """
 
 from __future__ import annotations
@@ -49,6 +49,7 @@ class YnabQaClient:
         self._timeout = timeout
         self._consumed_manifest_authorizations: set[str] = set()
         self._manifest_authorization_lock = Lock()
+        self._consumed_provisioning_authorizations: set[str] = set()
 
     @staticmethod
     def _looks_like_uuid(value: str) -> bool:
@@ -72,6 +73,105 @@ class YnabQaClient:
 
     def discover_plans(self) -> dict[str, Any]:
         return self._request("GET", "plans")
+
+    def create_category_group(
+        self,
+        identity: PlanIdentity,
+        payload: Mapping[str, Any],
+        *,
+        campaign_id: str,
+        provisioning_tag: str,
+        expected_payload: Mapping[str, Any],
+        confirmation: str | None = None,
+    ) -> dict[str, Any]:
+        return self._category_create_write(
+            identity, "category_groups", payload, campaign_id=campaign_id,
+            provisioning_tag=provisioning_tag, expected_payload=expected_payload,
+            confirmation=confirmation,
+        )
+
+    def create_category(
+        self,
+        identity: PlanIdentity,
+        payload: Mapping[str, Any],
+        *,
+        campaign_id: str,
+        provisioning_tag: str,
+        expected_payload: Mapping[str, Any],
+        confirmation: str | None = None,
+    ) -> dict[str, Any]:
+        return self._category_create_write(
+            identity, "categories", payload, campaign_id=campaign_id,
+            provisioning_tag=provisioning_tag, expected_payload=expected_payload,
+            confirmation=confirmation,
+        )
+
+    def _category_create_write(
+        self,
+        identity: PlanIdentity,
+        resource: str,
+        payload: Mapping[str, Any],
+        *,
+        campaign_id: str,
+        provisioning_tag: str,
+        expected_payload: Mapping[str, Any],
+        confirmation: str | None,
+    ) -> dict[str, Any]:
+        self.require_allowed(identity)
+        if identity.name != "Jorsten's Plan":
+            raise QaSafetyError("Category provisioning is restricted to the exact QA parent plan")
+        if confirmation is None:
+            confirmation = os.environ.get("QA_CONFIRM_PROVISIONING_MUTATIONS")
+        if confirmation != "YES":
+            raise QaSafetyError("Category provisioning confirmation is missing")
+        if (
+            not campaign_id
+            or not provisioning_tag.startswith("BOD-QA-PROVISION")
+            or campaign_id == provisioning_tag
+        ):
+            raise QaSafetyError("Distinct QA campaign and provisioning tags are required")
+        if payload != expected_payload:
+            raise QaSafetyError("Category write differs from its expected manifest payload")
+        if resource == "category_groups":
+            expected_keys = {"category_group"}
+            body = payload.get("category_group")
+            valid = (
+                set(payload) == expected_keys
+                and isinstance(body, Mapping)
+                and set(body) == {"name"}
+                and body.get("name") == "BOD Reconciliation QA"
+            )
+        elif resource == "categories":
+            expected_keys = {"category"}
+            body = payload.get("category")
+            valid = (
+                set(payload) == expected_keys
+                and isinstance(body, Mapping)
+                and set(body) == {"category_group_id", "name"}
+                and self._looks_like_uuid(str(body.get("category_group_id") or ""))
+                and body.get("name") in {
+                    "QA Jorsten Jr Silver", "QA Jorsten Jr Bronze",
+                    "QA Borsten Silver", "QA Borsten Bronze",
+                    "QA Thorsten Silver", "QA Thorsten Bronze",
+                    "QA Unmapped", "QA Transfer Clearing",
+                }
+            )
+        else:
+            valid = False
+        if not valid:
+            raise QaSafetyError("Category create payload is outside the provisioning contract")
+        fingerprint = json.dumps({
+            "campaignId": campaign_id,
+            "provisioningTag": provisioning_tag,
+            "resource": resource,
+            "targetPlanId": identity.plan_id,
+            "payload": payload,
+        }, sort_keys=True, separators=(",", ":"))
+        with self._manifest_authorization_lock:
+            if fingerprint in self._consumed_provisioning_authorizations:
+                raise QaSafetyError("Category manifest authorization was already consumed")
+            self._consumed_provisioning_authorizations.add(fingerprint)
+        return self._request("POST", f"plans/{identity.plan_id}/{resource}", payload)
 
     def transaction_write(
         self,
