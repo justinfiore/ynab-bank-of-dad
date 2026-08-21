@@ -35,6 +35,7 @@ Run the inspector with Gradle offline mode so dependency resolution cannot make 
 ```
 
 The command creates only the caller-selected local artifact. `complete: true` means all required names were present. Otherwise, `missingParentCategories` and each child's `missingAccounts` list are the provisioning gaps. The inspector never creates a category or account.
+That offline inspector does not read or manage access tokens and does not perform live writes.
 
 ## Category provisioning
 
