@@ -14,6 +14,9 @@ budgets:
       fullId: REPLACE_WITH_FULL_IMMUTABLE_PLAN_UUID
 
 provisioning:
+  # The category-only provisioning CLI uses this one dedicated parent group.
+  # It never renames a group/category and never writes to a child plan.
+  parentCategoryGroup: BOD Reconciliation QA
   parentCategories:
     - QA Jorsten Jr Silver
     - QA Jorsten Jr Bronze
@@ -24,6 +27,7 @@ provisioning:
     - QA Unmapped
     - QA Transfer Clearing
   requiredChildAccounts:
+    # Verified prerequisites: the public YNAB API cannot create accounts.
     - Silver
     - Bronze
 

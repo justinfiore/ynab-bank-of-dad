@@ -1,4 +1,6 @@
 import json
+import re
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -26,6 +28,9 @@ IDS = {
     for index, name in enumerate(sorted(KNOWN_NAMES), 1)
 }
 GROUP_ID = "20000000-0000-4000-8000-000000000001"
+_UUID_TEXT_FOR_TEST = re.compile(
+    r"(?i)\\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\b"
+)
 
 
 def identities():
@@ -360,6 +365,39 @@ class CategoryClientRouteTest(unittest.TestCase):
         self.assertFalse(hasattr(self.client, "create_account"))
         self.assertFalse(hasattr(self.client, "rename_category"))
         self.assertFalse(hasattr(self.client, "patch_category"))
+
+
+class ProvisioningDocumentationTest(unittest.TestCase):
+    def test_cli_exposes_fixed_config_dry_run_and_live_modes(self):
+        result = subprocess.run(
+            [sys.executable, str(QA_ROOT / "provision_categories.py"), "--help"],
+            check=True, capture_output=True, text=True,
+        )
+        self.assertIn("--dry-run", result.stdout)
+        self.assertIn("--provision", result.stdout)
+        self.assertNotIn("--config", result.stdout)
+
+    def test_docs_record_supported_routes_and_child_account_prerequisite(self):
+        readme = (QA_ROOT / "README.md").read_text(encoding="utf-8")
+        for expected in (
+            "POST /v1/plans/{plan_id}/category_groups",
+            "POST /v1/plans/{plan_id}/categories",
+            "PATCH /v1/plans/{plan_id}/categories/{category_id}",
+            "account creation is not supported",
+            "verified prerequisites",
+            "QA_CONFIRM_PROVISIONING_MUTATIONS=YES",
+        ):
+            self.assertIn(expected, readme)
+
+    def test_tracked_examples_are_valid_redacted_json(self):
+        for name in (
+            "category-provisioning-dry-run.json.example",
+            "category-provisioning-receipt.json.example",
+        ):
+            text = (QA_ROOT / "config" / name).read_text(encoding="utf-8")
+            json.loads(text)
+            self.assertIsNone(_UUID_TEXT_FOR_TEST.search(text))
+            self.assertNotIn("Authorization", text)
 
 
 if __name__ == "__main__":

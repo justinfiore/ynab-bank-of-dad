@@ -1,0 +1,15 @@
+{
+  "artifactType": "qa-category-provisioning-receipt",
+  "campaignId": "qa-campaign-example",
+  "childWriteCount": 0,
+  "operations": [],
+  "plannedWriteCount": 0,
+  "provisioningTag": "BOD-QA-PROVISION-example",
+  "schemaVersion": 1,
+  "status": "PASS",
+  "successfulResponseObjectCount": 0,
+  "targetPlan": {
+    "displayName": "Jorsten's Plan",
+    "idFingerprint": "sha256:REDACTED_EXAMPLE"
+  }
+}
