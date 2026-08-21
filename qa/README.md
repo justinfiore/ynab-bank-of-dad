@@ -1,4 +1,4 @@
-# Reconciliation QA evidence: Phase A / Task 1
+# Reconciliation QA evidence tooling
 
 This phase provides an offline, read-only provisioning inspector. It compares a manually prepared discovery snapshot with the required parent categories and child accounts, then writes `missing-provisioning.json`. It does not call YNAB, does not read or manage access tokens, does not run the syncer, and does not perform live writes.
 
@@ -21,4 +21,26 @@ Run the inspector with Gradle offline mode so dependency resolution cannot make 
 
 The command creates only the caller-selected local artifact. `complete: true` means all required names were present. Otherwise, `missingParentCategories` and each child's `missingAccounts` list are the provisioning gaps. The inspector never creates a category or account.
 
-The code also includes pure safety validation for a possible future live QA runner: confirmation must be exactly `QA_CONFIRM_LIVE_MUTATIONS=YES`, a non-empty expected mutation manifest is mandatory, and every target must match both an allowlisted display name and its config-provided full immutable ID. Phase A / Task 1 does not expose or claim a live mutation command; the manifest example is documentation for that future integration only.
+The code also includes transaction-only fixture and observation helpers, a
+fail-closed scenario wrapper, SQLite audit capture, structured receipts, and a
+self-contained static HTML renderer. The wrapper requires exact allowlist
+evidence for dry runs. Live mode additionally requires completed provisioning,
+a passing scenario dry run, a non-empty expected mutation manifest, and exactly
+`QA_CONFIRM_LIVE_MUTATIONS=YES`. Captured output is redacted using every
+token/authorization environment value before it reaches disk.
+
+Run the harness unit tests with:
+
+```bash
+python3 -m unittest discover -s qa/tests -v
+```
+
+Render an existing campaign with:
+
+```bash
+python3 qa/report/render_report.py qa/artifacts/<campaign-id>
+```
+
+`qa/artifacts/`, the completed config, raw discovery snapshots, tokens, state
+databases, and campaign state are Gitignored. Report receipts must use one of
+`PASS`, `FAIL`, `BLOCKED`, or `NOT_RUN`; an omitted scenario is a report defect.

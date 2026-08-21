@@ -1,0 +1,19 @@
+:root { color-scheme: light; --ink:#17202a; --muted:#5c6773; --line:#d7dde4; --bg:#f4f6f8; --card:#fff; }
+* { box-sizing:border-box; }
+body { margin:0; color:var(--ink); background:var(--bg); font:15px/1.5 system-ui,sans-serif; }
+main { max-width:1180px; margin:auto; padding:32px; }
+h1,h2 { line-height:1.15; }
+.banner,.card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:20px; margin:0 0 20px; }
+.verdict { display:inline-block; border-radius:999px; padding:6px 12px; font-weight:700; }
+.PASS { background:#d8f3dc; color:#176b2c; } .FAIL { background:#ffd9dc; color:#9b1c27; }
+.BLOCKED { background:#fff0c2; color:#755600; } .NOT_RUN { background:#e9edf2; color:#43505c; }
+.facts { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; }
+.facts div { border-left:4px solid #64748b; padding-left:12px; }
+table { width:100%; border-collapse:collapse; background:var(--card); }
+th,td { border:1px solid var(--line); padding:9px; vertical-align:top; text-align:left; }
+th { background:#eef2f6; position:sticky; top:0; }
+code { overflow-wrap:anywhere; }
+.scenario { break-inside:avoid; }
+.muted { color:var(--muted); }
+svg { width:100%; height:auto; max-height:180px; }
+@media print { body { background:#fff; } main { max-width:none; padding:8px; } .card,.banner { break-inside:avoid; } }
