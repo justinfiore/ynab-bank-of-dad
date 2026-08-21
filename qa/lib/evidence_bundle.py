@@ -14,8 +14,26 @@ from typing import Iterable
 from .campaign_matrix import SCENARIOS
 
 
-AUTH_VALUE = re.compile(
-    r"(authorization\s*:\s*(?>(?:bearer\s+)?))([^\s<\"']+)", re.IGNORECASE
+AUTH_VALUE_PATTERNS = (
+    re.compile(
+        r"((?:&quot;|[\"'])authorization(?:&quot;|[\"'])\s*:\s*"
+        r"(?:&quot;|[\"'])\s*(?:(?:bearer|basic)\s+)?)(.*?)(?=(?:&quot;|[\"']))",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"((?:name|key)=[\"']authorization[\"'][^>]*?\bvalue=[\"'])([^\"']+)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(>\s*authorization\s*</(?:td|th)>\s*<td[^>]*>\s*"
+        r"(?:(?:bearer|basic)\s+)?)(.*?)(?=</td>)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(\bauthorization\s*(?::|=)\s*(?:(?:bearer|basic)\s+)?)"
+        r"(.*?)(?=(?:</|\]\]>|[\r\n]|$))",
+        re.IGNORECASE | re.MULTILINE,
+    ),
 )
 FULL_UUID = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", re.IGNORECASE)
 
@@ -44,11 +62,12 @@ def scan_evidence(root: Path, tokens: Iterable[str]) -> dict[str, object]:
             text = data.decode("utf-8")
         except UnicodeDecodeError:
             continue
-        for match in AUTH_VALUE.finditer(text):
-            value = match.group(2).strip()
-            if not value.startswith("[REDACTED]"):
-                problems.append(f"Authorization header value: {path.relative_to(root)}")
-                break
+        if any(
+            match.group(2).strip() != "[REDACTED]"
+            for pattern in AUTH_VALUE_PATTERNS
+            for match in pattern.finditer(text)
+        ):
+            problems.append(f"Authorization header value: {path.relative_to(root)}")
         if FULL_UUID.search(text):
             problems.append(f"full UUID outside ignored internal config: {path.relative_to(root)}")
     if problems:
@@ -73,7 +92,8 @@ def sanitize_evidence_text(root: Path, tokens: Iterable[str]) -> None:
         redacted = text
         for token in token_values:
             redacted = redacted.replace(token, "[REDACTED]")
-        redacted = AUTH_VALUE.sub(lambda match: match.group(1) + "[REDACTED]", redacted)
+        for pattern in AUTH_VALUE_PATTERNS:
+            redacted = pattern.sub(lambda match: match.group(1) + "[REDACTED]", redacted)
         redacted = FULL_UUID.sub("[REDACTED-UUID]", redacted)
         if redacted != text:
             path.write_text(redacted, encoding="utf-8")

@@ -1,4 +1,5 @@
 import sys
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -41,7 +42,7 @@ class EvidenceBundleTest(unittest.TestCase):
             root = Path(temporary)
             artifact = root / "generated-test-report.html"
             artifact.write_text(
-                "Authorization: Bearer synthetic-header "
+                "Authorization: Bearer synthetic-header\n"
                 "00000000-0000-0000-0000-000000000001 raw-token-value"
             )
             sanitize_evidence_text(root, ["raw-token-value"])
@@ -50,6 +51,40 @@ class EvidenceBundleTest(unittest.TestCase):
             text = artifact.read_text()
             self.assertIn("Authorization: Bearer [REDACTED]", text)
             self.assertIn("[REDACTED-UUID]", text)
+
+    def test_sanitizer_removes_all_gradle_xml_html_authorization_header_values(self):
+        fixture_root = Path(__file__).resolve().parent / "fixtures"
+        header_values = {
+            "synthetic-xml-header",
+            "wiremock-parent-token",
+            "wiremock-user",
+            "synthetic-nonce",
+            "generated-html-value",
+            "mock-report-value",
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            reports = root / "automated-tests"
+            reports.mkdir()
+            for fixture in fixture_root.glob("gradle-auth-report.*"):
+                shutil.copy2(fixture, reports / fixture.name)
+            (root / "source-reference.txt").write_text(
+                "Authorization header values are prohibited. Code may set an Authorization header."
+            )
+
+            with self.assertRaises(EvidenceSafetyError):
+                scan_evidence(root, [])
+
+            sanitize_evidence_text(root, [])
+            scan = scan_evidence(root, [])
+
+            self.assertEqual(scan["authorization_header_value_matches"], 0)
+            delivered = "".join(path.read_text() for path in reports.iterdir())
+            for value in header_values:
+                self.assertNotIn(value, delivered)
+            self.assertIn("Authorization header values are prohibited", (
+                root / "source-reference.txt"
+            ).read_text())
 
     def test_finalizer_records_the_delivered_file_count(self):
         with tempfile.TemporaryDirectory() as temporary:
