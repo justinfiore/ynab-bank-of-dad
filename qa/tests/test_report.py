@@ -8,9 +8,15 @@ QA_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(QA_ROOT / "report"))
 
 from render_report import load_receipts, render
+sys.path.insert(0, str(QA_ROOT))
+from lib.campaign_matrix import SCENARIOS
 
 
 class ReportTest(unittest.TestCase):
+    def test_matrix_contains_every_planned_a_through_d_scenario(self):
+        self.assertEqual(len(SCENARIOS), 26)
+        self.assertEqual({item[0][0] for item in SCENARIOS}, {"A", "B", "C", "D"})
+
     def test_all_receipts_appear_and_report_is_self_contained(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
