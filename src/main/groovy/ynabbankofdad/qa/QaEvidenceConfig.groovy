@@ -6,6 +6,11 @@ import java.nio.file.Files
 import java.nio.file.Path
 
 class QaEvidenceConfig {
+    private static final String REQUIRED_PARENT_DISPLAY_NAME = "Jorsten's Plan"
+    private static final Set<String> REQUIRED_CHILD_DISPLAY_NAMES = [
+        "Jorsten Jr's Plan", "Borsten's Plan", "Thorsten's Plan"
+    ] as Set
+
     final QaProvisioningRequirements provisioning
 
     private QaEvidenceConfig(QaProvisioningRequirements provisioning) {
@@ -39,7 +44,25 @@ class QaEvidenceConfig {
         }
 
         QaBudgetSafetyGuard.validateConfiguredAllowlist([parent] + children)
+        validateFixedBudgetTopology(parent, children)
         new QaEvidenceConfig(new QaProvisioningRequirements(parent, children, parentCategories, childAccounts))
+    }
+
+    private static void validateFixedBudgetTopology(QaBudgetIdentity parent,
+                                                    List<QaBudgetIdentity> children) {
+        if (parent.displayName != REQUIRED_PARENT_DISPLAY_NAME) {
+            throw new IllegalArgumentException(
+                "QA parent budget must be exactly '${REQUIRED_PARENT_DISPLAY_NAME}'"
+            )
+        }
+
+        List<String> childNames = children*.displayName
+        if (childNames.size() != REQUIRED_CHILD_DISPLAY_NAMES.size() ||
+            childNames as Set != REQUIRED_CHILD_DISPLAY_NAMES) {
+            throw new IllegalArgumentException(
+                "QA child budgets must be exactly ${REQUIRED_CHILD_DISPLAY_NAMES.sort()}, each once"
+            )
+        }
     }
 
     private static QaBudgetIdentity budgetIdentity(Map raw, String path) {

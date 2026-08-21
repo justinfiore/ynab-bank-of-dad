@@ -84,6 +84,64 @@ provisioning:
         config.provisioning.childAccountNames.values().every { it == ['Silver', 'Bronze'] as Set }
     }
 
+    def "rejects a config that omits a required child budget"() {
+        given:
+        def configFile = tempDir.resolve('missing-child.yaml').toFile()
+        configFile.text = '''
+budgets:
+  parent:
+    displayName: "Jorsten's Plan"
+    fullId: 30000000-0000-0000-0000-000000000001
+  children:
+    - displayName: "Jorsten Jr's Plan"
+      fullId: 30000000-0000-0000-0000-000000000002
+    - displayName: "Borsten's Plan"
+      fullId: 30000000-0000-0000-0000-000000000003
+provisioning:
+  parentCategories:
+    - QA Required
+  requiredChildAccounts:
+    - Silver
+'''
+
+        when:
+        QaEvidenceConfig.load(configFile.toPath())
+
+        then:
+        def error = thrown(IllegalArgumentException)
+        error.message.contains('child budgets must be exactly')
+    }
+
+    def "rejects a known child budget in the parent role"() {
+        given:
+        def configFile = tempDir.resolve('swapped-parent.yaml').toFile()
+        configFile.text = '''
+budgets:
+  parent:
+    displayName: "Jorsten Jr's Plan"
+    fullId: 30000000-0000-0000-0000-000000000002
+  children:
+    - displayName: "Jorsten's Plan"
+      fullId: 30000000-0000-0000-0000-000000000001
+    - displayName: "Borsten's Plan"
+      fullId: 30000000-0000-0000-0000-000000000003
+    - displayName: "Thorsten's Plan"
+      fullId: 30000000-0000-0000-0000-000000000004
+provisioning:
+  parentCategories:
+    - QA Required
+  requiredChildAccounts:
+    - Silver
+'''
+
+        when:
+        QaEvidenceConfig.load(configFile.toPath())
+
+        then:
+        def error = thrown(IllegalArgumentException)
+        error.message.contains("parent budget must be exactly 'Jorsten's Plan'")
+    }
+
     def "QA README gives an offline read-only invocation and disclaims live writes"() {
         given:
         def text = new File('qa/README.md').text
