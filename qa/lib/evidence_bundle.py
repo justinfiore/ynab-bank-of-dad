@@ -36,6 +36,9 @@ AUTH_VALUE_PATTERNS = (
     ),
 )
 FULL_UUID = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", re.IGNORECASE)
+FULL_UUID_BYTES = re.compile(
+    rb"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", re.IGNORECASE
+)
 
 
 class EvidenceSafetyError(RuntimeError):
@@ -58,6 +61,8 @@ def scan_evidence(root: Path, tokens: Iterable[str]) -> dict[str, object]:
         data = path.read_bytes()
         if any(token in data for token in token_values):
             problems.append(f"raw token value: {path.relative_to(root)}")
+        if FULL_UUID_BYTES.search(data):
+            problems.append(f"full UUID outside ignored internal config: {path.relative_to(root)}")
         try:
             text = data.decode("utf-8")
         except UnicodeDecodeError:
@@ -68,8 +73,6 @@ def scan_evidence(root: Path, tokens: Iterable[str]) -> dict[str, object]:
             for match in pattern.finditer(text)
         ):
             problems.append(f"Authorization header value: {path.relative_to(root)}")
-        if FULL_UUID.search(text):
-            problems.append(f"full UUID outside ignored internal config: {path.relative_to(root)}")
     if problems:
         raise EvidenceSafetyError("Evidence safety scan failed: " + "; ".join(problems))
     return {

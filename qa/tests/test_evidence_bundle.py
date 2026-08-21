@@ -37,6 +37,27 @@ class EvidenceBundleTest(unittest.TestCase):
             self.assertEqual(result["status"], "PASS")
             self.assertEqual(result["raw_token_matches"], 0)
 
+    def test_scan_checks_uuid_bytes_in_binary_files_without_rewriting_them(self):
+        uuid_bytes = b"00000000-0000-0000-0000-000000000001"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            unsafe = root / "unsafe.sqlite"
+            original = b"SQLite format 3\x00\xff\xfe" + uuid_bytes + b"\x80\x81"
+            unsafe.write_bytes(original)
+
+            sanitize_evidence_text(root, [])
+
+            self.assertEqual(unsafe.read_bytes(), original)
+            with self.assertRaises(EvidenceSafetyError):
+                scan_evidence(root, [])
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "safe.sqlite").write_bytes(
+                b"SQLite format 3\x00\xff\xfe[REDACTED-UUID]\x80\x81"
+            )
+            self.assertEqual(scan_evidence(root, ["not-present"])["status"], "PASS")
+
     def test_sanitizer_removes_generated_test_values_before_scan(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
