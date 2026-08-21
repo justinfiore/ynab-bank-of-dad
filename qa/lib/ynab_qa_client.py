@@ -13,6 +13,7 @@ import os
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from threading import Lock
 from typing import Any, Mapping
 
 
@@ -46,6 +47,8 @@ class YnabQaClient:
         self._token = token
         self._allowlist = dict(allowlist)
         self._timeout = timeout
+        self._consumed_manifest_authorizations: set[str] = set()
+        self._manifest_authorization_lock = Lock()
 
     @staticmethod
     def _looks_like_uuid(value: str) -> bool:
@@ -101,9 +104,16 @@ class YnabQaClient:
             if not isinstance(payload, Mapping):
                 raise QaSafetyError("Create requires a manifest-bound transaction payload")
             transaction = payload.get("transaction", payload)
-            required = {"account_id", "amount", "date", "memo"}
+            required = {"account_id", "amount", "date", "memo", "import_id"}
             if not isinstance(transaction, Mapping) or not required.issubset(transaction):
                 raise QaSafetyError("Create payload fingerprint is incomplete")
+            import_id = transaction.get("import_id")
+            if (
+                not isinstance(import_id, str)
+                or not import_id.strip()
+                or import_id != import_id.strip()
+            ):
+                raise QaSafetyError("Create requires a stable non-empty import_id")
             if not any(field in transaction for field in ("payee_id", "payee_name")):
                 raise QaSafetyError("Create payload fingerprint must include a payee field")
             memo = str(transaction.get("memo") or "")
@@ -132,6 +142,26 @@ class YnabQaClient:
             raise QaSafetyError(
                 "Mutation must match exactly one expected manifest entry without payload differences"
             )
+        authorization_fingerprint = json.dumps(
+            {
+                "campaignId": campaign_id,
+                "operation": operation,
+                "payload": payload,
+                "targetPlanId": identity.plan_id,
+                "targetTransactionId": transaction_id,
+                "importId": (
+                    payload.get("transaction", payload).get("import_id")
+                    if operation == "create" and isinstance(payload, Mapping)
+                    else None
+                ),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        with self._manifest_authorization_lock:
+            if authorization_fingerprint in self._consumed_manifest_authorizations:
+                raise QaSafetyError("Matching manifest authorization was already consumed")
+            self._consumed_manifest_authorizations.add(authorization_fingerprint)
         suffix = f"/{transaction_id}" if transaction_id else ""
         return self._request(method, f"plans/{identity.plan_id}/transactions{suffix}", payload)
 

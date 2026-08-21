@@ -31,6 +31,7 @@ class QaClientGuardTest(unittest.TestCase):
             "date": "2026-08-21",
             "payee_name": "QA Merchant",
             "memo": "BOD QA QA-run:A4",
+            "import_id": "BOD-QA:QA-run:A4",
         }}
 
     def manifest_entry(self, operation, payload=None, transaction_id=None):
@@ -131,6 +132,64 @@ class QaClientGuardTest(unittest.TestCase):
                         campaign_id="QA-run", expected_manifest=manifest, confirmation="YES",
                     )
                 request.assert_not_called()
+
+    def test_create_requires_exact_nonempty_manifest_bound_import_id(self):
+        authorized = self.create_payload()
+        absent = {
+            "transaction": {
+                key: value for key, value in authorized["transaction"].items()
+                if key != "import_id"
+            }
+        }
+        empty = {"transaction": {**authorized["transaction"], "import_id": ""}}
+        mismatched = {"transaction": {**authorized["transaction"], "import_id": "BOD-QA:other"}}
+        invalid_cases = (
+            (absent, absent),
+            (empty, empty),
+            (mismatched, authorized),
+        )
+        for payload, manifest_payload in invalid_cases:
+            with self.subTest(payload=payload), patch.object(self.client, "_request") as request:
+                with self.assertRaises(QaSafetyError):
+                    self.client.transaction_write(
+                        "POST", self.parent, payload, transaction_id=None,
+                        campaign_id="QA-run",
+                        expected_manifest=[self.manifest_entry("create", manifest_payload)],
+                        confirmation="YES",
+                    )
+                request.assert_not_called()
+
+    def test_each_matching_manifest_authorization_is_single_use_before_http(self):
+        cases = (
+            ("POST", self.create_payload(), None, "create"),
+            (
+                "PUT",
+                {"transaction": {"amount": -20, "date": "2026-08-22"}},
+                "transaction-1",
+                "update",
+            ),
+            ("DELETE", None, "transaction-1", "delete"),
+        )
+        for method, payload, transaction_id, operation in cases:
+            with self.subTest(operation=operation):
+                client = YnabQaClient("test-token", IDS)
+                manifest = [self.manifest_entry(operation, payload, transaction_id)]
+                with patch.object(client, "_request", return_value={"ok": True}) as request:
+                    self.assertEqual(
+                        client.transaction_write(
+                            method, self.parent, payload, transaction_id=transaction_id,
+                            campaign_id="QA-run", expected_manifest=manifest,
+                            confirmation="YES",
+                        ),
+                        {"ok": True},
+                    )
+                    with self.assertRaises(QaSafetyError):
+                        client.transaction_write(
+                            method, self.parent, payload, transaction_id=transaction_id,
+                            campaign_id="QA-run", expected_manifest=manifest,
+                            confirmation="YES",
+                        )
+                request.assert_called_once()
 
     def test_update_requires_exact_transaction_id_and_payload(self):
         payload = {"transaction": {"amount": -20, "date": "2026-08-22"}}
