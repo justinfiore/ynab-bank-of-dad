@@ -7,7 +7,7 @@ from pathlib import Path
 QA_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(QA_ROOT / "report"))
 
-from render_report import load_receipts, recommendation, render
+from render_report import evidence_wording, load_receipts, recommendation, render
 sys.path.insert(0, str(QA_ROOT))
 from lib.campaign_matrix import SCENARIOS, prepare_blocked_campaign
 
@@ -36,7 +36,7 @@ class ReportTest(unittest.TestCase):
             "assertions": [{"name": "proof", "status": "PASS"}],
             "reason": "complete evidence",
             "status": "PASS",
-            "artifact_links": [],
+            "artifact_links": ["proof.json"],
         }
 
     def test_matrix_contains_every_planned_a_through_d_scenario(self):
@@ -74,7 +74,9 @@ class ReportTest(unittest.TestCase):
     def test_recommendation_requires_complete_exact_a_through_d_matrix(self):
         receipts = [self.complete_receipt(item[0]) for item in SCENARIOS]
         self.assertEqual(
-            recommendation(receipts, True, campaign_id="QA-test")[0],
+            recommendation(
+                receipts, True, campaign_id="QA-test", evidence_complete=True
+            )[0],
             "READY FOR LIMITED FAMILY PILOT",
         )
 
@@ -88,6 +90,90 @@ class ReportTest(unittest.TestCase):
                     recommendation(incomplete, True, campaign_id="QA-test")[0],
                     "NOT READY",
                 )
+
+    def test_pass_receipt_rejects_any_non_pass_assertion(self):
+        receipts = [self.complete_receipt(item[0]) for item in SCENARIOS]
+        receipts[0]["assertions"].append({"name": "contradiction", "status": "FAIL"})
+
+        self.assertEqual(
+            recommendation(
+                receipts, True, campaign_id="QA-test", evidence_complete=True
+            )[0],
+            "NOT READY",
+        )
+
+    def test_pass_live_receipt_requires_dry_run_before_live(self):
+        receipts = [self.complete_receipt(item[0]) for item in SCENARIOS]
+        live_receipt = next(item for item in receipts if item["scenario_id"] == "B1-live-create")
+        live_receipt["safety"]["dry_run_passed_before_live"] = False
+
+        self.assertEqual(
+            recommendation(
+                receipts, True, campaign_id="QA-test", evidence_complete=True
+            )[0],
+            "NOT READY",
+        )
+
+    def test_pass_receipt_requires_matching_expected_and_observed_counts(self):
+        receipts = [self.complete_receipt(item[0]) for item in SCENARIOS]
+        receipts[0]["observed"] = {"creates": 1, "updates": 0, "deletes": 0}
+
+        self.assertEqual(
+            recommendation(
+                receipts, True, campaign_id="QA-test", evidence_complete=True
+            )[0],
+            "NOT READY",
+        )
+
+    def test_write_assertions_must_match_manifest_and_environment(self):
+        receipts = [self.complete_receipt(item[0]) for item in SCENARIOS]
+        cases = (
+            ({"actual_api_write_count": 1}, {"actual_api_write_count": 1}),
+            ({"actual_api_write_count": 0}, {"actual_api_write_count": 1}),
+        )
+        for environment_counts, manifest_counts in cases:
+            with self.subTest(
+                environment=environment_counts, manifest=manifest_counts
+            ):
+                environment = {"all_targets_allowlisted": True, **environment_counts}
+                manifest = {
+                    "campaign_id": "QA-test", "secret_scan": "PASS", **manifest_counts
+                }
+                _target, _writes, complete = evidence_wording(
+                    receipts, environment, manifest
+                )
+                self.assertEqual(
+                    recommendation(
+                        receipts, True, campaign_id="QA-test",
+                        evidence_complete=complete,
+                    )[0],
+                    "NOT READY",
+                )
+
+    def test_pass_receipt_rejects_absent_required_evidence(self):
+        for field, value in (
+            ("api_observation", ""),
+            ("artifact_links", []),
+            ("reason", ""),
+        ):
+            with self.subTest(field=field):
+                receipts = [self.complete_receipt(item[0]) for item in SCENARIOS]
+                live_receipt = next(
+                    item for item in receipts if item["scenario_id"] == "B1-live-create"
+                )
+                live_receipt[field] = value
+                self.assertEqual(
+                    recommendation(
+                        receipts, True, campaign_id="QA-test", evidence_complete=True
+                    )[0],
+                    "NOT READY",
+                )
+
+        receipts = [self.complete_receipt(item[0]) for item in SCENARIOS]
+        self.assertEqual(
+            recommendation(receipts, True, campaign_id="QA-test")[0],
+            "NOT READY",
+        )
 
     def test_report_derives_write_wording_and_fails_closed_on_missing_write_evidence(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -111,12 +197,25 @@ class ReportTest(unittest.TestCase):
                 receipt["safety"]["api_write_attempts"] = 1 if receipt["scenario_id"] in {
                     "B1-live-create", "C1-financial-update"
                 } else 0
+                if receipt["scenario_id"] == "B1-live-create":
+                    receipt["expected"]["creates"] = 1
+                    receipt["observed"]["creates"] = 1
+                elif receipt["scenario_id"] == "C1-financial-update":
+                    receipt["expected"]["updates"] = 1
+                    receipt["observed"]["updates"] = 1
                 (directory / "receipt.json").write_text(json.dumps(receipt))
+                (directory / "proof.json").write_text("{}")
 
             report = render(root).read_text()
+            self.assertIn("READY FOR LIMITED FAMILY PILOT", report)
             self.assertIn("2 actual API writes", report)
             self.assertIn("2 transaction write attempts", report)
             self.assertNotIn("No API write was attempted", report)
+
+            (root / "scenarios" / "B1-live-create" / "proof.json").unlink()
+            report = render(root).read_text()
+            self.assertIn("NOT READY", report)
+            self.assertIn("artifact evidence is incomplete", report)
 
             (root / "campaign-manifest.json").write_text(json.dumps({
                 "campaign_id": "QA-test", "secret_scan": "PASS",

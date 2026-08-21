@@ -25,6 +25,7 @@ REQUIRED_RECEIPT_FIELDS = {
 }
 MUTATION_COUNTS = {"creates", "updates", "deletes"}
 ALLOWED_STATUSES = {"PASS", "FAIL", "BLOCKED", "NOT_RUN"}
+SCENARIO_KINDS = {scenario_id: kind for scenario_id, _requirement, kind in SCENARIOS}
 
 
 def esc(value) -> str:
@@ -65,15 +66,60 @@ def _receipt_problem(receipts: list[dict], campaign_id: str | None) -> str | Non
         if any(
             not isinstance(receipt.get(field), Mapping)
             or set(receipt[field]) != MUTATION_COUNTS
+            or any(type(value) is not int or value < 0 for value in receipt[field].values())
             for field in ("expected", "observed")
         ):
             return "One or more required scenario receipts have incomplete mutation counts."
+        if receipt.get("status") != "PASS":
+            continue
+        if any(
+            not isinstance(receipt.get(field), str) or not receipt[field].strip()
+            for field in (
+                "campaign_id", "scenario_id", "phase", "requirement", "branch", "commit",
+                "dry_run", "live_run", "api_observation", "sqlite_audit", "reason",
+            )
+        ):
+            return "A PASS receipt is missing required evidence."
+        artifact_links = receipt.get("artifact_links")
+        if (
+            not isinstance(artifact_links, list)
+            or not artifact_links
+            or any(not isinstance(item, str) or not item.strip() for item in artifact_links)
+        ):
+            return "A PASS receipt is missing required artifact evidence."
+        if any(
+            not isinstance(assertion, Mapping)
+            or not isinstance(assertion.get("name"), str)
+            or not assertion["name"].strip()
+            or assertion.get("status") != "PASS"
+            for assertion in receipt["assertions"]
+        ):
+            return "A PASS receipt contains an incomplete or non-PASS assertion."
+        if receipt["expected"] != receipt["observed"]:
+            return "A PASS receipt has different expected and observed mutation counts."
+        if (
+            safety.get("all_targets_allowlisted") is not True
+            or safety.get("family_budget_targets") != []
+            or type(safety.get("api_write_attempts")) is not int
+            or safety["api_write_attempts"] < 0
+        ):
+            return "A PASS receipt has incomplete or unsafe target/write evidence."
+        scenario_kind = SCENARIO_KINDS.get(receipt["scenario_id"])
+        if scenario_kind == "live" and safety.get("dry_run_passed_before_live") is not True:
+            return "A PASS live-scenario receipt does not prove dry-run completion before live use."
+        if scenario_kind == "live" and any(
+            receipt[field] != "PASS"
+            for field in ("dry_run", "live_run", "api_observation", "sqlite_audit")
+        ):
+            return "A PASS live-scenario receipt has non-PASS required execution evidence."
+        if scenario_kind == "fixture" and receipt["dry_run"] != "PASS":
+            return "A PASS fixture receipt does not contain PASS dry-run evidence."
     return None
 
 
 def recommendation(
     receipts: list[dict], provisioning_complete: bool, *, campaign_id: str | None = None,
-    evidence_complete: bool = True,
+    evidence_complete: bool = False,
 ) -> tuple[str, str]:
     if not provisioning_complete:
         return "NOT READY", "Gate 0 provisioning is incomplete; no mutation-dependent proof is valid."
@@ -81,7 +127,7 @@ def recommendation(
     if problem:
         return "NOT READY", problem
     if not evidence_complete:
-        return "NOT READY", "Target, write, or secret-scan evidence is incomplete; readiness fails closed."
+        return "NOT READY", "Target, write, secret-scan, or artifact evidence is incomplete; readiness fails closed."
     statuses = {item["status"] for item in receipts}
     if "FAIL" in statuses or "BLOCKED" in statuses or "NOT_RUN" in statuses:
         return "NOT READY", "One or more required scenarios failed or did not execute."
@@ -110,10 +156,21 @@ def evidence_wording(
         item.get("api_write_attempts") if isinstance(item, Mapping) else None
         for item in safety_items
     ]
+    asserted_write_counts = [
+        sum(item.values())
+        if isinstance(item, Mapping)
+        and set(item) == MUTATION_COUNTS
+        and all(type(value) is int and value >= 0 for value in item.values())
+        else None
+        for item in (receipt.get("observed") for receipt in receipts)
+    ]
     write_complete = (
-        isinstance(manifest_writes, int) and manifest_writes >= 0
+        type(manifest_writes) is int and manifest_writes >= 0
+        and type(environment_writes) is int
         and manifest_writes == environment_writes
-        and all(isinstance(item, int) and item >= 0 for item in attempt_counts)
+        and all(type(item) is int and item >= 0 for item in attempt_counts)
+        and all(item is not None for item in asserted_write_counts)
+        and sum(asserted_write_counts) == manifest_writes
     )
     if write_complete:
         attempts = sum(attempt_counts)
@@ -133,6 +190,24 @@ def evidence_wording(
     return target_wording, write_wording, evidence_complete
 
 
+def artifact_evidence_complete(campaign_root: Path, receipts: list[dict]) -> bool:
+    root = campaign_root.resolve()
+    for receipt in receipts:
+        if receipt.get("status") != "PASS":
+            continue
+        scenario_id = receipt.get("scenario_id")
+        links = receipt.get("artifact_links")
+        if not isinstance(scenario_id, str) or not isinstance(links, list) or not links:
+            return False
+        for link in links:
+            if not isinstance(link, str) or not link.strip():
+                return False
+            candidate = (campaign_root / "scenarios" / scenario_id / link).resolve()
+            if not candidate.is_relative_to(root) or not candidate.exists():
+                return False
+    return True
+
+
 def render(campaign_root: Path) -> Path:
     environment = json.loads((campaign_root / "environment.json").read_text(encoding="utf-8"))
     manifest = json.loads((campaign_root / "campaign-manifest.json").read_text(encoding="utf-8"))
@@ -145,7 +220,9 @@ def render(campaign_root: Path) -> Path:
         receipts,
         environment.get("provisioning_complete") is True,
         campaign_id=manifest.get("campaign_id"),
-        evidence_complete=evidence_complete,
+        evidence_complete=(
+            evidence_complete and artifact_evidence_complete(campaign_root, receipts)
+        ),
     )
     overall = "PASS" if recommendation_text != "NOT READY" else ("FAIL" if counts["FAIL"] else "BLOCKED")
     facts = "".join(
