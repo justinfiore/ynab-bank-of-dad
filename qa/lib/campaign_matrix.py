@@ -38,10 +38,56 @@ SCENARIOS = (
 )
 
 
+def prepare_blocked_campaign(root: Path, branch: str, commit: str, discovery_path: Path) -> None:
+    discovery = json.loads(discovery_path.read_text(encoding="utf-8"))
+    if not discovery.get("all_targets_allowlisted"):
+        raise ValueError("Cannot prepare campaign: exact QA allowlist did not pass")
+    if discovery.get("provisioning_complete"):
+        raise ValueError("Cannot prepare blocked campaign: provisioning is complete")
+    if discovery.get("api_write_count") != 0:
+        raise ValueError("Cannot prepare read-only blocked campaign with API writes")
+    environment = {
+        "campaign_id": root.name,
+        "branch": branch,
+        "commit": commit,
+        "targets": "Four exact disposable QA plans only; immutable IDs validated internally and redacted",
+        "all_targets_allowlisted": True,
+        "provisioning_complete": False,
+        "missing_parent_categories": discovery.get("missing_parent_categories", []),
+        "missing_child_accounts": discovery.get("missing_child_accounts", {}),
+        "actual_api_write_count": 0,
+    }
+    manifest = {
+        "campaign_id": root.name,
+        "status": "BLOCKED",
+        "actual_api_write_count": 0,
+        "cleanup": "No tagged transactions were created or modified; cleanup was unnecessary.",
+        "release_recommendation": "NOT READY",
+    }
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "environment.json").write_text(
+        json.dumps(environment, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    (root / "campaign-manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    build_blocked_campaign(root, branch, commit)
+
+
 def build_blocked_campaign(root: Path, branch: str, commit: str) -> None:
     environment = json.loads((root / "environment.json").read_text(encoding="utf-8"))
     campaign_id = environment["campaign_id"]
-    blocker = "Gate 0 BLOCKED: all eight required parent QA categories are missing."
+    missing_categories = environment.get("missing_parent_categories", [])
+    missing_accounts = environment.get("missing_child_accounts", {})
+    blocker_parts = []
+    if missing_categories:
+        blocker_parts.append("missing required parent categories: " + ", ".join(missing_categories))
+    if missing_accounts:
+        blocker_parts.append(
+            "missing required child accounts: "
+            + ", ".join(f"{name} ({', '.join(accounts)})" for name, accounts in missing_accounts.items())
+        )
+    blocker = "Gate 0 BLOCKED: " + "; ".join(blocker_parts) + "."
     for scenario_id, requirement, kind in SCENARIOS:
         status = "PASS" if scenario_id in {"A1-baseline", "A2-guard-rejection"} else "BLOCKED"
         if scenario_id == "A1-baseline":

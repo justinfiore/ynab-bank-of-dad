@@ -8,7 +8,7 @@ h1,h2 { line-height:1.15; }
 .PASS { background:#d8f3dc; color:#176b2c; } .FAIL { background:#ffd9dc; color:#9b1c27; }
 .BLOCKED { background:#fff0c2; color:#755600; } .NOT_RUN { background:#e9edf2; color:#43505c; }
 .facts { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; }
-.facts div { border-left:4px solid #64748b; padding-left:12px; }
+.facts div { border-left:4px solid #64748b; padding-left:12px; min-width:0; overflow-wrap:anywhere; }
 table { width:100%; border-collapse:collapse; background:var(--card); }
 th,td { border:1px solid var(--line); padding:9px; vertical-align:top; text-align:left; }
 th { background:#eef2f6; position:sticky; top:0; }

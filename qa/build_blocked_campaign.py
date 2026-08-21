@@ -8,7 +8,7 @@ from pathlib import Path
 QA_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(QA_ROOT))
 
-from lib.campaign_matrix import build_blocked_campaign
+from lib.campaign_matrix import prepare_blocked_campaign
 
 
 def main() -> None:
@@ -16,8 +16,9 @@ def main() -> None:
     parser.add_argument("campaign_root", type=Path)
     parser.add_argument("--branch", required=True)
     parser.add_argument("--commit", required=True)
+    parser.add_argument("--discovery", required=True, type=Path)
     args = parser.parse_args()
-    build_blocked_campaign(args.campaign_root, args.branch, args.commit)
+    prepare_blocked_campaign(args.campaign_root, args.branch, args.commit, args.discovery)
 
 
 if __name__ == "__main__":

@@ -46,7 +46,11 @@ def render(campaign_root: Path) -> Path:
             ("Commit", environment["commit"]),
             ("Statuses", f"PASS {counts['PASS']} · FAIL {counts['FAIL']} · BLOCKED {counts['BLOCKED']} · NOT_RUN {counts['NOT_RUN']}"),
             ("Targets", "Four exact disposable QA plans only"),
-            ("Secrets", "Redaction scan required before bundle finalization"),
+            ("Secrets", (
+                "PASS — no raw token or Authorization header value found"
+                if manifest.get("secret_scan") == "PASS"
+                else "PENDING — final bundle scan not yet recorded"
+            )),
         )
     )
     rows = []

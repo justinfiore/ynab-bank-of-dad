@@ -35,11 +35,36 @@ Run the harness unit tests with:
 python3 -m unittest discover -s qa/tests -v
 ```
 
+Perform a fresh fail-closed, read-only API discovery after loading the four
+test-token environment variables locally:
+
+```bash
+python3 qa/discover_read_only.py \
+  --config qa/config/qa-sync.yaml \
+  --campaign-root qa/artifacts/<campaign-id>
+```
+
+The command validates every exact display-name/full-UUID pair before reading
+categories, accounts, or transactions. It issues GET requests only, retains
+only `BOD QA`-tagged transactions, and writes no UUIDs, resource IDs, tokens,
+headers, or raw responses to its evidence.
+
 Render an existing campaign with:
 
 ```bash
 python3 qa/report/render_report.py qa/artifacts/<campaign-id>
 ```
+
+After receipts, copied test reports, report HTML, and screenshots are present,
+load the local test-token environment and finalize the portable bundle:
+
+```bash
+python3 qa/finalize_evidence.py qa/artifacts/<campaign-id>
+```
+
+Finalization rejects raw token values, Authorization header values, full UUIDs
+outside ignored internal config, incomplete matrices, and nonzero blocked-campaign
+write counts. It writes the summary, per-file checksums, ZIP, and ZIP checksum.
 
 `qa/artifacts/`, the completed config, raw discovery snapshots, tokens, state
 databases, and campaign state are Gitignored. Report receipts must use one of
