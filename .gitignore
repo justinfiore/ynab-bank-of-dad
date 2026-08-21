@@ -12,3 +12,5 @@ qa/artifacts/
 qa/config/qa-sync.yaml
 qa/discovered-provisioning.json
 qa/.campaign-state/
+__pycache__/
+*.pyc
