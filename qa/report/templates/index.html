@@ -7,7 +7,7 @@
 <g fill="#fff" stroke="#64748b" stroke-width="2"><rect x="15" y="45" width="150" height="55" rx="8"/><rect x="250" y="45" width="150" height="55" rx="8"/><rect x="485" y="45" width="150" height="55" rx="8"/><rect x="720" y="45" width="165" height="55" rx="8"/></g>
 <g font-family="system-ui" font-size="14" text-anchor="middle"><text x="90" y="77">GET discovery</text><text x="325" y="69">Exact name + full ID</text><text x="325" y="87">allowlist</text><text x="560" y="69">Provisioning +</text><text x="560" y="87">dry-run gate</text><text x="802" y="69">One-cycle tagged</text><text x="802" y="87">transaction write</text></g>
 <g stroke="#64748b" stroke-width="2" marker-end="url(#a)"><line x1="165" y1="73" x2="245" y2="73"/><line x1="400" y1="73" x2="480" y2="73"/><line x1="635" y1="73" x2="715" y2="73"/></g></svg>
-<p class="muted">This campaign stopped at provisioning; the final write node was never reached.</p></section>
+<p class="muted">{{SAFETY_OUTCOME}}</p></section>
 <section class="card"><h2>Scenario matrix</h2><p><button data-filter="ALL">All</button> <button data-filter="PASS">PASS</button> <button data-filter="FAIL">FAIL</button> <button data-filter="BLOCKED">BLOCKED</button> <button data-filter="NOT_RUN">NOT_RUN</button></p>
 <table><thead><tr><th>ID</th><th>Requirement</th><th>Dry run</th><th>Live</th><th>API observation</th><th>SQLite audit</th><th>Status</th></tr></thead><tbody>{{ROWS}}</tbody></table></section>
 <section><h2>Per-scenario evidence</h2>{{SCENARIOS}}</section>
