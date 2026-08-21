@@ -29,7 +29,7 @@ IDS = {
 }
 GROUP_ID = "20000000-0000-4000-8000-000000000001"
 _UUID_TEXT_FOR_TEST = re.compile(
-    r"(?i)\\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\b"
+    r"(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b"
 )
 
 
@@ -124,6 +124,11 @@ class ConfigLoadingTest(unittest.TestCase):
             copied.write_text(local.read_text(encoding="utf-8"), encoding="utf-8")
             with self.assertRaises(ProvisioningBlocked):
                 load_local_identities(copied, required_path=local)
+
+            link = root / "qa-sync.yaml"
+            link.symlink_to(local)
+            with self.assertRaises(ProvisioningBlocked):
+                load_local_identities(link, required_path=link)
 
     def test_incomplete_non_uuid_or_duplicate_pairs_fail_closed(self):
         cases = (
@@ -312,6 +317,41 @@ class LiveProvisioningTest(unittest.TestCase):
                     confirmation="YES",
                 )
             self.assertNotIn("must-not-be-recorded", receipt_path.read_text(encoding="utf-8"))
+
+    def test_live_blocks_if_category_state_changes_immediately_before_first_write(self):
+        class ChangingClient(FakeClient):
+            def __init__(self):
+                super().__init__(category_response=categories_response(True))
+                self.category_reads = 0
+
+            def get(self, identity, resource):
+                self.category_reads += 1
+                self.calls.append(("GET", f"/v1/plans/{identity.plan_id}/{resource}"))
+                if self.category_reads >= 3:
+                    return categories_response(True, REQUIRED_PARENT_CATEGORIES[:1])
+                return self.category_response
+
+        with tempfile.TemporaryDirectory() as directory:
+            client = ChangingClient()
+            artifact, _ = self._artifact(directory, client)
+            with self.assertRaises(ProvisioningBlocked):
+                execute_provisioning(
+                    identities(), client, artifact, Path(directory) / "receipt.json",
+                    campaign_id="qa-campaign-1", provisioning_tag="BOD-QA-PROVISION-1",
+                    confirmation="YES",
+                )
+            self.assertFalse(any(call[0] == "POST" for call in client.calls))
+
+    def test_receipt_cannot_overwrite_reviewed_dry_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            client = FakeClient(category_response=categories_response(True))
+            artifact, _ = self._artifact(directory, client)
+            with self.assertRaises(ProvisioningBlocked):
+                execute_provisioning(
+                    identities(), client, artifact, artifact,
+                    campaign_id="qa-campaign-1", provisioning_tag="BOD-QA-PROVISION-1",
+                    confirmation="YES",
+                )
 
 
 class CategoryClientRouteTest(unittest.TestCase):

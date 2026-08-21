@@ -59,10 +59,15 @@ def load_local_identities(
     path: Path = LOCAL_QA_CONFIG, *, required_path: Path = LOCAL_QA_CONFIG
 ) -> dict[str, PlanIdentity]:
     """Load identities only from the one ignored local QA config."""
-    candidate = path.resolve()
-    required = required_path.resolve()
-    if candidate != required or candidate.name != "qa-sync.yaml":
+    lexical_candidate = path.absolute()
+    lexical_required = required_path.absolute()
+    if (
+        lexical_candidate != lexical_required
+        or lexical_candidate.name != "qa-sync.yaml"
+        or lexical_candidate.is_symlink()
+    ):
         raise ProvisioningBlocked("Only the ignored local qa-sync.yaml is accepted")
+    candidate = lexical_candidate.resolve()
     if not candidate.is_file():
         raise ProvisioningBlocked("Ignored local QA config is missing")
     try:
@@ -330,6 +335,8 @@ def execute_provisioning(
     """Re-read, compare the dry run exactly, then execute manifest-bound POSTs."""
     if confirmation != "YES":
         raise ProvisioningBlocked("QA_CONFIRM_PROVISIONING_MUTATIONS=YES is required")
+    if dry_run_path.resolve() == receipt_path.resolve():
+        raise ProvisioningBlocked("Receipt must not overwrite the reviewed dry-run artifact")
     expected = _read_manifest(dry_run_path)
     current = build_dry_run_manifest(
         identities, client, campaign_id=campaign_id, provisioning_tag=provisioning_tag
@@ -353,11 +360,18 @@ def execute_provisioning(
         "operations": receipts,
     }
     try:
+        category_response = client.get(parent, "categories")
+        group_id, existing_required = _category_state(category_response)
+        missing_now = [
+            name for name in REQUIRED_PARENT_CATEGORIES if name not in existing_required
+        ]
+        state_now = "ABSENT" if group_id is None else "PRESENT"
+        if (
+            state_now != expected.get("categoryGroupState")
+            or missing_now != expected.get("missingCategoryNames")
+        ):
+            raise ProvisioningBlocked("Category state changed after dry-run authorization")
         if expected.get("categoryGroupState") == "PRESENT":
-            category_response = client.get(parent, "categories")
-            group_id, _ = _category_state(category_response)
-            if group_id is None:
-                raise ProvisioningBlocked("Dedicated group disappeared before execution")
             category_operations = [
                 item for item in expected["operations"] if item.get("kind") == "createCategory"
             ]
