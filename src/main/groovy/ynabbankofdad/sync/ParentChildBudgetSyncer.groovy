@@ -9,6 +9,7 @@ import ynabbankofdad.sync.reconcile.*
 import ynabbankofdad.sync.state.*
 import ynabbankofdad.ynab.*
 
+import java.time.Clock
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 
@@ -59,6 +60,7 @@ class ParentChildBudgetSyncer {
     final YnabBudgetRepository parentRepository
     final SyncStateRepository stateStore
     final List<ChildSyncContext> childContexts
+    final Clock clock
     final SyncRunCoordinator coordinator
     final ReconciliationSyncStateRepository reconciliationState
     final ReconciliationOperationApplier reconciliationApplier
@@ -73,6 +75,21 @@ class ParentChildBudgetSyncer {
         SyncStateRepository stateStore,
         List<ChildSyncContext> childContexts
     ) {
+        this(runtimeConfig, syncConfig, dryRun, stateDbPath, maxCycles, parentRepository, stateStore,
+            childContexts, Clock.systemDefaultZone())
+    }
+
+    ParentChildBudgetSyncer(
+        RuntimeConfig runtimeConfig,
+        SyncConfig syncConfig,
+        boolean dryRun,
+        String stateDbPath,
+        int maxCycles,
+        YnabBudgetRepository parentRepository,
+        SyncStateRepository stateStore,
+        List<ChildSyncContext> childContexts,
+        Clock clock
+    ) {
         this.runtimeConfig = runtimeConfig
         this.syncConfig = syncConfig
         this.dryRun = dryRun
@@ -81,6 +98,7 @@ class ParentChildBudgetSyncer {
         this.parentRepository = parentRepository
         this.stateStore = stateStore
         this.childContexts = childContexts
+        this.clock = clock
         this.coordinator = new SyncRunCoordinator(stateStore, dryRun)
         if (!(stateStore instanceof ReconciliationSyncStateRepository)) {
             throw new IllegalArgumentException('Parent-child reconciliation requires reconciliation-capable sync state')
@@ -316,7 +334,7 @@ class ParentChildBudgetSyncer {
         List<ActiveMirrorReference> mirrors = prior.collectMany { SourceEntityKey source ->
             activeMirrorsForSource(source)
         }
-        LocalDate cutoff = LocalDate.now().minusDays(syncConfig.state.moneyMovementLookbackDays as long)
+        LocalDate cutoff = LocalDate.now(clock).minusDays(syncConfig.state.moneyMovementLookbackDays as long)
         List<MovementDecision> decisions = new MoneyMovementReconciler(planningContexts, categoriesById)
             .reconcile(observation, mirrors, cutoff).collect { MovementDecision decision ->
                 NormalizedMovementObservation current = observation.observations.find { it.source == decision.source }

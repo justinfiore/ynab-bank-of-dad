@@ -18,6 +18,9 @@ import org.slf4j.LoggerFactory
 import java.nio.file.Path
 import java.nio.file.Files
 import java.sql.DriverManager
+import java.time.Clock
+import java.time.Instant
+import java.time.ZoneOffset
 
 import static com.github.tomakehurst.wiremock.client.WireMock.*
 
@@ -1000,7 +1003,8 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
             stateStore,
             syncConfig.childBudgets.collect { ChildBudgetSyncTarget target ->
                 new ChildSyncContext(target, new YnabBudgetRepository(buildClient(tokenForChild(target.childKey))))
-            }
+            },
+            Clock.fixed(Instant.parse('2026-08-01T12:00:00Z'), ZoneOffset.UTC)
         )
     }
 

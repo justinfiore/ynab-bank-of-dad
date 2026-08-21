@@ -7,3 +7,4 @@ config.yaml
 logs/
 syncstate.db
 .env
+tokens.txt

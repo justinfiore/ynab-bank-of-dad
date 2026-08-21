@@ -18,6 +18,13 @@ tasks.register('runSyncer', JavaExec) {
     mainClass = 'ynabbankofdad.sync.ParentChildBudgetSyncer'
 }
 
+tasks.register('qaInspectProvisioning', JavaExec) {
+    group = 'verification'
+    description = 'Compares an offline QA discovery snapshot with required provisioning.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'ynabbankofdad.qa.QaProvisioningInspectorCli'
+}
+
 def integrationTestPatterns = ['**/*WireMockSpec.class', '**/*IntegrationSpec.class']
 def nonIntegrationTestExcludes = integrationTestPatterns
 

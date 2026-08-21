@@ -1,0 +1,69 @@
+# Offline QA evidence configuration. Copy this file to qa/config/qa-sync.yaml
+# and replace every fullId value with the complete immutable plan UUID copied
+# manually from YNAB. A UUID suffix is never sufficient.
+budgets:
+  parent:
+    displayName: "Jorsten's Plan"
+    fullId: REPLACE_WITH_FULL_IMMUTABLE_PLAN_UUID
+  children:
+    - displayName: "Jorsten Jr's Plan"
+      fullId: REPLACE_WITH_FULL_IMMUTABLE_PLAN_UUID
+    - displayName: "Borsten's Plan"
+      fullId: REPLACE_WITH_FULL_IMMUTABLE_PLAN_UUID
+    - displayName: "Thorsten's Plan"
+      fullId: REPLACE_WITH_FULL_IMMUTABLE_PLAN_UUID
+
+provisioning:
+  parentCategories:
+    - QA Jorsten Jr Silver
+    - QA Jorsten Jr Bronze
+    - QA Borsten Silver
+    - QA Borsten Bronze
+    - QA Thorsten Silver
+    - QA Thorsten Bronze
+    - QA Unmapped
+    - QA Transfer Clearing
+  requiredChildAccounts:
+    - Silver
+    - Bronze
+
+mappingRequirements:
+  - parentCategoryName: QA Jorsten Jr Silver
+    childBudgetDisplayName: "Jorsten Jr's Plan"
+    childAccountName: Silver
+    mapped: true
+  - parentCategoryName: QA Jorsten Jr Bronze
+    childBudgetDisplayName: "Jorsten Jr's Plan"
+    childAccountName: Bronze
+    mapped: true
+  - parentCategoryName: QA Borsten Silver
+    childBudgetDisplayName: "Borsten's Plan"
+    childAccountName: Silver
+    mapped: true
+  - parentCategoryName: QA Borsten Bronze
+    childBudgetDisplayName: "Borsten's Plan"
+    childAccountName: Bronze
+    mapped: true
+  - parentCategoryName: QA Thorsten Silver
+    childBudgetDisplayName: "Thorsten's Plan"
+    childAccountName: Silver
+    mapped: true
+  - parentCategoryName: QA Thorsten Bronze
+    childBudgetDisplayName: "Thorsten's Plan"
+    childAccountName: Bronze
+    mapped: true
+  - parentCategoryName: QA Unmapped
+    mapped: false
+    purpose: Must remain intentionally outside child mappings.
+  - parentCategoryName: QA Transfer Clearing
+    mapped: false
+    purpose: Reserved for transfer-clearing QA and not mapped to a child account.
+
+# Required input to the pure future-live validator. This repository exposes no
+# live QA mutation runner in Phase A / Task 1. Replace every value for a reviewed
+# future scenario; the validator rejects a missing or empty manifest.
+expectedMutationManifest:
+  - operation: REPLACE_WITH_CREATE_UPDATE_OR_DELETE
+    targetBudgetDisplayName: REPLACE_WITH_EXACT_QA_DISPLAY_NAME
+    targetBudgetFullId: REPLACE_WITH_FULL_IMMUTABLE_PLAN_UUID
+    targetResourceId: REPLACE_WITH_EXPECTED_TARGET_RESOURCE_ID
