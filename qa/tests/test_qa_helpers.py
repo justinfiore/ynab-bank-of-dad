@@ -24,6 +24,27 @@ class QaClientGuardTest(unittest.TestCase):
         self.client = YnabQaClient("test-token", IDS)
         self.parent = PlanIdentity("Jorsten's Plan", IDS["Jorsten's Plan"])
 
+    def create_payload(self):
+        return {"transaction": {
+            "account_id": "account-1",
+            "amount": -10,
+            "date": "2026-08-21",
+            "payee_name": "QA Merchant",
+            "memo": "BOD QA QA-run:A4",
+        }}
+
+    def manifest_entry(self, operation, payload=None, transaction_id=None):
+        entry = {
+            "operation": operation,
+            "targetPlanId": self.parent.plan_id,
+            "campaignId": "QA-run",
+        }
+        if payload is not None:
+            entry["payload"] = payload
+        if transaction_id is not None:
+            entry["targetTransactionId"] = transaction_id
+        return entry
+
     def test_exact_name_and_id_are_both_required(self):
         with self.assertRaises(QaSafetyError):
             self.client.require_allowed(PlanIdentity("Jorsten's Plan", IDS["Borsten's Plan"]))
@@ -34,10 +55,10 @@ class QaClientGuardTest(unittest.TestCase):
                 self.client.transaction_write(
                     "POST",
                     self.parent,
-                    {"transaction": {"memo": "BOD QA QA-run:A4"}},
+                    self.create_payload(),
                     transaction_id=None,
                     campaign_id="QA-run",
-                    expected_manifest=[{"operation": "create", "targetPlanId": self.parent.plan_id}],
+                    expected_manifest=[self.manifest_entry("create", self.create_payload())],
                     confirmation="NO",
                 )
             request.assert_not_called()
@@ -51,10 +72,89 @@ class QaClientGuardTest(unittest.TestCase):
                     {"transaction": {"memo": "untagged"}},
                     transaction_id=None,
                     campaign_id="QA-run",
-                    expected_manifest=[{"operation": "create", "targetPlanId": self.parent.plan_id}],
+                    expected_manifest=[self.manifest_entry(
+                        "create", {"transaction": {"memo": "untagged"}}
+                    )],
                     confirmation="YES",
                 )
             request.assert_not_called()
+
+    def test_create_requires_one_exact_campaign_and_payload_match(self):
+        payload = self.create_payload()
+        with patch.object(self.client, "_request", return_value={"ok": True}) as request:
+            result = self.client.transaction_write(
+                "POST",
+                self.parent,
+                payload,
+                transaction_id=None,
+                campaign_id="QA-run",
+                expected_manifest=[self.manifest_entry("create", payload)],
+                confirmation="YES",
+            )
+
+        self.assertEqual(result, {"ok": True})
+        request.assert_called_once_with(
+            "POST", f"plans/{self.parent.plan_id}/transactions", payload
+        )
+
+    def test_create_rejects_payload_difference_and_unexpected_mutation_field(self):
+        for changed_payload in (
+            {"transaction": {**self.create_payload()["transaction"], "amount": -11}},
+            {"transaction": {**self.create_payload()["transaction"], "approved": True}},
+        ):
+            with self.subTest(payload=changed_payload), patch.object(
+                self.client, "_request"
+            ) as request:
+                with self.assertRaises(QaSafetyError):
+                    self.client.transaction_write(
+                        "POST",
+                        self.parent,
+                        changed_payload,
+                        transaction_id=None,
+                        campaign_id="QA-run",
+                        expected_manifest=[self.manifest_entry("create", self.create_payload())],
+                        confirmation="YES",
+                    )
+                request.assert_not_called()
+
+    def test_create_rejects_wrong_campaign_and_ambiguous_matches(self):
+        payload = self.create_payload()
+        cases = (
+            [self.manifest_entry("create", payload) | {"campaignId": "QA-other"}],
+            [self.manifest_entry("create", payload), self.manifest_entry("create", payload)],
+        )
+        for manifest in cases:
+            with self.subTest(manifest=manifest), patch.object(self.client, "_request") as request:
+                with self.assertRaises(QaSafetyError):
+                    self.client.transaction_write(
+                        "POST", self.parent, payload, transaction_id=None,
+                        campaign_id="QA-run", expected_manifest=manifest, confirmation="YES",
+                    )
+                request.assert_not_called()
+
+    def test_update_requires_exact_transaction_id_and_payload(self):
+        payload = {"transaction": {"amount": -20, "date": "2026-08-22"}}
+        manifest = [self.manifest_entry("update", payload, "transaction-1")]
+        with patch.object(self.client, "_request", return_value={"ok": True}) as request:
+            self.client.transaction_write(
+                "PUT", self.parent, payload, transaction_id="transaction-1",
+                campaign_id="QA-run", expected_manifest=manifest, confirmation="YES",
+            )
+        request.assert_called_once()
+
+        for transaction_id, changed_payload in (
+            ("transaction-2", payload),
+            ("transaction-1", {"transaction": {"amount": -21, "date": "2026-08-22"}}),
+        ):
+            with self.subTest(transaction_id=transaction_id), patch.object(
+                self.client, "_request"
+            ) as request:
+                with self.assertRaises(QaSafetyError):
+                    self.client.transaction_write(
+                        "PUT", self.parent, changed_payload, transaction_id=transaction_id,
+                        campaign_id="QA-run", expected_manifest=manifest, confirmation="YES",
+                    )
+                request.assert_not_called()
 
     def test_delete_requires_exact_tagged_manifest_target(self):
         with patch.object(self.client, "_request") as request:
@@ -68,6 +168,7 @@ class QaClientGuardTest(unittest.TestCase):
                     expected_manifest=[{
                         "operation": "delete",
                         "targetPlanId": self.parent.plan_id,
+                        "campaignId": "QA-run",
                         "targetTransactionId": "transaction-1",
                     }],
                     confirmation="YES",

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Minimal YNAB QA client with exact-plan and tagged-transaction guards.
+"""Minimal YNAB QA client with exact-plan and manifest-bound transaction guards.
 
 The client intentionally has no account/category mutation methods. Transaction
 writes are rejected unless the plan identity is allowlisted, live confirmation
-is exact, an expected operation is present, and the campaign tag is in the memo.
+is exact, and exactly one expected manifest operation matches the request.
 """
 
 from __future__ import annotations
@@ -89,19 +89,49 @@ class YnabQaClient:
         operation = {"POST": "create", "PUT": "update", "DELETE": "delete"}.get(method)
         if operation is None:
             raise QaSafetyError("Only transaction POST/PUT/DELETE operations are permitted")
-        expected = [item for item in expected_manifest if item.get("operation") == operation]
-        if not expected or any(item.get("targetPlanId") != identity.plan_id for item in expected):
-            raise QaSafetyError("Expected mutation manifest does not authorize this operation/target")
-        if operation != "delete":
-            transaction = (payload or {}).get("transaction", payload or {})
+        candidates = [
+            item for item in expected_manifest
+            if item.get("operation") == operation
+            and item.get("targetPlanId") == identity.plan_id
+            and item.get("campaignId") == campaign_id
+        ]
+        if operation == "create":
+            if transaction_id is not None:
+                raise QaSafetyError("Create must not name an existing transaction")
+            if not isinstance(payload, Mapping):
+                raise QaSafetyError("Create requires a manifest-bound transaction payload")
+            transaction = payload.get("transaction", payload)
+            required = {"account_id", "amount", "date", "memo"}
+            if not isinstance(transaction, Mapping) or not required.issubset(transaction):
+                raise QaSafetyError("Create payload fingerprint is incomplete")
+            if not any(field in transaction for field in ("payee_id", "payee_name")):
+                raise QaSafetyError("Create payload fingerprint must include a payee field")
             memo = str(transaction.get("memo") or "")
             if not campaign_id or campaign_id not in memo:
                 raise QaSafetyError("Every transaction write must carry the campaign ID in its memo")
+            candidates = [item for item in candidates if item.get("payload") == payload]
+        elif operation == "update":
+            if not transaction_id:
+                raise QaSafetyError("Update must name the exact target transaction")
+            candidates = [
+                item for item in candidates
+                if item.get("targetTransactionId") == transaction_id
+                and item.get("payload") == payload
+            ]
         else:
-            if not transaction_id or not any(
-                item.get("targetTransactionId") == transaction_id for item in expected
-            ):
-                raise QaSafetyError("Delete target is not explicitly authorized by the manifest")
+            if payload is not None:
+                raise QaSafetyError("Delete must not carry a mutation payload")
+            if not transaction_id:
+                raise QaSafetyError("Delete must name the exact target transaction")
+            candidates = [
+                item for item in candidates
+                if item.get("targetTransactionId") == transaction_id
+                and "payload" not in item
+            ]
+        if len(candidates) != 1:
+            raise QaSafetyError(
+                "Mutation must match exactly one expected manifest entry without payload differences"
+            )
         suffix = f"/{transaction_id}" if transaction_id else ""
         return self._request(method, f"plans/{identity.plan_id}/transactions{suffix}", payload)
 
