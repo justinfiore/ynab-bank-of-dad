@@ -297,7 +297,16 @@ class ReadOnlyDiscoveryTest(unittest.TestCase):
             "id": "transaction-secret", "account_id": "account-secret",
             "memo": "BOD QA QA-old:A1", "amount": -10,
         }, {"id": "untagged-secret", "memo": "ordinary"}]}}
-        self.parent_client = FakeReadClient(plans, {"categories": categories, "transactions": tagged})
+        self.parent_client = FakeReadClient(plans, {
+            "accounts": {"data": {"accounts": [
+                {"id": "parent-account-secret", "name": "QA Cash", "closed": False,
+                 "deleted": False, "type": "cash"},
+                {"id": "closed-secret", "name": "Closed", "closed": True,
+                 "deleted": False, "type": "cash"},
+            ]}},
+            "categories": categories,
+            "transactions": tagged,
+        })
         self.child_clients = {}
         for name in self.children:
             self.child_clients[name] = FakeReadClient(
@@ -317,6 +326,8 @@ class ReadOnlyDiscoveryTest(unittest.TestCase):
         self.assertTrue(evidence["all_targets_allowlisted"])
         self.assertTrue(evidence["provisioning_complete"])
         self.assertEqual(evidence["api_write_count"], 0)
+        self.assertEqual(evidence["parent"]["eligible_fixture_accounts"], ["QA Cash"])
+        self.assertNotIn("parent-account-secret", json.dumps(evidence))
         self.assertEqual(evidence["missing_parent_categories"], [])
         self.assertEqual(evidence["missing_child_accounts"], {})
         serialized = json.dumps(evidence)

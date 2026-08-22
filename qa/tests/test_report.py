@@ -150,6 +150,25 @@ class ReportTest(unittest.TestCase):
                     "NOT READY",
                 )
 
+    def test_actual_api_write_total_uses_attempt_evidence_not_product_effect_counts(self):
+        receipts = [self.complete_receipt(item[0]) for item in SCENARIOS]
+        receipts[0]["safety"]["api_write_attempts"] = 2
+        environment = {"all_targets_allowlisted": True, "actual_api_write_count": 2}
+        manifest = {
+            "campaign_id": "QA-test", "secret_scan": "PASS", "actual_api_write_count": 2,
+        }
+        _targets, wording, complete = evidence_wording(receipts, environment, manifest)
+        self.assertTrue(complete)
+        self.assertIn("2 actual API writes", wording)
+        self.assertIn("2 transaction write attempts", wording)
+
+        environment["actual_api_write_count"] = 3
+        environment["cleanup_api_write_count"] = 1
+        manifest["actual_api_write_count"] = 3
+        _targets, wording, complete = evidence_wording(receipts, environment, manifest)
+        self.assertTrue(complete)
+        self.assertIn("1 cleanup write", wording)
+
     def test_pass_receipt_rejects_absent_required_evidence(self):
         for field, value in (
             ("api_observation", ""),

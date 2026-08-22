@@ -156,27 +156,21 @@ def evidence_wording(
         item.get("api_write_attempts") if isinstance(item, Mapping) else None
         for item in safety_items
     ]
-    asserted_write_counts = [
-        sum(item.values())
-        if isinstance(item, Mapping)
-        and set(item) == MUTATION_COUNTS
-        and all(type(value) is int and value >= 0 for value in item.values())
-        else None
-        for item in (receipt.get("observed") for receipt in receipts)
-    ]
+    cleanup_writes = environment.get("cleanup_api_write_count", 0)
     write_complete = (
         type(manifest_writes) is int and manifest_writes >= 0
         and type(environment_writes) is int
         and manifest_writes == environment_writes
         and all(type(item) is int and item >= 0 for item in attempt_counts)
-        and all(item is not None for item in asserted_write_counts)
-        and sum(asserted_write_counts) == manifest_writes
+        and type(cleanup_writes) is int and cleanup_writes >= 0
+        and sum(attempt_counts) + cleanup_writes == manifest_writes
     )
     if write_complete:
         attempts = sum(attempt_counts)
         write_wording = (
             f"Manifest and environment record {manifest_writes} actual API writes; "
-            f"scenario receipts record {attempts} transaction write attempts."
+            f"scenario receipts record {attempts} transaction write attempts and "
+            f"{cleanup_writes} cleanup write{'s' if cleanup_writes != 1 else ''}."
         )
     else:
         write_wording = "Manifest, environment, or receipt write evidence is incomplete or inconsistent."

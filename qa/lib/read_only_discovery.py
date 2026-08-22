@@ -81,6 +81,18 @@ def _account_names(response: Mapping[str, Any]) -> set[str]:
     }
 
 
+def _eligible_fixture_account_names(response: Mapping[str, Any]) -> list[str]:
+    """Expose only names for open parent accounts usable by synthetic fixtures."""
+    accounts = response.get("data", {}).get("accounts")
+    if not isinstance(accounts, list):
+        raise RuntimeError("Account discovery response did not contain an account list")
+    return sorted({
+        str(account.get("name"))
+        for account in accounts
+        if not account.get("deleted") and not account.get("closed") and account.get("name")
+    })
+
+
 def run_discovery(
     identities: Mapping[str, PlanIdentity],
     parent_client: Any,
@@ -98,6 +110,9 @@ def run_discovery(
     for name in CHILD_NAMES:
         _require_exact_pairs(child_plan_lists[name], {name: identities[name]})
 
+    parent_accounts = _eligible_fixture_account_names(
+        parent_client.get(identities[PARENT_NAME], "accounts")
+    )
     parent_categories = _category_names(parent_client.get(identities[PARENT_NAME], "categories"))
     tagged_by_plan = {
         PARENT_NAME: _tagged_transactions(parent_client.get(identities[PARENT_NAME], "transactions"))
@@ -125,6 +140,7 @@ def run_discovery(
         "full_immutable_id_validation": "PASS (values retained only in ignored internal config)",
         "parent": {
             "display_name": PARENT_NAME,
+            "eligible_fixture_accounts": parent_accounts,
             "required_categories": list(REQUIRED_PARENT_CATEGORIES),
             "required_categories_present": not missing_categories,
         },
