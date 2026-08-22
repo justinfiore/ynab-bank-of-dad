@@ -10,11 +10,12 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from threading import Lock
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 
 API_ROOT = "https://api.ynab.com/v1"
@@ -37,16 +38,28 @@ class PlanIdentity:
 
 
 class YnabQaClient:
-    def __init__(self, token: str, allowlist: Mapping[str, str], timeout: int = 30):
+    def __init__(
+        self,
+        token: str,
+        allowlist: Mapping[str, str],
+        timeout: int = 30,
+        *,
+        max_get_rate_limit_retries: int = 3,
+        sleeper: Callable[[float], None] = time.sleep,
+    ):
         if not token or any(ch.isspace() for ch in token):
             raise QaSafetyError("A non-empty test token is required")
         if set(allowlist) != KNOWN_NAMES or len(set(allowlist.values())) != 4:
             raise QaSafetyError("Allowlist must contain exactly the four QA name/ID pairs")
         if any(not self._looks_like_uuid(value) for value in allowlist.values()):
             raise QaSafetyError("Every allowlisted plan ID must be a full UUID")
+        if max_get_rate_limit_retries < 0:
+            raise QaSafetyError("Rate-limit retry count must be non-negative")
         self._token = token
         self._allowlist = dict(allowlist)
         self._timeout = timeout
+        self._max_get_rate_limit_retries = max_get_rate_limit_retries
+        self._sleeper = sleeper
         self._consumed_manifest_authorizations: set[str] = set()
         self._manifest_authorization_lock = Lock()
         self._consumed_provisioning_authorizations: set[str] = set()
@@ -277,11 +290,32 @@ class YnabQaClient:
                 "Content-Type": "application/json",
             },
         )
+        attempts = 0
+        while True:
+            try:
+                with urllib.request.urlopen(request, timeout=self._timeout) as response:
+                    return json.load(response)
+            except urllib.error.HTTPError as error:
+                if (
+                    method == "GET"
+                    and error.code == 429
+                    and attempts < self._max_get_rate_limit_retries
+                ):
+                    self._sleeper(self._retry_delay(error))
+                    attempts += 1
+                    continue
+                # Never include headers, token, or a response URL in evidence/logs.
+                raise RuntimeError(f"YNAB API returned HTTP {error.code}") from None
+            except urllib.error.URLError as error:
+                raise RuntimeError(f"YNAB API request failed: {error.reason}") from None
+
+    @staticmethod
+    def _retry_delay(error: urllib.error.HTTPError) -> float:
+        """Use a bounded numeric Retry-After, or a conservative 30-second fallback."""
         try:
-            with urllib.request.urlopen(request, timeout=self._timeout) as response:
-                return json.load(response)
-        except urllib.error.HTTPError as error:
-            # Never include headers, token, or a response URL in evidence/logs.
-            raise RuntimeError(f"YNAB API returned HTTP {error.code}") from None
-        except urllib.error.URLError as error:
-            raise RuntimeError(f"YNAB API request failed: {error.reason}") from None
+            seconds = int(error.headers.get("Retry-After", ""))
+            if seconds > 0:
+                return float(min(seconds, 30))
+        except (TypeError, ValueError):
+            pass
+        return 30.0

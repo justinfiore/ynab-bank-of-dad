@@ -1,9 +1,11 @@
+import io
 import json
 import os
 import sys
 import unittest
+import urllib.error
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 QA_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(QA_ROOT))
@@ -49,6 +51,31 @@ class QaClientGuardTest(unittest.TestCase):
     def test_exact_name_and_id_are_both_required(self):
         with self.assertRaises(QaSafetyError):
             self.client.require_allowed(PlanIdentity("Jorsten's Plan", IDS["Borsten's Plan"]))
+
+    def test_rate_limited_get_retries_once_but_post_does_not_retry(self):
+        waits = []
+        client = YnabQaClient("test-token", IDS, sleeper=waits.append)
+        rate_limited = urllib.error.HTTPError(
+            "https://example.test", 429, "too many requests", {"Retry-After": "2"}, None
+        )
+        response = MagicMock()
+        response.__enter__.return_value = io.StringIO('{"data":{"plans":[]}}')
+        response.__exit__.return_value = False
+        with patch("urllib.request.urlopen", side_effect=[rate_limited, response]) as urlopen:
+            self.assertEqual(client._request("GET", "plans"), {"data": {"plans": []}})
+        self.assertEqual(urlopen.call_count, 2)
+        self.assertEqual(waits, [2.0])
+        self.assertEqual(
+            client._retry_delay(urllib.error.HTTPError("https://example.test", 429, "", {}, None)),
+            30.0,
+        )
+
+        waits.clear()
+        with patch("urllib.request.urlopen", side_effect=rate_limited) as urlopen:
+            with self.assertRaisesRegex(RuntimeError, "HTTP 429"):
+                client._request("POST", "plans/example/transactions", {"transaction": {}})
+        self.assertEqual(urlopen.call_count, 1)
+        self.assertEqual(waits, [])
 
     def test_missing_confirmation_blocks_before_request(self):
         with patch.object(self.client, "_request") as request:
