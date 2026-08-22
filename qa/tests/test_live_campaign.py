@@ -6,7 +6,13 @@ from pathlib import Path
 QA_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(QA_ROOT))
 
-from lib.live_campaign import FreshMutationGate, evidence_transaction, fixture_import_id, fixture_amount
+from lib.live_campaign import (
+    FreshMutationGate,
+    evidence_transaction,
+    fixture_import_id,
+    fixture_amount,
+    successful_operation_attempts,
+)
 from lib.ynab_qa_client import PlanIdentity, QaSafetyError
 
 
@@ -94,6 +100,15 @@ class FreshMutationGateTest(unittest.TestCase):
         components = [{"amount": -10}, {"amount": -20}, {"amount": -30}]
         self.assertEqual(fixture_amount(-30, components), -60)
         self.assertEqual(fixture_amount(-10, None), -10)
+
+    def test_successful_operation_attempts_uses_durable_outcome_column(self):
+        attempts = [
+            {"outcome": "applied"},
+            {"outcome": "already_complete"},
+            {"outcome": "failed"},
+            {"status": "applied"},
+        ]
+        self.assertEqual(successful_operation_attempts(attempts), 2)
 
 
 if __name__ == "__main__":

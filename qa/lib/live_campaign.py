@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from .read_only_discovery import _require_exact_pairs
@@ -94,6 +94,14 @@ def fixture_amount(amount: int, subtransactions: list[dict[str, Any]] | None) ->
     if not values or any(type(value) is not int for value in values):
         raise QaSafetyError("Split fixture components must contain integer amounts")
     return sum(value for value in values if type(value) is int)
+
+
+def successful_operation_attempts(attempts: Sequence[Mapping[str, Any]]) -> int:
+    """Count only durable sync-operation attempts whose recorded outcome succeeded."""
+    return sum(
+        1 for item in attempts
+        if item.get("outcome") in {"applied", "already_complete"}
+    )
 
 
 def evidence_transaction(raw: Mapping[str, Any]) -> dict[str, Any]:

@@ -27,7 +27,13 @@ sys.path.insert(0, str(QA_ROOT))
 
 from lib.campaign_matrix import SCENARIOS
 from lib.evidence_bundle import FULL_UUID
-from lib.live_campaign import FreshMutationGate, evidence_transaction, fixture_amount, fixture_import_id
+from lib.live_campaign import (
+    FreshMutationGate,
+    evidence_transaction,
+    fixture_amount,
+    fixture_import_id,
+    successful_operation_attempts,
+)
 from lib.run_capture import capture_sqlite_audit, redact, write_receipt
 from lib.ynab_qa_client import PlanIdentity, QaSafetyError, YnabQaClient
 
@@ -132,9 +138,7 @@ class Campaign:
         after = self.attempt_rows(state_db)
         added = after[len(before):]
         self.api_write_attempts += len(added)
-        self.successful_writes += sum(
-            1 for item in added if item.get("status") in {"applied", "already_complete"}
-        )
+        self.successful_writes += successful_operation_attempts(added)
         return rc, output, len(added)
 
     def _plans(self, name: str) -> list[dict[str, Any]]:
