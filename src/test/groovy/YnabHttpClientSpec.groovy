@@ -168,6 +168,52 @@ class YnabHttpClientSpec extends Specification {
         response == null
     }
 
+    def "retries a rate-limited GET with bounded retry-after delay"() {
+        given:
+        server.enqueue(new MockResponse()
+            .setResponseCode(429)
+            .setHeader('Retry-After', '3')
+            .setHeader('Content-Type', 'application/json')
+            .setBody('{"error":{"detail":"too many requests"}}'))
+        server.enqueue(new MockResponse()
+            .setResponseCode(200)
+            .setHeader('Content-Type', 'application/json')
+            .setBody('{"data":{"plans":[{"id":"budget-1"}]}}'))
+        List<Duration> waits = []
+        def client = new YnabHttpClient(server.url('/').toString(), 'token',
+            HttpClient.newHttpClient(), Duration.ofSeconds(7), 1, { Duration delay -> waits << delay })
+
+        when:
+        def response = client.getJson('/v1/plans')
+
+        then:
+        response.data.plans[0].id == 'budget-1'
+        server.takeRequest().path == '/v1/plans'
+        server.takeRequest().path == '/v1/plans'
+        waits == [Duration.ofSeconds(3)]
+    }
+
+    def "does not retry a rate-limited POST because its outcome may be ambiguous"() {
+        given:
+        server.enqueue(new MockResponse()
+            .setResponseCode(429)
+            .setHeader('Retry-After', '1')
+            .setBody('{"error":{"detail":"too many requests"}}'))
+        List<Duration> waits = []
+        def client = new YnabHttpClient(server.url('/').toString(), 'token',
+            HttpClient.newHttpClient(), Duration.ofSeconds(7), 1, { Duration delay -> waits << delay })
+
+        when:
+        client.postJson('/v1/plans/budget-1/transactions/bulk', [transactions: []])
+
+        then:
+        def ex = thrown(IllegalStateException)
+        ex.message.contains('YNAB POST /v1/plans/budget-1/transactions/bulk failed with status 429')
+        server.takeRequest().path == '/v1/plans/budget-1/transactions/bulk'
+        server.takeRequest(100, java.util.concurrent.TimeUnit.MILLISECONDS) == null
+        waits.empty
+    }
+
     def "non-2xx responses surface a clear error"() {
         given:
         server.enqueue(new MockResponse()
