@@ -532,6 +532,79 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         runRows().last().status == 'partial'
     }
 
+    def "routing failure isolates components within one split and recovery creates only the missing child mirror"() {
+        given:
+        stubCommonBudgetDiscovery()
+        stubParentCategories()
+        stubParentTransactions([[
+            id: 'txn-split-routing-isolation', date: '2026-07-01', amount: -1100,
+            memo: 'Split', approved: true, category_id: null, category_name: null,
+            subtransactions: [[
+                id: 'sub-child-one-existing', transaction_id: 'txn-split-routing-isolation', amount: -1100,
+                memo: 'Existing child one', category_id: 'cat-child-one-spend',
+                category_name: 'Child One Spend Bank'
+            ]]
+        ]], 420)
+        stubParentTransactions([[
+            id: 'txn-split-routing-isolation', date: '2026-07-01', amount: -3300,
+            memo: 'Split', approved: true, category_id: null, category_name: null,
+            subtransactions: [
+                [id: 'sub-child-one-existing', transaction_id: 'txn-split-routing-isolation', amount: -1100,
+                 memo: 'Existing child one', category_id: 'cat-child-one-spend',
+                 category_name: 'Child One Spend Bank'],
+                [id: 'sub-child-one-missing', transaction_id: 'txn-split-routing-isolation', amount: -1000,
+                 memo: 'Missing child one', category_id: 'cat-child-one-save',
+                 category_name: 'Child One Save Bank'],
+                [id: 'sub-child-two-healthy', transaction_id: 'txn-split-routing-isolation', amount: -1200,
+                 memo: 'Healthy child two', category_id: 'cat-child-two-spend',
+                 category_name: 'Child Two Spend Bank']
+            ]
+        ]], 421, 420)
+        stubMoneyMovements([])
+        stubChildAccountsSuccessFailureSuccess('child-one-budget-id',
+            [[id: 'child-one-spend-account-id', name: 'Child One Spend Account']],
+            [[id: 'child-one-spend-account-id', name: 'Child One Spend Account'],
+             [id: 'child-one-save-account-id', name: 'Child One Save Account']])
+        stubChildAccounts('child-two-budget-id', 'child-two-account-id', 'Child Two Checking')
+        stubChildPostsInOrder('child-one-budget-id', ['child-one-existing', 'child-one-restored'])
+        stubChildPost('child-two-budget-id', ['child-two-created'])
+        stubChildLookup('child-one-budget-id', 'child-one-existing', 'child-one-spend-account-id',
+            '2026-07-01', -1100, null, null)
+        stubChildLookup('child-two-budget-id', 'child-two-created', 'child-two-account-id',
+            '2026-07-01', -1200, null, null)
+        SyncConfig config = splitRoutingIsolationConfig()
+        def syncer = syncer(false, config)
+
+        when: 'the original child-one component is mirrored'
+        syncer.runOnce(1)
+
+        then:
+        postedTransactions('child-one-budget-id')*.memo == ['YBOD: Existing child one']
+
+        when: 'child-one routing fails for the expanded split'
+        syncer.runOnce(2)
+
+        then: 'the healthy child-two component is created and the existing child-one mirror is preserved'
+        postedTransactions('child-one-budget-id')*.memo == ['YBOD: Existing child one']
+        postedTransactions('child-two-budget-id')*.memo == ['YBOD: Healthy child two']
+        verify(0, deleteRequestedFor(urlEqualTo(
+            '/v1/plans/child-one-budget-id/transactions/child-one-existing')))
+        mirrorRows().collectEntries { [(it.child_transaction_id): it.status] } ==
+            ['child-one-existing': 'active', 'child-two-created': 'active']
+        cursorValue('transactions.last_server_knowledge') == 420
+
+        when: 'child-one routing is restored'
+        syncer.runOnce(3)
+
+        then: 'only the missing child-one component is created'
+        postedTransactions('child-one-budget-id')*.memo ==
+            ['YBOD: Existing child one', 'YBOD: Missing child one']
+        postedTransactions('child-two-budget-id')*.memo == ['YBOD: Healthy child two']
+        mirrorRows().collectEntries { [(it.child_transaction_id): it.status] } ==
+            ['child-one-existing': 'active', 'child-two-created': 'active', 'child-one-restored': 'active']
+        cursorValue('transactions.last_server_knowledge') == 421
+    }
+
     def "child auth failure records failed state isolates other child and does not advance cursor"() {
         given:
         stubCommonBudgetDiscovery()
@@ -1064,6 +1137,24 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         )
     }
 
+    private SyncConfig splitRoutingIsolationConfig() {
+        new SyncConfig(
+            new BudgetRef('Parent Budget', 'YNAB_PARENT_TOKEN'),
+            [
+                childTarget('child-one', 'Child One Budget', 'YNAB_CHILD_ONE_TOKEN', [
+                    ['spend', ['Child One Spend Bank'], 'Child One Spend Account'],
+                    ['save', ['Child One Save Bank'], 'Child One Save Account']
+                ]),
+                childTarget('child-two', 'Child Two Budget', 'YNAB_CHILD_TWO_TOKEN', [
+                    ['spend', ['Child Two Spend Bank'], 'Child Two Checking']
+                ])
+            ],
+            300,
+            new SyncLoggingConfig(tempDir.resolve('parent-child-sync.log').toString(), 'INFO', 7, 10),
+            new SyncStateConfig(tempDir.resolve('syncstate-wiremock.db').toString(), 45, 45)
+        )
+    }
+
     private static String tokenForChild(String childKey) {
         "${childKey}-token"
     }
@@ -1291,6 +1382,20 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
             .inScenario('retry-child-account')
             .whenScenarioStateIs('account-exists')
             .willReturn(jsonResponse([data: [accounts: [[id: accountId, name: accountName]]]])))
+    }
+
+    private void stubChildAccountsSuccessFailureSuccess(String budgetId, List<Map> firstAccounts,
+                                                         List<Map> restoredAccounts) {
+        String scenario = "routing-recovery-${budgetId}"
+        String path = "/v1/plans/${budgetId}/accounts"
+        stubFor(get(urlEqualTo(path)).inScenario(scenario).whenScenarioStateIs('Started')
+            .willReturn(jsonResponse([data: [accounts: firstAccounts]]))
+            .willSetStateTo('routing-fails'))
+        stubFor(get(urlEqualTo(path)).inScenario(scenario).whenScenarioStateIs('routing-fails')
+            .willReturn(errorResponse(401, 'unauthorized child token'))
+            .willSetStateTo('routing-restored'))
+        stubFor(get(urlEqualTo(path)).inScenario(scenario).whenScenarioStateIs('routing-restored')
+            .willReturn(jsonResponse([data: [accounts: restoredAccounts]])))
     }
 
     private static def jsonResponse(Object body) {

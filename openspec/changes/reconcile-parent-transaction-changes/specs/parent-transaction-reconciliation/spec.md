@@ -79,6 +79,12 @@ When child budget or account resolution fails for a source whose category could 
 - **THEN** the resolved child's source MAY create or update normally and receive an `active` lifecycle
 - **AND** the routing-blocked source SHALL retain its prior lifecycle rather than being marked deleted
 
+#### Scenario: Healthy split component reconciles while a sibling child routing fails
+- **WHEN** one approved parent split contains components for two children and one child's routing lookup fails
+- **THEN** the resolved child's component SHALL create or update normally
+- **AND** existing mirrors for the routing-blocked component SHALL not be deleted
+- **AND** after routing is restored, only missing work for the previously blocked component SHALL be created without duplicating the healthy component
+
 ### Requirement: Parent deletion and de-qualification SHALL delete child mirrors
 The syncer SHALL delete active child mirrors when their source transaction or subtransaction is explicitly deleted, becomes unapproved, becomes unmapped, or is removed from the current split composition. It SHALL NOT create compensating reversal transactions for these removals.
 

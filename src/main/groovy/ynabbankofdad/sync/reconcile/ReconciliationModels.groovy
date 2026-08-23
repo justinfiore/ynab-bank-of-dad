@@ -107,10 +107,15 @@ class ParentReconciliationResult {
     List<PlannedReconciliationIntent> intents
     boolean fetchRequired
     /**
-     * True when child routing required for this source failed this cycle.
-     * Empty desired mirrors must not be treated as unmapped/deleted for lifecycle.
+     * True when routing blocks the complete parent revision. Retained for callers that cannot
+     * identify a narrower source component.
      */
     boolean routingBlocked = false
+    /**
+     * Split component sources whose child routing failed this cycle. Empty desired mirrors for
+     * these sources must not be treated as unmapped/deleted for lifecycle.
+     */
+    Set<SourceEntityKey> routingBlockedSources = [] as Set
 }
 
 @Immutable

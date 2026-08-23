@@ -134,7 +134,7 @@ Alternative considered: infer and upgrade an unversioned database. Rejected beca
 
 ### 11. Routing failure is per source and never looks like unmapping
 
-Failed child plan/account resolution is attached to each planned result as `routingBlocked`. Only sources whose categories could route into a failed child are blocked. Blocked results keep empty intents and skip lifecycle writes so an empty desired set is not persisted as `deleted`. Unrelated sources continue to reconcile in the same cycle. Transaction-level routing failure still blocks transaction batch completion and cursor advancement because the delta cannot be considered fully applied.
+Failed child plan/account resolution is attached to each transaction result as a set of blocked source components. Planning uses healthy child contexts, suppresses deletes for blocked sources or failed child targets, and retains intents for healthy components of the same split. Lifecycle writes skip only blocked component sources so an incomplete desired set is not persisted as `deleted`. Money movements retain whole-movement `routingBlocked` because their sides share one observed source. Transaction-level routing failure still blocks transaction batch completion and cursor advancement because the delta cannot be considered fully applied.
 
 ### 12. Configuration changes are prospective
 

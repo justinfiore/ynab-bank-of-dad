@@ -275,12 +275,6 @@ class ParentChildBudgetSyncer {
         new RoutingResolution(resolved, failed, failures)
     }
 
-    private static boolean routingBlocked(ParentSourceRevision revision,
-                                          List<ChildSyncContext> failedContexts) {
-        Set<String> categoryNames = revision.components*.categoryName.findAll() as Set
-        routingBlocked(categoryNames, failedContexts)
-    }
-
     private static boolean routingBlocked(Set<String> categoryNames,
                                           List<ChildSyncContext> failedContexts) {
         failedContexts.any { ChildSyncContext child ->
@@ -305,11 +299,18 @@ class ParentChildBudgetSyncer {
             List<ActiveMirrorReference> mirrors = activeMirrorsForParent(parentBudgetId, event.id)
             ParentSourceRevision revision = normalizer.normalize(
                 parentBudgetId, event, delta.serverKnowledge, true)
-            if (routingBlocked(revision, failedContexts)) {
-                new ParentReconciliationResult(revision, [], [], false, true)
-            } else {
-                reconciler.reconcile(revision, mirrors)
+            ParentReconciliationResult planned = reconciler.reconcile(revision, mirrors)
+            Set<SourceEntityKey> blockedSources = revision.components.findAll { component ->
+                routingBlocked([component.categoryName].findAll() as Set, failedContexts)
+            }*.source as Set
+            Set<String> failedChildKeys = failedContexts*.target*.childKey.findAll() as Set
+            List<PlannedReconciliationIntent> safeIntents = planned.intents.findAll { intent ->
+                intent.action != PlannedAction.DELETE ||
+                    (!blockedSources.contains(intent.source) &&
+                        !failedChildKeys.contains(intent.targetChildKey))
             }
+            new ParentReconciliationResult(revision, planned.desiredMirrors, safeIntents,
+                planned.fetchRequired, false, blockedSources)
         }
     }
 
@@ -384,10 +385,7 @@ class ParentChildBudgetSyncer {
                     sourceIds[planned.source] = reconciliationState.upsertSourceEntity(planned.source)
                 }
             }
-            // Routing-blocked results have empty desired sets by construction; never treat that as unmapped.
-            if (!result.routingBlocked) {
-                updateParentLifecycles(result, sourceIds)
-            }
+            updateParentLifecycles(result, sourceIds)
             Long priorDelete = null
             result.intents.each { PlannedReconciliationIntent planned ->
                 Long dependency = planned.action == PlannedAction.DELETE ? priorDelete :
@@ -410,8 +408,8 @@ class ParentChildBudgetSyncer {
     }
 
     /**
-     * Returns lifecycle updates for a planned result. Routing-blocked results return empty so a
-     * temporary child lookup failure cannot mark sources deleted from an empty desired set.
+     * Returns lifecycle updates for a planned result. Routing-blocked sources are omitted so a
+     * temporary child lookup failure cannot mark their empty desired state as deleted.
      */
     static Map<Long, String> plannedSourceLifecycles(ParentReconciliationResult result,
                                                      Map<SourceEntityKey, Long> sourceIds) {
@@ -424,6 +422,9 @@ class ParentChildBudgetSyncer {
         boolean split = revision.components.any { it.source != revision.parentSource }
         Map<Long, String> updates = [:]
         sourceIds.each { SourceEntityKey source, Long sourceId ->
+            if (result.routingBlockedSources?.contains(source)) {
+                return
+            }
             boolean active
             if (source == revision.parentSource) {
                 active = qualifyingParent && (split || desiredSources.contains(source))
