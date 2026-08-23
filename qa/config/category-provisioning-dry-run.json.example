@@ -1,0 +1,20 @@
+{
+  "accountWritePlanCount": 0,
+  "artifactType": "qa-category-provisioning-dry-run",
+  "campaignId": "qa-campaign-example",
+  "categoryGroupName": "BOD Reconciliation QA",
+  "categoryGroupState": "PRESENT",
+  "childWritePlanCount": 0,
+  "missingCategoryNames": [],
+  "mode": "DRY_RUN",
+  "operations": [],
+  "plannedWriteCount": 0,
+  "provisioningTag": "BOD-QA-PROVISION-example",
+  "renameWritePlanCount": 0,
+  "schemaVersion": 1,
+  "targetPlan": {
+    "displayName": "Jorsten's Plan",
+    "idFingerprint": "sha256:REDACTED_EXAMPLE"
+  },
+  "validatedExactPlanPairCount": 4
+}

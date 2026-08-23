@@ -164,7 +164,7 @@ Money-movement failures remain independently retryable and do not block the pare
 | Child transaction is missing during update | Create a replacement and activate its new ID |
 | Process stops after remote success but before local completion | Recover using stable operation/import identity without creating a second financial effect |
 | One movement operation fails | Movement work retries independently; transaction cursor can still advance |
-| Child budget or account lookup fails for one mapped source | That source is skipped for the cycle; existing mirrors stay; lifecycle is not marked deleted; unrelated sources still sync |
+| Child budget or account lookup fails for one mapped source | That source component is skipped for the cycle; existing mirrors stay; lifecycle is not marked deleted; unrelated sources and healthy components of the same split still sync |
 
 Every reconciliation operation attempt remains in operation history for troubleshooting.
 

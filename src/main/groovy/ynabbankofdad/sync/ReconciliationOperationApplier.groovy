@@ -89,7 +89,8 @@ class ReconciliationOperationApplier {
         }
         desired.import_id = payloadFactory.buildImportId(
             stateStore.findSourceEntityKey(operation.intent.sourceEntityId),
-            operation.intent.targetBudgetId, direction)
+            operation.intent.targetBudgetId, direction,
+            recreation ? operation.intent.childTransactionId : null)
 
         String childTransactionId = priorSuccess?.returnedChildTransactionId
         String outcome = 'already_complete'

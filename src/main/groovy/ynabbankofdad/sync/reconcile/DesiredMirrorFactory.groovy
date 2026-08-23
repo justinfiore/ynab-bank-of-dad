@@ -32,14 +32,17 @@ class DesiredMirrorFactory {
             if (!child.budgetId || !accountId) {
                 throw new IllegalStateException("Child '${child.target.childKey}' routing is not resolved")
             }
+            // Payee IDs are budget-scoped and cannot be copied from the parent
+            // plan into a child plan. Send only the display name so YNAB resolves
+            // the payee in the child budget.
             Map payload = [account_id: accountId, date: date, amount: amount,
-                           payee_id: payeeId, payee_name: payeeName,
+                           payee_id: null, payee_name: payeeName,
                            cleared: 'cleared', approved: false]
             String payloadJson = ReconciliationCanonicalizer.json(payload)
             String decoratedMemo = ((child.target.memoPrefix ?: '') + (memo ?: '') +
                 (child.target.memoSuffix ?: '')).trim()
             new DesiredMirror(source, child.target.childKey, child.budgetId, direction, accountId,
-                mapping.childAccountName, date, amount, payeeId, payeeName, decoratedMemo, mapping.mappingKey,
+                mapping.childAccountName, date, amount, null, payeeName, decoratedMemo, mapping.mappingKey,
                 payloadJson, ReconciliationCanonicalizer.hashJson(payloadJson))
         }.sort { DesiredMirror left, DesiredMirror right ->
             mirrorSortKey(left) <=> mirrorSortKey(right)

@@ -1,0 +1,16 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>YNAB Bank of Dad QA Evidence — {{CAMPAIGN}}</title><style>{{CSS}}</style></head><body><main>
+<section class="banner"><span class="verdict {{VERDICT_CLASS}}">{{RECOMMENDATION}}</span><h1>Reconciliation QA evidence</h1>
+<p>{{VERDICT_TEXT}}</p><div class="facts">{{FACTS}}</div></section>
+<section class="card"><h2>Safety flow</h2><svg viewBox="0 0 900 150" role="img" aria-label="Discovery and mutation gate flow">
+<defs><marker id="a" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#64748b"/></marker></defs>
+<g fill="#fff" stroke="#64748b" stroke-width="2"><rect x="15" y="45" width="150" height="55" rx="8"/><rect x="250" y="45" width="150" height="55" rx="8"/><rect x="485" y="45" width="150" height="55" rx="8"/><rect x="720" y="45" width="165" height="55" rx="8"/></g>
+<g font-family="system-ui" font-size="14" text-anchor="middle"><text x="90" y="77">GET discovery</text><text x="325" y="69">Exact name + full ID</text><text x="325" y="87">allowlist</text><text x="560" y="69">Provisioning +</text><text x="560" y="87">dry-run gate</text><text x="802" y="69">One-cycle tagged</text><text x="802" y="87">transaction write</text></g>
+<g stroke="#64748b" stroke-width="2" marker-end="url(#a)"><line x1="165" y1="73" x2="245" y2="73"/><line x1="400" y1="73" x2="480" y2="73"/><line x1="635" y1="73" x2="715" y2="73"/></g></svg>
+<p class="muted">{{SAFETY_OUTCOME}}</p></section>
+<section class="card"><h2>Scenario matrix</h2><p><button data-filter="ALL">All</button> <button data-filter="PASS">PASS</button> <button data-filter="FAIL">FAIL</button> <button data-filter="BLOCKED">BLOCKED</button> <button data-filter="NOT_RUN">NOT_RUN</button></p>
+<table><thead><tr><th>ID</th><th>Requirement</th><th>Dry run</th><th>Live</th><th>API observation</th><th>SQLite audit</th><th>Status</th></tr></thead><tbody>{{ROWS}}</tbody></table></section>
+<section><h2>Per-scenario evidence</h2>{{SCENARIOS}}</section>
+<section class="card"><h2>Exceptions and cleanup</h2>{{EXCEPTIONS}}<h3>Cleanup</h3><p>{{CLEANUP}}</p></section>
+<section class="card"><h2>Release recommendation</h2><p><strong>{{RECOMMENDATION}}</strong></p><p>{{RELEASE_REASON}}</p></section>
+</main><script>{{JS}}</script></body></html>

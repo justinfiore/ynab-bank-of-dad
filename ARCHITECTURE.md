@@ -656,7 +656,7 @@ Movement operations and failures are independent of the parent transaction curso
 
 Child plan/account resolution can fail because of authentication, network, configuration, or missing-account problems. The syncer separates resolved and failed child contexts.
 
-A source whose applicable category could route into a failed context is marked `routingBlocked` and is not reconciled against an incomplete desired set. Persistence skips lifecycle updates for blocked results so temporary lookup failure cannot mark `source_entities` deleted. Unrelated sources still plan, persist operations, and update lifecycle.
+A source component whose applicable category could route into a failed context is recorded in `routingBlockedSources` and is not destructively reconciled against an incomplete desired set. Healthy components of the same split still plan and persist operations. Persistence skips lifecycle updates only for blocked components so temporary lookup failure cannot mark their `source_entities` deleted.
 
 Transaction routing failure blocks transaction batch completion and cursor advancement. Movement routing failure blocks only movement-batch completion.
 
@@ -833,7 +833,7 @@ Schema initialization/migrations and operation completion are transactional, but
 
 #### Per-Source Routing Failure State
 
-Resolved: each `ParentReconciliationResult` and `MovementDecision` carries `routingBlocked`. Planning empties intents for blocked sources only. Lifecycle updates run per result and skip blocked sources so an empty desired set from routing failure is never stored as `deleted`. Unrelated sources still reconcile and update lifecycle in the same cycle.
+Resolved: each transaction result carries its blocked component sources, while movement decisions retain whole-movement `routingBlocked`. Transaction planning uses healthy child contexts, suppresses deletes for blocked sources or failed child targets, and keeps healthy split-component intents. Lifecycle updates skip only blocked component sources so an incomplete desired set is never stored as `deleted`. Unrelated sources and healthy siblings in the same split still reconcile in the same cycle.
 
 #### Operation Limit And Backlog Ordering
 

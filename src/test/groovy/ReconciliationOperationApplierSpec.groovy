@@ -100,6 +100,29 @@ class ReconciliationOperationApplierSpec extends Specification {
         store.findMirrorsForParent('parent-budget', 'parent-txn', true)*.status == ['missing', 'active']
     }
 
+    def "recreation posts a new import identity when YNAB already consumed the deleted child's import id"() {
+        given:
+        createOperation('original-create', ReconciliationOperationType.CREATE, null, null, payload())
+        applier(store).applyReadyOperations()
+        String originalImportId = repository.lastCreated.import_id as String
+        String originalChildId = store.findMirrorsForParent('parent-budget', 'parent-txn').first().childTransactionId
+        long originalMirrorId = store.findMirrorsForParent('parent-budget', 'parent-txn').first().id
+        repository.remote.remove(originalChildId)
+        createOperation('recreate-after-delete', ReconciliationOperationType.UPDATE, originalMirrorId,
+            originalChildId, payload())
+
+        when:
+        def result = applier(store).applyReadyOperations()
+
+        then:
+        result.applied == 1
+        result.failed == 0
+        repository.postCalls == 2
+        repository.recoveryCalls == 0
+        repository.lastCreated.import_id != originalImportId
+        store.findMirrorsForParent('parent-budget', 'parent-txn', true)*.status == ['missing', 'active']
+    }
+
     def "delete treats already absent as success and unlocks dependent create in the same batch"() {
         given:
         long oldMirror = store.recordMirrorCreated(sourceId, 'old-budget', 'outflow', 'old-child')

@@ -1,0 +1,24 @@
+{
+    "parentBudget": {
+        "displayName": "Jorsten's Plan",
+        "fullId": "REPLACE_WITH_FULL_IMMUTABLE_PLAN_UUID",
+        "categoryNames": []
+    },
+    "childBudgets": [
+        {
+            "displayName": "Jorsten Jr's Plan",
+            "fullId": "REPLACE_WITH_FULL_IMMUTABLE_PLAN_UUID",
+            "accountNames": []
+        },
+        {
+            "displayName": "Borsten's Plan",
+            "fullId": "REPLACE_WITH_FULL_IMMUTABLE_PLAN_UUID",
+            "accountNames": []
+        },
+        {
+            "displayName": "Thorsten's Plan",
+            "fullId": "REPLACE_WITH_FULL_IMMUTABLE_PLAN_UUID",
+            "accountNames": []
+        }
+    ]
+}

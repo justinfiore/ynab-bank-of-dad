@@ -155,8 +155,11 @@ class ParentTransactionReconcilerSpec extends Specification {
             .reconcile(split).desiredMirrors.toList().sort { it.source.parentSubtransactionId }
 
         then:
-        desired*.payeeId == ['payee-one', 'payee-two']
+        // Parent-budget payee IDs are not valid in a different child budget.
+        // Preserve only the component display name; YNAB resolves/creates the child payee.
+        desired*.payeeId == [null, null]
         desired*.payeeName == ['First Store', 'Second Store']
+        desired*.authoritativePayloadJson.every { it.contains('"payee_id":null') }
         desired*.authoritativePayloadJson.every { !it.contains('"payee_name":"Parent Payee"') }
     }
 
