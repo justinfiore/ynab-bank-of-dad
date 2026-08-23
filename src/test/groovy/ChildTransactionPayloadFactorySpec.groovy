@@ -1,124 +1,82 @@
-import ynabbankofdad.sync.*
-import ynabbankofdad.sync.model.*
 import spock.lang.Specification
+import ynabbankofdad.sync.ChildTransactionPayloadFactory
+import ynabbankofdad.sync.state.SourceEntityKey
+import ynabbankofdad.sync.state.SourceEntityType
 
 class ChildTransactionPayloadFactorySpec extends Specification {
     def factory = new ChildTransactionPayloadFactory()
 
-    def "buildTransaction creates child YNAB payload with deterministic import id"() {
+    def "stable reconciliation source and target identities determine import ids"() {
         given:
-        def plan = plan('parent|child-one|transaction|txn-1||||cat-1|-1200')
-
-        when:
-        def first = factory.buildTransaction(plan, 'acct-1', 'YBOD: ', '')
-        def second = factory.buildTransaction(plan, 'acct-1', 'YBOD: ', '')
-
-        then:
-        first.account_id == 'acct-1'
-        first.date == '2026-07-01'
-        first.amount == -1200
-        first.payee_name == 'Payee'
-        first.category_id == null
-        first.memo == 'YBOD: Memo'
-        first.cleared == 'cleared'
-        !first.approved
-        first.import_id == second.import_id
-        first.import_id.startsWith('PCBS:20260701:1200:')
-    }
-
-    def "buildTransaction applies custom prefix and suffix"() {
-        given:
-        def plan = plan('parent|child-one|transaction|txn-1||||cat-1|-1200')
-
-        when:
-        def result = factory.buildTransaction(plan, 'acct-1', '[Kid] ', ' (auto)')
-
-        then:
-        result.memo == '[Kid] Memo (auto)'
-        result.cleared == 'cleared'
-    }
-
-    def "buildTransaction respects empty prefix/suffix"() {
-        given:
-        def plan = plan('parent|child-one|transaction|txn-1||||cat-1|-1200')
-
-        when:
-        def result = factory.buildTransaction(plan, 'acct-1', '', '')
-
-        then:
-        result.memo == 'Memo'
-        result.cleared == 'cleared'
-    }
-
-    def "buildTransaction trims the final decorated memo including an empty source memo"() {
-        given:
-        def source = plan('parent|child-one|transaction|txn-1||||cat-1|-1200')
-        def emptyMemoPlan = new ChildTransactionPlan(
-            source.sourceBudgetId, source.targetChildKey, source.targetBudgetName, source.mappingKey,
-            source.parentCategoryName, source.eventType, source.parentTransactionId,
-            source.parentSubtransactionId, source.moneyMovementId, source.moneyMovementGroupId,
-            source.idempotencyKey, source.childAccountName, source.date, source.amount,
-            null, source.payeeName, source.approved
-        )
+        def source = transactionSource('txn-1')
 
         expect:
-        factory.buildTransaction(source, 'acct-1', '  [Kid] ', ' (auto)  ').memo == '[Kid] Memo (auto)'
-        factory.buildTransaction(emptyMemoPlan, 'acct-1', '  [Kid] ', ' (auto)  ').memo == '[Kid]  (auto)'
-        factory.buildTransaction(emptyMemoPlan, 'acct-1', '  ', '  ').memo == ''
+        factory.buildImportId(source, 'child-one', 'outflow') ==
+            factory.buildImportId(source, 'child-one', 'inflow')
+        factory.buildImportId(source, 'child-one', 'outflow') !=
+            factory.buildImportId(source, 'child-two', 'outflow')
+        factory.buildImportId(source, 'child-one', 'outflow') !=
+            factory.buildImportId(transactionSource('txn-2'), 'child-one', 'outflow')
+        factory.buildImportId(source, 'child-one', 'outflow') !=
+            factory.buildImportId(source, 'child-one', 'outflow', 'retired-child')
+        factory.buildImportId(source, 'child-one', 'outflow', 'retired-child') ==
+            factory.buildImportId(source, 'child-one', 'outflow', 'retired-child')
+        factory.buildImportId(source, 'child-one', 'outflow') ==
+            factory.buildImportId(source, 'child-one', 'outflow', null)
+        factory.buildImportId(source, 'child-one', 'outflow') ==
+            factory.buildImportId(source, 'child-one', 'outflow', '')
+        factory.buildImportId(source, 'child-one', 'outflow') ==
+            'PCBS:fafc540bc31c2fe27034bfe4d360a31'
     }
 
-    def "different idempotency keys produce different import ids"() {
+    def "money movement import ids distinguish mirror directions"() {
+        given:
+        def source = new SourceEntityKey(
+            'parent-budget', SourceEntityType.MONEY_MOVEMENT, null, null, 'movement-1')
+
         expect:
-        factory.buildImportId(plan('parent|child-one|transaction|txn-1||||cat-1|-1200')) !=
-            factory.buildImportId(plan('parent|child-two|transaction|txn-1||||cat-1|-1200'))
+        factory.buildImportId(source, 'child-budget', 'inflow') !=
+            factory.buildImportId(source, 'child-budget', 'outflow')
     }
 
     def "import ids are sanitized and bounded"() {
         given:
-        def importId = factory.buildImportId(plan('parent|child one|transaction|txn/with:punctuation and lots of extra characters !@#$%^&*()'))
+        def source = transactionSource('txn/with:punctuation and lots of extra characters !@#$%^&*()')
 
-        expect:
-        importId ==~ /PCBS:20260701:1200:[A-Za-z0-9]+/
-        importId.split(':')[-1].size() <= 28
-        importId.size() <= 64
+        when:
+        def importId = factory.buildImportId(source, 'child budget!', 'outflow')
+
+        then:
+        importId ==~ /PCBS:[a-f0-9]{31}/
+        importId.size() == 36
     }
 
-    def "extractCreatedTransactionId supports bulk and transaction list response shapes"() {
+    def "buildImportId rejects missing stable reconciliation identity"() {
+        when:
+        factory.buildImportId(source, targetBudgetId, direction)
+
+        then:
+        def ex = thrown(IllegalArgumentException)
+        ex.message.contains('stable source and target identity')
+
+        where:
+        source                                                      | targetBudgetId | direction
+        null                                                        | 'child'        | 'outflow'
+        new SourceEntityKey(null, SourceEntityType.TRANSACTION,
+            'txn', null, null)                                      | 'child'        | 'outflow'
+        transactionSource('txn')                                    | null           | 'outflow'
+        transactionSource('txn')                                    | 'child'        | null
+    }
+
+    def "extractCreatedTransactionId supports YNAB bulk and transaction response shapes"() {
         expect:
         factory.extractCreatedTransactionId([data: [bulk: [transaction_ids: ['bulk-id']]]]) == 'bulk-id'
         factory.extractCreatedTransactionId([data: [transactions: [[id: 'txn-id']]]]) == 'txn-id'
         factory.extractCreatedTransactionId([data: [:]]) == null
     }
 
-    def "buildImportId rejects a missing idempotency key with a useful error"() {
-        when:
-        factory.buildImportId(plan(null))
-
-        then:
-        def ex = thrown(IllegalArgumentException)
-        ex.message.contains('idempotency key')
-    }
-
-    def "buildImportId handles the minimum integer amount without a negative absolute value"() {
-        given:
-        def source = plan('minimum-amount-key')
-        def minimum = new ChildTransactionPlan(
-            source.sourceBudgetId, source.targetChildKey, source.targetBudgetName, source.mappingKey,
-            source.parentCategoryName, source.eventType, source.parentTransactionId,
-            source.parentSubtransactionId, source.moneyMovementId, source.moneyMovementGroupId,
-            source.idempotencyKey, source.childAccountName, source.date, -2147483647 - 1,
-            source.memo, source.payeeName, source.approved
-        )
-
-        expect:
-        factory.buildImportId(minimum).contains(':2147483648:')
-    }
-
-    private static ChildTransactionPlan plan(String idempotencyKey) {
-        new ChildTransactionPlan(
-            'parent-budget', 'child-one', 'Child Budget', 'spend', 'Child One Spend Bank',
-            'transaction', 'txn-1', null, null, null, idempotencyKey, 'Child Checking',
-            '2026-07-01', -1200, 'Memo', 'Payee', false
-        )
+    private static SourceEntityKey transactionSource(String transactionId) {
+        new SourceEntityKey(
+            'parent-budget', SourceEntityType.TRANSACTION, transactionId, null, null)
     }
 }

@@ -16,7 +16,11 @@ import spock.lang.TempDir
 import org.slf4j.LoggerFactory
 
 import java.nio.file.Path
+import java.nio.file.Files
 import java.sql.DriverManager
+import java.time.Clock
+import java.time.Instant
+import java.time.ZoneOffset
 
 import static com.github.tomakehurst.wiremock.client.WireMock.*
 
@@ -82,9 +86,9 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         and:
         allPostedImportIds().every { it.startsWith('PCBS:') }
         tableCount('sync_runs') == 1
-        tableCount('source_events') == 5
-        tableCount('sync_mappings') == 5
-        tableCount('applied_transactions') == 5
+        tableCount('sync_operations') == 5
+        tableCount('operation_attempts') == 5
+        tableCount('child_mirrors') == 5
         cursorValue('transactions.last_server_knowledge') == 41
     }
 
@@ -107,6 +111,7 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
             account_id: 'child-one-account-id',
             date: '2026-07-01',
             amount: -1200,
+            payee_id: null,
             payee_name: null,
             category_id: null,
             memo: '[Kid] Shoes (auto)',
@@ -114,7 +119,9 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
             approved: false,
             import_id: postedTransactions('child-one-budget-id')[0].import_id
         ]]
-        tableCount('applied_transactions') == 1
+        verify(getRequestedFor(urlEqualTo(
+            '/v1/plans/parent-budget-id/transactions/txn-custom-memo')))
+        tableCount('operation_attempts') == 1
     }
 
     def "four child budgets route literals regex split and money movements across multiple child accounts"() {
@@ -210,18 +217,13 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         verify(3, getRequestedFor(urlEqualTo('/v1/plans/child-three-budget-id/accounts')))
         verify(3, getRequestedFor(urlEqualTo('/v1/plans/child-four-budget-id/accounts')))
         tableCount('sync_runs') == 1
-        tableCount('source_events') == 13
-        tableCount('sync_mappings') == 13
-        tableCount('applied_transactions') == 13
-        mappingRows()*.target_child_key.toSet() == ['child-one', 'child-two', 'child-three', 'child-four'] as Set
-        mappingRows().find { it.target_child_key == 'child-one' && it.target_mapping_key == 'save-shared' && it.target_account_name == 'Child One Save Account' }
-        mappingRows().find { it.target_child_key == 'child-two' && it.target_mapping_key == 'cd-regex' && it.target_account_name == 'Child Two CD Account' }
-        mappingRows().find { it.target_child_key == 'child-three' && it.target_mapping_key == 'cd-regex' && it.target_account_name == 'Child Three CD Account' }
-        mappingRows().find { it.target_child_key == 'child-four' && it.target_mapping_key == 'spend-shared' && it.target_account_name == 'Child Four Spend Account' }
+        tableCount('sync_operations') == 13
+        tableCount('operation_attempts') == 13
+        tableCount('child_mirrors') == 13
         cursorValue('transactions.last_server_knowledge') == 101
     }
 
-    def "second live cycle uses saved transaction cursor and duplicate idempotency state prevents reposting"() {
+    def "second live cycle uses saved transaction cursor and durable reconciliation state prevents reposting"() {
         given:
         stubCommonBudgetDiscovery()
         stubParentCategories()
@@ -234,6 +236,8 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         stubMoneyMovements([])
         stubChildAccounts('child-one-budget-id', 'child-one-account-id', 'Child One Checking')
         stubChildPost('child-one-budget-id', ['child-one-created-1'])
+        stubChildLookup('child-one-budget-id', 'child-one-created-1', 'child-one-account-id',
+            '2026-07-01', -1200, null, null)
         def syncer = syncer(false)
 
         when:
@@ -243,9 +247,10 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         then:
         postedTransactions('child-one-budget-id').size() == 1
         tableCount('sync_runs') == 2
-        tableCount('source_events') == 1
-        tableCount('sync_mappings') == 1
-        tableCount('applied_transactions') == 1
+        tableCount('source_entities') == 1
+        tableCount('source_revisions') == 1
+        tableCount('sync_operations') == 2
+        tableCount('operation_attempts') == 2
         cursorValue('transactions.last_server_knowledge') == 42
         verify(getRequestedFor(urlPathEqualTo('/v1/plans/parent-budget-id/transactions'))
             .withQueryParam('last_knowledge_of_server', equalTo('41')))
@@ -265,6 +270,8 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         stubMoneyMovements([])
         stubChildAccounts('child-one-budget-id', 'child-one-account-id', 'Child One Checking')
         stubChildPostSuccessFailureSuccessSuccess('child-one-budget-id')
+        stubChildLookup('child-one-budget-id', 'created-first', 'child-one-account-id',
+            '2026-07-10', -1000, null, null)
 
         when:
         syncer(false).runOnce(1)
@@ -280,7 +287,7 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
 
         then:
         postedTransactions('child-one-budget-id').size() == 3
-        appliedRows()*.status == ['applied', 'failed', 'applied']
+        appliedRows()*.status == ['applied', 'failed', 'applied', 'applied']
         runRows()*.status == ['partial', 'succeeded']
         cursorValue('transactions.last_server_knowledge') == 100
 
@@ -293,14 +300,15 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         posts*.memo == ['YBOD: First', 'YBOD: Retry', 'YBOD: Retry', 'YBOD: New incremental work']
         posts[1].import_id == posts[2].import_id
         posts[0].import_id != posts[3].import_id
-        appliedRows()*.status == ['applied', 'failed', 'applied', 'applied']
-        appliedRows().findAll { it.status == 'applied' }*.created_child_transaction_id == ['created-first', 'created-retry', 'created-new']
+        appliedRows()*.status == ['applied', 'failed', 'applied', 'applied', 'applied']
+        appliedRows().findAll { it.status == 'applied' }*.created_child_transaction_id ==
+            ['created-first', 'created-first', 'created-retry', 'created-new']
         runRows()*.status == ['partial', 'succeeded', 'succeeded']
         runRows()[0].error_summary.contains('simulated second post failure')
         runRows()[1..2]*.error_summary == [null, null]
-        tableCount('source_events') == 3
-        tableCount('sync_mappings') == 3
-        tableCount('applied_transactions') == 4
+        tableCount('source_entities') == 3
+        tableCount('child_mirrors') == 3
+        tableCount('operation_attempts') == 5
         cursorValue('transactions.last_server_knowledge') == 101
         verify(getRequestedFor(urlPathEqualTo('/v1/plans/parent-budget-id/transactions'))
             .withQueryParam('last_knowledge_of_server', equalTo('100')))
@@ -315,11 +323,12 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         ], 41)
         stubMoneyMovements([])
         stubChildAccounts('child-one-budget-id', 'child-one-account-id', 'Child One Checking')
-        Logger logger = (Logger) LoggerFactory.getLogger(ChildSyncApplier)
+        Logger logger = (Logger) LoggerFactory.getLogger(ParentChildBudgetSyncer)
         def appender = new ListAppender<ILoggingEvent>()
         appender.start()
         logger.addAppender(appender)
         def syncer = syncer(true, syncConfig('[Kid] ', ' (auto)'))
+        byte[] databaseBefore = Files.readAllBytes(tempDir.resolve('syncstate-wiremock.db'))
 
         when:
         syncer.runOnce(1)
@@ -327,21 +336,19 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         then:
         verify(0, postRequestedFor(urlEqualTo('/v1/plans/child-one-budget-id/transactions/bulk')))
         appender.list*.formattedMessage.any {
-            it.contains('[DRY RUN] child transaction for child-one') &&
+            it.contains('[DRY RUN] create child transaction for child-one') &&
                 it.contains('"memo":"[Kid] Shoes (auto)"') &&
                 it.contains('"cleared":"cleared"')
         }
         tableCount('sync_runs') == 0
-        tableCount('source_events') == 0
-        tableCount('sync_mappings') == 0
-        tableCount('applied_transactions') == 0
         cursorValue('transactions.last_server_knowledge') == null
+        Files.readAllBytes(tempDir.resolve('syncstate-wiremock.db')) == databaseBefore
 
         cleanup:
         logger.detachAppender(appender)
     }
 
-    def "child API failure records failed applied transaction state and continues other child targets"() {
+    def "child API failure records retryable operation state and continues other child targets"() {
         given:
         stubCommonBudgetDiscovery()
         stubParentCategories()
@@ -408,7 +415,7 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         then:
         verify(0, postRequestedFor(urlEqualTo('/v1/plans/child-one-budget-id/transactions/bulk')))
         postedTransactions('child-two-budget-id').size() == 1
-        appliedRows().find { it.status == 'failed' }.failure_reason.contains("Could not find account named 'Child One Checking'")
+        runRows()[0].error_summary.contains("Could not find account named 'Child One Checking'")
         cursorValue('transactions.last_server_knowledge') == null
     }
 
@@ -452,8 +459,150 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
 
         then:
         postedTransactions('child-one-budget-id').size() == 1
-        appliedRows()*.status == ['failed', 'applied']
+        appliedRows()*.status == ['applied']
         cursorValue('transactions.last_server_knowledge') == 62
+    }
+
+    def "transient routing failure cannot delete existing transaction or movement mirrors"() {
+        given:
+        stubCommonBudgetDiscovery()
+        stubParentCategories()
+        stubParentTransactions([[
+            id: 'txn-routing-safe', date: '2026-07-01', amount: -1000, memo: 'Safe', approved: true,
+            category_id: 'cat-child-one-spend', category_name: 'Child One Spend Bank', subtransactions: []
+        ]], 401)
+        stubParentTransactions([[
+            id: 'txn-routing-safe', date: '2026-07-01', amount: -1000, memo: 'Safe', approved: true,
+            category_id: 'cat-child-two-spend', category_name: 'Child Two Spend Bank', subtransactions: []
+        ]], 402, 401)
+        stubMoneyMovementsInOrder([[
+            id: 'movement-routing-safe', money_movement_group_id: 'group', moved_at: '2026-07-01T00:00:00Z',
+            from_category_id: 'cat-parent-only', to_category_id: 'cat-child-one-spend', amount: 500
+        ]], [[
+            id: 'movement-routing-safe', money_movement_group_id: 'group', moved_at: '2026-07-01T00:00:00Z',
+            from_category_id: 'cat-parent-only', to_category_id: 'cat-child-two-spend', amount: 500
+        ]])
+        stubChildAccounts('child-one-budget-id', 'child-one-account-id', 'Child One Checking')
+        stubChildAccounts('child-two-budget-id', 'wrong-account-id', 'Wrong Account')
+        stubChildPostsInOrder('child-one-budget-id', ['transaction-child', 'movement-child'])
+        def syncer = syncer(false)
+
+        when:
+        syncer.runOnce(1)
+        syncer.runOnce(2)
+
+        then:
+        verify(0, deleteRequestedFor(urlMatching('/v1/plans/.*/transactions/.*')))
+        mirrorRows()*.child_transaction_id == ['transaction-child', 'movement-child']
+        mirrorRows()*.status == ['active', 'active']
+        sourceLifecycleRows().every { it.lifecycle_status == 'active' }
+        ingestionBatchRows().findAll { it.server_knowledge == 402 || it.source_kind == 'money_movement_snapshot' }
+            .any { it.status == 'pending' }
+        cursorValue('transactions.last_server_knowledge') == 401
+        runRows().last().status == 'partial'
+    }
+
+    def "routing failure for one child does not mark an unrelated resolved source deleted"() {
+        given:
+        stubCommonBudgetDiscovery()
+        stubParentCategories()
+        stubParentTransactions([
+            [id: 'txn-child-one-ok', date: '2026-07-01', amount: -1100, memo: 'One', approved: true,
+             category_id: 'cat-child-one-spend', category_name: 'Child One Spend Bank', subtransactions: []],
+            [id: 'txn-child-two-blocked', date: '2026-07-01', amount: -2200, memo: 'Two', approved: true,
+             category_id: 'cat-child-two-spend', category_name: 'Child Two Spend Bank', subtransactions: []]
+        ], 410)
+        stubMoneyMovements([])
+        stubChildAccounts('child-one-budget-id', 'child-one-account-id', 'Child One Checking')
+        stubFor(get(urlEqualTo('/v1/plans/child-two-budget-id/accounts'))
+            .willReturn(errorResponse(500, 'child two routing unavailable')))
+        stubChildPost('child-one-budget-id', ['child-one-created'])
+        def syncer = syncer(false)
+
+        when:
+        syncer.runOnce(1)
+
+        then:
+        verify(1, postRequestedFor(urlEqualTo('/v1/plans/child-one-budget-id/transactions/bulk')))
+        verify(0, deleteRequestedFor(urlMatching('/v1/plans/.*/transactions/.*')))
+        mirrorRows()*.child_transaction_id == ['child-one-created']
+        sourceLifecycleRows().findAll { it.parent_transaction_id == 'txn-child-one-ok' }*.lifecycle_status == ['active']
+        sourceLifecycleRows().findAll { it.parent_transaction_id == 'txn-child-two-blocked' }*.lifecycle_status == ['active']
+        cursorValue('transactions.last_server_knowledge') == null
+        runRows().last().status == 'partial'
+    }
+
+    def "routing failure isolates components within one split and recovery creates only the missing child mirror"() {
+        given:
+        stubCommonBudgetDiscovery()
+        stubParentCategories()
+        stubParentTransactions([[
+            id: 'txn-split-routing-isolation', date: '2026-07-01', amount: -1100,
+            memo: 'Split', approved: true, category_id: null, category_name: null,
+            subtransactions: [[
+                id: 'sub-child-one-existing', transaction_id: 'txn-split-routing-isolation', amount: -1100,
+                memo: 'Existing child one', category_id: 'cat-child-one-spend',
+                category_name: 'Child One Spend Bank'
+            ]]
+        ]], 420)
+        stubParentTransactions([[
+            id: 'txn-split-routing-isolation', date: '2026-07-01', amount: -3300,
+            memo: 'Split', approved: true, category_id: null, category_name: null,
+            subtransactions: [
+                [id: 'sub-child-one-existing', transaction_id: 'txn-split-routing-isolation', amount: -1100,
+                 memo: 'Existing child one', category_id: 'cat-child-one-spend',
+                 category_name: 'Child One Spend Bank'],
+                [id: 'sub-child-one-missing', transaction_id: 'txn-split-routing-isolation', amount: -1000,
+                 memo: 'Missing child one', category_id: 'cat-child-one-save',
+                 category_name: 'Child One Save Bank'],
+                [id: 'sub-child-two-healthy', transaction_id: 'txn-split-routing-isolation', amount: -1200,
+                 memo: 'Healthy child two', category_id: 'cat-child-two-spend',
+                 category_name: 'Child Two Spend Bank']
+            ]
+        ]], 421, 420)
+        stubMoneyMovements([])
+        stubChildAccountsSuccessFailureSuccess('child-one-budget-id',
+            [[id: 'child-one-spend-account-id', name: 'Child One Spend Account']],
+            [[id: 'child-one-spend-account-id', name: 'Child One Spend Account'],
+             [id: 'child-one-save-account-id', name: 'Child One Save Account']])
+        stubChildAccounts('child-two-budget-id', 'child-two-account-id', 'Child Two Checking')
+        stubChildPostsInOrder('child-one-budget-id', ['child-one-existing', 'child-one-restored'])
+        stubChildPost('child-two-budget-id', ['child-two-created'])
+        stubChildLookup('child-one-budget-id', 'child-one-existing', 'child-one-spend-account-id',
+            '2026-07-01', -1100, null, null)
+        stubChildLookup('child-two-budget-id', 'child-two-created', 'child-two-account-id',
+            '2026-07-01', -1200, null, null)
+        SyncConfig config = splitRoutingIsolationConfig()
+        def syncer = syncer(false, config)
+
+        when: 'the original child-one component is mirrored'
+        syncer.runOnce(1)
+
+        then:
+        postedTransactions('child-one-budget-id')*.memo == ['YBOD: Existing child one']
+
+        when: 'child-one routing fails for the expanded split'
+        syncer.runOnce(2)
+
+        then: 'the healthy child-two component is created and the existing child-one mirror is preserved'
+        postedTransactions('child-one-budget-id')*.memo == ['YBOD: Existing child one']
+        postedTransactions('child-two-budget-id')*.memo == ['YBOD: Healthy child two']
+        verify(0, deleteRequestedFor(urlEqualTo(
+            '/v1/plans/child-one-budget-id/transactions/child-one-existing')))
+        mirrorRows().collectEntries { [(it.child_transaction_id): it.status] } ==
+            ['child-one-existing': 'active', 'child-two-created': 'active']
+        cursorValue('transactions.last_server_knowledge') == 420
+
+        when: 'child-one routing is restored'
+        syncer.runOnce(3)
+
+        then: 'only the missing child-one component is created'
+        postedTransactions('child-one-budget-id')*.memo ==
+            ['YBOD: Existing child one', 'YBOD: Missing child one']
+        postedTransactions('child-two-budget-id')*.memo == ['YBOD: Healthy child two']
+        mirrorRows().collectEntries { [(it.child_transaction_id): it.status] } ==
+            ['child-one-existing': 'active', 'child-two-created': 'active', 'child-one-restored': 'active']
+        cursorValue('transactions.last_server_knowledge') == 421
     }
 
     def "child auth failure records failed state isolates other child and does not advance cursor"() {
@@ -476,8 +625,8 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
 
         then:
         postedTransactions('child-two-budget-id').size() == 1
-        appliedRows()*.status.sort() == ['applied', 'failed']
-        appliedRows().find { it.status == 'failed' }.failure_reason.contains('YNAB GET /v1/plans/child-one-budget-id/accounts failed with status 401')
+        appliedRows()*.status == ['applied']
+        runRows()[0].error_summary.contains('YNAB GET /v1/plans/child-one-budget-id/accounts failed with status 401')
         cursorValue('transactions.last_server_knowledge') == null
     }
 
@@ -499,8 +648,8 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
 
         then:
         postedTransactions('child-two-budget-id').size() == 1
-        appliedRows()*.status.sort() == ['applied', 'failed']
-        appliedRows().find { it.status == 'failed' }.failure_reason.contains('YNAB GET /v1/plans failed with status 403')
+        appliedRows()*.status == ['applied']
+        runRows()[0].error_summary.contains('YNAB GET /v1/plans failed with status 403')
         cursorValue('transactions.last_server_knowledge') == null
     }
 
@@ -585,7 +734,7 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         cursorValue('transactions.last_server_knowledge') == null
     }
 
-    def "parent money movement failure stops before child posts and cursor updates"() {
+    def "parent money movement failure does not block transaction cursor"() {
         given:
         stubCommonBudgetDiscovery()
         stubParentCategories()
@@ -598,11 +747,10 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         syncer.runOnce(1)
 
         then:
-        def ex = thrown(IllegalStateException)
-        ex.message.contains('YNAB GET /v1/plans/parent-budget-id/money_movements failed with status 500')
         verify(0, postRequestedFor(urlMatching('/v1/plans/.*/transactions/bulk')))
-        tableCount('sync_runs') == 0
-        cursorValue('transactions.last_server_knowledge') == null
+        runRows()*.status == ['partial']
+        runRows()[0].error_summary.contains('money movement outage')
+        cursorValue('transactions.last_server_knowledge') == 81
     }
 
     def "no qualifying parent work records successful run without child resolution or mapping"() {
@@ -623,9 +771,6 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         verify(0, getRequestedFor(urlMatching('/v1/plans/child-.*-budget-id/accounts')))
         verify(0, postRequestedFor(urlMatching('/v1/plans/.*/transactions/bulk')))
         tableCount('sync_runs') == 1
-        tableCount('source_events') == 0
-        tableCount('sync_mappings') == 0
-        tableCount('applied_transactions') == 0
         cursorValue('transactions.last_server_knowledge') == 91
     }
 
@@ -650,8 +795,253 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         childOnePosts.size() == 2
         childOnePosts.find { it.memo == 'YBOD: From Parent Only to Child One Spend Bank' && it.amount == 500 && it.payee_name == 'From Parent Only' && it.cleared == 'cleared' }
         childOnePosts.find { it.memo == 'YBOD: From Child One Spend Bank to Parent Only' && it.amount == -300 && it.payee_name == 'To Parent Only' && it.cleared == 'cleared' }
-        tableCount('sync_mappings') == 2
+        tableCount('sync_operations') == 2
         cursorValue('transactions.last_server_knowledge') == 92
+    }
+
+    def "no-op parent edit recreates a missing mirror and advances cursor"() {
+        given:
+        stubCommonBudgetDiscovery()
+        stubParentCategories()
+        stubParentTransactions([[
+            id: 'txn-recreate', date: '2026-07-01', amount: -1200, memo: 'Original', approved: true,
+            category_id: 'cat-child-one-spend', category_name: 'Child One Spend Bank', subtransactions: []
+        ]], 201)
+        stubParentTransactions([[
+            id: 'txn-recreate', date: '2026-07-01', amount: -1200, memo: 'Memo edit', approved: true,
+            category_id: 'cat-child-one-spend', category_name: 'Child One Spend Bank', subtransactions: []
+        ]], 202, 201)
+        stubMoneyMovements([])
+        stubChildAccounts('child-one-budget-id', 'child-one-account-id', 'Child One Checking')
+        stubChildPostsInOrder('child-one-budget-id', ['original-child', 'replacement-child'])
+        stubChildMissing('child-one-budget-id', 'original-child')
+        def syncer = syncer(false)
+
+        when:
+        syncer.runOnce(1)
+        syncer.runOnce(2)
+
+        then:
+        postedTransactions('child-one-budget-id').size() == 2
+        mirrorRows()*.child_transaction_id == ['original-child', 'replacement-child']
+        mirrorRows()*.status == ['missing', 'active']
+        cursorValue('transactions.last_server_knowledge') == 202
+    }
+
+    def "tombstone unapproval and unmapping delete mirrors without reversals"() {
+        given:
+        stubCommonBudgetDiscovery()
+        stubParentCategories()
+        List initial = ['deleted', 'unapproved', 'unmapped'].collect { suffix -> [
+            id: "txn-${suffix}", date: '2026-07-01', amount: -1000, memo: suffix, approved: true,
+            category_id: 'cat-child-one-spend', category_name: 'Child One Spend Bank', subtransactions: []
+        ] }
+        stubParentTransactions(initial, 211)
+        stubParentTransactions([
+            initial[0] + [deleted: true],
+            initial[1] + [approved: false],
+            initial[2] + [category_id: 'cat-parent-only', category_name: 'Parent Only']
+        ], 212, 211)
+        stubMoneyMovements([])
+        stubChildAccounts('child-one-budget-id', 'child-one-account-id', 'Child One Checking')
+        stubChildPostsInOrder('child-one-budget-id', ['child-deleted', 'child-unapproved', 'child-unmapped'])
+        ['child-deleted', 'child-unapproved', 'child-unmapped'].each { stubChildDelete('child-one-budget-id', it) }
+        def syncer = syncer(false)
+
+        when:
+        syncer.runOnce(1)
+        syncer.runOnce(2)
+
+        then:
+        postedTransactions('child-one-budget-id').size() == 3
+        verify(3, deleteRequestedFor(urlMatching('/v1/plans/child-one-budget-id/transactions/.*')))
+        mirrorRows()*.status == ['deleted', 'deleted', 'deleted']
+        sourceLifecycleRows()*.lifecycle_status == ['deleted', 'deleted', 'deleted']
+        cursorValue('transactions.last_server_knowledge') == 212
+    }
+
+    def "movement mutation failure remains retryable while transaction cursor advances"() {
+        given:
+        stubCommonBudgetDiscovery()
+        stubParentCategories()
+        stubParentTransactions([[
+            id: 'txn-independent', date: '2026-07-01', amount: -1000, memo: 'Transaction', approved: true,
+            category_id: 'cat-child-one-spend', category_name: 'Child One Spend Bank', subtransactions: []
+        ]], 221)
+        stubMoneyMovements([[
+            id: 'movement-fails', money_movement_group_id: 'group', moved_at: '2026-07-02T00:00:00Z',
+            from_category_id: 'cat-parent-only', to_category_id: 'cat-child-one-spend', amount: 500
+        ]])
+        stubChildAccounts('child-one-budget-id', 'child-one-account-id', 'Child One Checking')
+        stubChildPostSuccessThenFailure('child-one-budget-id', 'transaction-child')
+
+        when:
+        syncer(false).runOnce(1)
+
+        then:
+        appliedRows()*.status == ['applied', 'failed']
+        runRows()*.status == ['partial']
+        cursorValue('transactions.last_server_knowledge') == 221
+        operationRows().find { it.source_kind == 'money_movement_snapshot' }.status == 'retryable_failed'
+    }
+
+    def "authoritative edit updates one child preserves memo and stable lineage"() {
+        given:
+        stubCommonBudgetDiscovery()
+        stubParentCategories()
+        stubParentTransactions([[
+            id: 'txn-update', date: '2026-07-01', amount: -1000, memo: 'Parent original', approved: true,
+            payee_id: null, payee_name: 'Old Payee', category_id: 'cat-child-one-spend',
+            category_name: 'Child One Spend Bank', subtransactions: []
+        ]], 291)
+        stubParentTransactions([[
+            id: 'txn-update', date: '2026-07-02', amount: -1250, memo: 'Parent changed', approved: true,
+            payee_id: null, payee_name: 'New Payee', category_id: 'cat-child-one-spend',
+            category_name: 'Child One Spend Bank', subtransactions: []
+        ]], 292, 291)
+        stubMoneyMovements([])
+        stubChildAccounts('child-one-budget-id', 'child-one-account-id', 'Child One Checking')
+        stubChildPost('child-one-budget-id', ['child-update'])
+        stubFor(get(urlEqualTo('/v1/plans/child-one-budget-id/transactions/child-update'))
+            .willReturn(jsonResponse([data: [server_knowledge: 1, transaction: [
+                id: 'child-update', account_id: 'child-one-account-id', date: '2026-07-01', amount: -1000,
+                payee_id: null, payee_name: 'Old Payee', memo: 'child-owned memo',
+                cleared: 'uncleared', approved: true, deleted: false
+            ]]])))
+        stubFor(put(urlEqualTo('/v1/plans/child-one-budget-id/transactions/child-update'))
+            .willReturn(jsonResponse([data: [server_knowledge: 2, transaction: [
+                id: 'child-update', account_id: 'child-one-account-id', date: '2026-07-02', amount: -1250,
+                payee_id: null, payee_name: 'New Payee', memo: 'child-owned memo',
+                cleared: 'cleared', approved: false, deleted: false
+            ]]])))
+        def syncer = syncer(false)
+        def auditAppender = new ListAppender<ILoggingEvent>()
+        auditAppender.start()
+        Logger syncerLogger = LoggerFactory.getLogger(ParentChildBudgetSyncer) as Logger
+        syncerLogger.addAppender(auditAppender)
+
+        when:
+        syncer.runOnce(1)
+        syncer.runOnce(2)
+        List<String> auditMessages = auditAppender.list.findAll { it.level.levelStr == 'INFO' }*.formattedMessage
+
+        then:
+        postedTransactions('child-one-budget-id').size() == 1
+        verify(putRequestedFor(urlEqualTo('/v1/plans/child-one-budget-id/transactions/child-update'))
+            .withHeader('Authorization', equalTo('Bearer child-one-token'))
+            .withRequestBody(equalToJson(JsonOutput.toJson([transaction: [
+                account_id: 'child-one-account-id', date: '2026-07-02', amount: -1250,
+                payee_id: null, payee_name: 'New Payee', cleared: 'cleared', approved: false
+            ]]))))
+        tableCount('source_entities') == 1
+        tableCount('source_revisions') == 2
+        mirrorRows() == [[child_transaction_id: 'child-update', status: 'active']]
+        cursorValue('transactions.last_server_knowledge') == 292
+        auditMessages.any {
+            it.contains('Reconciliation decision action=create') &&
+                it.contains('transaction=txn-update') && it.contains('targetBudget=child-one-budget-id')
+        }
+        auditMessages.any {
+            it.contains('Reconciliation decision action=update') &&
+                it.contains('childTransaction=child-update') && it.contains('"amount":"-$1.25"')
+        }
+        auditMessages.findAll { it.contains('Reconciliation decision') }.every {
+            it.contains('operation=') && it.contains('key=') && it.contains('batch=') &&
+                it.contains('sequence=') && it.contains('dependency=') && !it.contains('child-one-token')
+        }
+
+        cleanup:
+        syncerLogger.detachAppender(auditAppender)
+    }
+
+    def "cross-budget reroute separates tokens deletes once and retries only replacement create"() {
+        given:
+        stubCommonBudgetDiscovery()
+        stubParentCategories()
+        stubParentTransactions([[
+            id: 'txn-reroute', date: '2026-07-01', amount: -1000, memo: 'Reroute', approved: true,
+            category_id: 'cat-child-one-spend', category_name: 'Child One Spend Bank', subtransactions: []
+        ]], 301)
+        stubParentTransactions([[
+            id: 'txn-reroute', date: '2026-07-01', amount: -1000, memo: 'Reroute', approved: true,
+            category_id: 'cat-child-two-spend', category_name: 'Child Two Spend Bank', subtransactions: []
+        ]], 302, 301)
+        stubMoneyMovements([])
+        stubChildAccounts('child-one-budget-id', 'child-one-account-id', 'Child One Checking')
+        stubChildAccounts('child-two-budget-id', 'child-two-account-id', 'Child Two Checking')
+        stubChildPost('child-one-budget-id', ['old-child'])
+        stubChildDelete('child-one-budget-id', 'old-child')
+        stubChildPostFailureThenSuccess('child-two-budget-id', ['replacement-child'])
+        def syncer = syncer(false)
+
+        when:
+        syncer.runOnce(1)
+        syncer.runOnce(2)
+
+        then:
+        cursorValue('transactions.last_server_knowledge') == 301
+        verify(deleteRequestedFor(urlEqualTo('/v1/plans/child-one-budget-id/transactions/old-child'))
+            .withHeader('Authorization', equalTo('Bearer child-one-token')))
+        verify(postRequestedFor(urlEqualTo('/v1/plans/child-two-budget-id/transactions/bulk'))
+            .withHeader('Authorization', equalTo('Bearer child-two-token')))
+
+        when:
+        syncer.runOnce(3)
+
+        then:
+        verify(1, deleteRequestedFor(urlEqualTo('/v1/plans/child-one-budget-id/transactions/old-child')))
+        verify(2, postRequestedFor(urlEqualTo('/v1/plans/child-two-budget-id/transactions/bulk')))
+        mirrorRows()*.child_transaction_id == ['old-child', 'replacement-child']
+        mirrorRows()*.status == ['deleted', 'active']
+        sourceLifecycleRows()*.lifecycle_status == ['active']
+        cursorValue('transactions.last_server_knowledge') == 302
+    }
+
+    def "partial target deletion keeps a still-qualified source active"() {
+        given:
+        stubCommonBudgetDiscovery()
+        stubParentCategories()
+        stubParentTransactions([[
+            id: 'txn-partial-target', date: '2026-07-01', amount: -1000, memo: 'Shared', approved: true,
+            category_id: 'cat-child-one-spend', category_name: 'Child One Spend Bank', subtransactions: []
+        ]], 311)
+        stubParentTransactions([[
+            id: 'txn-partial-target', date: '2026-07-01', amount: -1000, memo: 'Shared', approved: true,
+            category_id: 'cat-child-one-save', category_name: 'Child One Save Bank', subtransactions: []
+        ]], 312, 311)
+        stubMoneyMovements([])
+        stubChildAccounts('child-one-budget-id', 'child-one-account-id', 'Child One Checking')
+        stubChildAccounts('child-two-budget-id', 'child-two-account-id', 'Child Two Checking')
+        stubChildPost('child-one-budget-id', ['child-one-shared'])
+        stubChildPost('child-two-budget-id', ['child-two-shared'])
+        stubChildLookup('child-one-budget-id', 'child-one-shared', 'child-one-account-id',
+            '2026-07-01', -1000, null, null)
+        stubChildDelete('child-two-budget-id', 'child-two-shared')
+        SyncConfig config = syncConfig()
+        ChildBudgetSyncTarget childTwo = config.childBudgets[1]
+        ChildAccountMapping originalMapping = childTwo.accountMappings[0]
+        ChildAccountMapping expandedMapping = new ChildAccountMapping(
+            originalMapping.mappingKey,
+            originalMapping.parentCategoryNames + new ParentCategoryNameMatcher('Child One Spend Bank', false),
+            originalMapping.childAccountName)
+        ChildBudgetSyncTarget expandedChildTwo = new ChildBudgetSyncTarget(
+            childTwo.childKey, childTwo.budgetName, childTwo.tokenEnvVarName, [expandedMapping],
+            childTwo.memoPrefix, childTwo.memoSuffix)
+        config = new SyncConfig(config.parentBudget, [config.childBudgets[0], expandedChildTwo],
+            config.pollingIntervalSeconds, config.logging, config.state)
+        def syncer = syncer(false, config)
+
+        when:
+        syncer.runOnce(1)
+        syncer.runOnce(2)
+
+        then:
+        verify(1, deleteRequestedFor(urlEqualTo(
+            '/v1/plans/child-two-budget-id/transactions/child-two-shared')))
+        sourceLifecycleRows()*.lifecycle_status == ['active']
+        mirrorRows().collectEntries { [(it.child_transaction_id): it.status] } ==
+            ['child-one-shared': 'active', 'child-two-shared': 'deleted']
+        cursorValue('transactions.last_server_knowledge') == 312
     }
 
     private ParentChildBudgetSyncer syncer(boolean dryRun) {
@@ -686,7 +1076,8 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
             stateStore,
             syncConfig.childBudgets.collect { ChildBudgetSyncTarget target ->
                 new ChildSyncContext(target, new YnabBudgetRepository(buildClient(tokenForChild(target.childKey))))
-            }
+            },
+            Clock.fixed(Instant.parse('2026-08-01T12:00:00Z'), ZoneOffset.UTC)
         )
     }
 
@@ -738,6 +1129,24 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
                     ['spend-shared', ['Child Four Spend Bank', [name: 'Child Four Bonus.*', regex: true]], 'Child Four Spend Account'],
                     ['give-literal', ['Child Four Give Bank'], 'Child Four Give Account'],
                     ['cd-regex', [[name: 'Child Four Gold CD.*', regex: true]], 'Child Four CD Account']
+                ])
+            ],
+            300,
+            new SyncLoggingConfig(tempDir.resolve('parent-child-sync.log').toString(), 'INFO', 7, 10),
+            new SyncStateConfig(tempDir.resolve('syncstate-wiremock.db').toString(), 45, 45)
+        )
+    }
+
+    private SyncConfig splitRoutingIsolationConfig() {
+        new SyncConfig(
+            new BudgetRef('Parent Budget', 'YNAB_PARENT_TOKEN'),
+            [
+                childTarget('child-one', 'Child One Budget', 'YNAB_CHILD_ONE_TOKEN', [
+                    ['spend', ['Child One Spend Bank'], 'Child One Spend Account'],
+                    ['save', ['Child One Save Bank'], 'Child One Save Account']
+                ]),
+                childTarget('child-two', 'Child Two Budget', 'YNAB_CHILD_TWO_TOKEN', [
+                    ['spend', ['Child Two Spend Bank'], 'Child Two Checking']
                 ])
             ],
             300,
@@ -809,18 +1218,51 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
 
     private void stubParentTransactions(List<Map> transactions, int serverKnowledge, Integer lastKnowledge = null) {
         def mapping = get(urlPathEqualTo('/v1/plans/parent-budget-id/transactions'))
-            .withQueryParam('since_date', matching('\\d{4}-\\d{2}-\\d{2}'))
+            .inScenario('parent-transaction-deltas')
         if (lastKnowledge == null) {
+            mapping.withQueryParam('since_date', matching('\\d{4}-\\d{2}-\\d{2}'))
             mapping.withQueryParam('last_knowledge_of_server', absent())
+            mapping.whenScenarioStateIs('Started')
         } else {
+            mapping.withQueryParam('since_date', absent())
             mapping.withQueryParam('last_knowledge_of_server', equalTo(lastKnowledge.toString()))
+            mapping.whenScenarioStateIs("knowledge-${lastKnowledge}")
         }
-        stubFor(mapping.willReturn(jsonResponse([data: [server_knowledge: serverKnowledge, transactions: transactions]])))
+        mapping.willReturn(jsonResponse([data: [server_knowledge: serverKnowledge, transactions: transactions]]))
+            .willSetStateTo("knowledge-${serverKnowledge}")
+        stubFor(mapping)
+        def retryMapping = get(urlPathEqualTo('/v1/plans/parent-budget-id/transactions'))
+            .inScenario('parent-transaction-deltas')
+            .whenScenarioStateIs("knowledge-${serverKnowledge}")
+        if (lastKnowledge == null) {
+            retryMapping.withQueryParam('since_date', matching('\\d{4}-\\d{2}-\\d{2}'))
+            retryMapping.withQueryParam('last_knowledge_of_server', absent())
+        } else {
+            retryMapping.withQueryParam('since_date', absent())
+            retryMapping.withQueryParam('last_knowledge_of_server', equalTo(lastKnowledge.toString()))
+        }
+        stubFor(retryMapping.willReturn(
+            jsonResponse([data: [server_knowledge: serverKnowledge, transactions: transactions]])))
+        transactions.each { Map transaction ->
+            stubFor(get(urlEqualTo("/v1/plans/parent-budget-id/transactions/${transaction.id}"))
+                .inScenario('parent-transaction-deltas')
+                .whenScenarioStateIs("knowledge-${serverKnowledge}")
+                .willReturn(jsonResponse([data: [server_knowledge: serverKnowledge, transaction: transaction]])))
+        }
     }
 
     private void stubMoneyMovements(List<Map> movements) {
         stubFor(get(urlEqualTo('/v1/plans/parent-budget-id/money_movements'))
-            .willReturn(jsonResponse([data: [money_movements: movements]])))
+            .willReturn(jsonResponse([data: [server_knowledge: 1, money_movements: movements]])))
+    }
+
+    private void stubMoneyMovementsInOrder(List<Map> first, List<Map> second) {
+        String path = '/v1/plans/parent-budget-id/money_movements'
+        stubFor(get(urlEqualTo(path)).inScenario('movement-routing-read').whenScenarioStateIs('Started')
+            .willReturn(jsonResponse([data: [server_knowledge: 1, money_movements: first]]))
+            .willSetStateTo('second-snapshot'))
+        stubFor(get(urlEqualTo(path)).inScenario('movement-routing-read').whenScenarioStateIs('second-snapshot')
+            .willReturn(jsonResponse([data: [server_knowledge: 2, money_movements: second]])))
     }
 
     private void stubChildAccounts(String budgetId, String accountId, String accountName) {
@@ -835,6 +1277,52 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
     private void stubChildPost(String budgetId, List<String> transactionIds) {
         stubFor(post(urlEqualTo("/v1/plans/${budgetId}/transactions/bulk"))
             .willReturn(jsonResponse([data: [bulk: [transaction_ids: transactionIds]]])))
+    }
+
+    private void stubChildPostsInOrder(String budgetId, List<String> transactionIds) {
+        String scenario = "ordered-posts-${budgetId}-${transactionIds.join('-')}"
+        transactionIds.eachWithIndex { String transactionId, int index ->
+            String state = index == 0 ? 'Started' : "posted-${index}"
+            def mapping = post(urlEqualTo("/v1/plans/${budgetId}/transactions/bulk"))
+                .inScenario(scenario).whenScenarioStateIs(state)
+                .willReturn(jsonResponse([data: [bulk: [transaction_ids: [transactionId]]]]))
+            if (index + 1 < transactionIds.size()) {
+                mapping.willSetStateTo("posted-${index + 1}")
+            }
+            stubFor(mapping)
+        }
+    }
+
+    private void stubChildPostSuccessThenFailure(String budgetId, String transactionId) {
+        String path = "/v1/plans/${budgetId}/transactions/bulk"
+        stubFor(post(urlEqualTo(path)).inScenario('movement-independent').whenScenarioStateIs('Started')
+            .willReturn(jsonResponse([data: [bulk: [transaction_ids: [transactionId]]]]))
+            .willSetStateTo('movement-fails'))
+        stubFor(post(urlEqualTo(path)).inScenario('movement-independent').whenScenarioStateIs('movement-fails')
+            .willReturn(errorResponse(500, 'movement mutation failure')))
+    }
+
+    private void stubChildDelete(String budgetId, String transactionId) {
+        stubFor(delete(urlEqualTo("/v1/plans/${budgetId}/transactions/${transactionId}"))
+            .willReturn(jsonResponse([data: [server_knowledge: 1, transaction: [
+                id: transactionId, account_id: 'child-one-account-id', date: '2026-07-01', amount: -1000,
+                cleared: 'cleared', approved: false, deleted: true
+            ]]])))
+    }
+
+    private void stubChildLookup(String budgetId, String transactionId, String accountId,
+                                 String date, int amount, String payeeId, String payeeName) {
+        stubFor(get(urlEqualTo("/v1/plans/${budgetId}/transactions/${transactionId}"))
+            .willReturn(jsonResponse([data: [server_knowledge: 1, transaction: [
+                id: transactionId, account_id: accountId, date: date, amount: amount,
+                payee_id: payeeId, payee_name: payeeName, category_id: null, memo: 'child memo',
+                cleared: 'cleared', approved: false, deleted: false
+            ]]])))
+    }
+
+    private void stubChildMissing(String budgetId, String transactionId) {
+        stubFor(get(urlEqualTo("/v1/plans/${budgetId}/transactions/${transactionId}"))
+            .willReturn(errorResponse(404, 'transaction not found')))
     }
 
     private void stubChildPostFailure(String budgetId) {
@@ -896,6 +1384,20 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
             .willReturn(jsonResponse([data: [accounts: [[id: accountId, name: accountName]]]])))
     }
 
+    private void stubChildAccountsSuccessFailureSuccess(String budgetId, List<Map> firstAccounts,
+                                                         List<Map> restoredAccounts) {
+        String scenario = "routing-recovery-${budgetId}"
+        String path = "/v1/plans/${budgetId}/accounts"
+        stubFor(get(urlEqualTo(path)).inScenario(scenario).whenScenarioStateIs('Started')
+            .willReturn(jsonResponse([data: [accounts: firstAccounts]]))
+            .willSetStateTo('routing-fails'))
+        stubFor(get(urlEqualTo(path)).inScenario(scenario).whenScenarioStateIs('routing-fails')
+            .willReturn(errorResponse(401, 'unauthorized child token'))
+            .willSetStateTo('routing-restored'))
+        stubFor(get(urlEqualTo(path)).inScenario(scenario).whenScenarioStateIs('routing-restored')
+            .willReturn(jsonResponse([data: [accounts: restoredAccounts]])))
+    }
+
     private static def jsonResponse(Object body) {
         aResponse()
             .withStatus(200)
@@ -939,13 +1441,16 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
 
     private List<Map> appliedRows() {
         withDb { connection ->
-            def rs = connection.createStatement().executeQuery('SELECT status, failure_reason, created_child_transaction_id FROM applied_transactions ORDER BY id')
+            def rs = connection.createStatement().executeQuery('''
+                SELECT outcome, failure_reason, returned_child_transaction_id
+                FROM operation_attempts ORDER BY id
+            ''')
             List rows = []
             while (rs.next()) {
                 rows << [
-                    status: rs.getString('status'),
+                    status: rs.getString('outcome') == 'failed' ? 'failed' : 'applied',
                     failure_reason: rs.getString('failure_reason'),
-                    created_child_transaction_id: rs.getString('created_child_transaction_id')
+                    created_child_transaction_id: rs.getString('returned_child_transaction_id')
                 ]
             }
             rows
@@ -963,23 +1468,50 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         }
     }
 
-    private List<Map> mappingRows() {
+    private List<Map> mirrorRows() {
+        withDb { connection ->
+            def rs = connection.createStatement().executeQuery(
+                'SELECT child_transaction_id, status FROM child_mirrors ORDER BY id')
+            List rows = []
+            while (rs.next()) rows << [child_transaction_id: rs.getString(1), status: rs.getString(2)]
+            rows
+        }
+    }
+
+    private List<Map> operationRows() {
         withDb { connection ->
             def rs = connection.createStatement().executeQuery('''
-                SELECT target_child_key, target_mapping_key, target_account_name, target_account_id, idempotency_key
-                FROM sync_mappings
-                ORDER BY id
+                SELECT operation.status, batch.source_kind
+                FROM sync_operations operation
+                LEFT JOIN ingestion_batches batch ON batch.id = operation.ingestion_batch_id
+                ORDER BY operation.id
             ''')
             List rows = []
+            while (rs.next()) rows << [status: rs.getString(1), source_kind: rs.getString(2)]
+            rows
+        }
+    }
+
+    private List<Map> sourceLifecycleRows() {
+        withDb { connection ->
+            def rs = connection.createStatement().executeQuery(
+                'SELECT parent_transaction_id, lifecycle_status FROM source_entities ORDER BY id')
+            List rows = []
             while (rs.next()) {
-                rows << [
-                    target_child_key : rs.getString('target_child_key'),
-                    target_mapping_key: rs.getString('target_mapping_key'),
-                    target_account_name: rs.getString('target_account_name'),
-                    target_account_id: rs.getString('target_account_id'),
-                    idempotency_key: rs.getString('idempotency_key')
-                ]
+                rows << [parent_transaction_id: rs.getString(1), lifecycle_status: rs.getString(2)]
             }
+            rows
+        }
+    }
+
+    private List<Map> ingestionBatchRows() {
+        withDb { connection ->
+            def rs = connection.createStatement().executeQuery('''
+                SELECT source_kind, ynab_server_knowledge, status FROM ingestion_batches ORDER BY id
+            ''')
+            List rows = []
+            while (rs.next()) rows << [source_kind: rs.getString(1), server_knowledge: rs.getObject(2),
+                                       status: rs.getString(3)]
             rows
         }
     }

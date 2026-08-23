@@ -10,9 +10,13 @@ import java.time.LocalDate
 
 @Slf4j
 class YnabBudgetRepository {
+    private static final Set<String> SUPPORTED_TRANSACTION_UPDATE_FIELDS = [
+        'account_id', 'date', 'amount', 'payee_id', 'payee_name', 'category_id', 'memo',
+        'cleared', 'approved', 'flag_color', 'subtransactions'
+    ] as Set
+
     private final YnabHttpClient ynabClient
     private final SimpleDateFormat budgetTimestampFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssX")
-    private Integer lastTransactionServerKnowledge
 
     YnabBudgetRepository(YnabHttpClient ynabClient) {
         this.ynabClient = ynabClient
@@ -78,52 +82,50 @@ class YnabBudgetRepository {
         categoriesByName
     }
 
-    List<ParentTransactionEvent> getTransactions(String budgetId, int lookbackDays, Integer lastServerKnowledge = null) {
+    TransactionDelta getTransactions(String budgetId, int lookbackDays, Integer lastServerKnowledge = null) {
         String sinceDate = LocalDate.now().minusDays(lookbackDays as long).toString()
-        String path = "/v1/plans/${budgetId}/transactions?since_date=${sinceDate}"
-        if (lastServerKnowledge != null) {
-            path += "&last_knowledge_of_server=${lastServerKnowledge}"
-        }
+        String path = lastServerKnowledge == null
+            ? "/v1/plans/${budgetId}/transactions?since_date=${sinceDate}"
+            : "/v1/plans/${budgetId}/transactions?last_knowledge_of_server=${lastServerKnowledge}"
         def response = ynabClient.getJson(path)
-        List transactions = (response?.data?.transactions ?: []) as List
-        Integer responseServerKnowledge = response?.data?.server_knowledge as Integer
-        lastTransactionServerKnowledge = responseServerKnowledge
+        Map data = requireData(response, 'transaction delta')
+        if (!(data.transactions instanceof List) || data.server_knowledge == null) {
+            throw new IllegalStateException("YNAB transaction delta for budget '${budgetId}' is missing transactions or server_knowledge")
+        }
+        List transactions = data.transactions as List
+        Integer responseServerKnowledge = data.server_knowledge as Integer
         log.debug(
-            "Fetched {} transactions from YNAB for budget '{}' since {} with last_knowledge_of_server={} and response server_knowledge={}",
+            "Fetched {} transactions from YNAB for budget '{}' with since_date={} last_knowledge_of_server={} and response server_knowledge={}",
             transactions.size(),
             budgetId,
-            sinceDate,
+            lastServerKnowledge == null ? sinceDate : null,
             lastServerKnowledge,
             responseServerKnowledge
         )
-        transactions.collect { transaction ->
-            new ParentTransactionEvent(
-                transaction.id as String,
-                transaction.date as String,
-                (transaction.amount ?: 0) as Integer,
-                transaction.memo as String,
-                transaction.approved as Boolean,
-                (responseServerKnowledge ?: transaction.server_knowledge) as Integer,
-                transaction.category_id as String,
-                transaction.category_name as String,
-                ((transaction.subtransactions ?: []) as List).collect { subtransaction ->
-                    new ParentSubtransactionEvent(
-                        subtransaction.id as String,
-                        subtransaction.transaction_id as String,
-                        (subtransaction.amount ?: 0) as Integer,
-                        subtransaction.memo as String,
-                        subtransaction.category_id as String,
-                        subtransaction.category_name as String
-                    )
-                }
-            )
+        List<ParentTransactionEvent> mappedTransactions = transactions.collect { transaction ->
+            mapParentTransaction(transaction as Map, responseServerKnowledge)
         }
+        new TransactionDelta(mappedTransactions, responseServerKnowledge)
     }
 
-    List<MoneyMovementEvent> getMoneyMovements(String budgetId, int lookbackDays) {
+    ParentTransactionEvent getParentTransaction(String budgetId, String transactionId) {
+        def response = ynabClient.getJson(transactionPath(budgetId, transactionId))
+        Map data = requireData(response, 'parent transaction detail')
+        if (!(data.transaction instanceof Map) || data.server_knowledge == null) {
+            throw new IllegalStateException(
+                "YNAB parent transaction detail for budget '${budgetId}', transaction '${transactionId}' " +
+                    'is missing transaction or server_knowledge')
+        }
+        mapParentTransaction(data.transaction as Map, data.server_knowledge as Integer)
+    }
+
+    MoneyMovementSnapshot getMoneyMovements(String budgetId) {
         def response = ynabClient.getJson("/v1/plans/${budgetId}/money_movements")
-        LocalDate threshold = LocalDate.now().minusDays(lookbackDays as long)
-        List movements = (response?.data?.money_movements ?: []) as List
+        Map data = requireData(response, 'money movement snapshot')
+        if (!(data.money_movements instanceof List) || data.server_knowledge == null) {
+            throw new IllegalStateException("YNAB money movement snapshot for budget '${budgetId}' is missing money_movements or server_knowledge")
+        }
+        List movements = data.money_movements as List
         List<MoneyMovementEvent> mappedMovements = movements.collect { movement ->
             new MoneyMovementEvent(
                 movement.id as String,
@@ -133,17 +135,14 @@ class YnabBudgetRepository {
                 movement.to_category_id as String,
                 (movement.amount ?: 0) as Integer
             )
-        }.findAll { MoneyMovementEvent movement ->
-            LocalDate.parse(movement.eventDate) >= threshold
         }
         log.debug(
-            "Fetched {} money movements from YNAB for budget '{}' and retained {} within {} days",
+            "Fetched complete snapshot of {} money movements from YNAB for budget '{}' with server_knowledge={}",
             movements.size(),
             budgetId,
-            mappedMovements.size(),
-            lookbackDays
+            data.server_knowledge
         )
-        mappedMovements
+        new MoneyMovementSnapshot(mappedMovements, data.server_knowledge as Integer)
     }
 
     Integer getLatestServerKnowledge(String budgetId) {
@@ -151,13 +150,6 @@ class YnabBudgetRepository {
         Integer serverKnowledge = (response?.data?.plan?.server_knowledge ?: response?.data?.server_knowledge) as Integer
         log.debug("Fetched latest server_knowledge={} for budget '{}'", serverKnowledge, budgetId)
         serverKnowledge
-    }
-
-    Integer latestServerKnowledge(List<ParentTransactionEvent> transactions) {
-        List<Integer> knowledgeValues = transactions.collect { it.serverKnowledge }.findAll { it != null }
-        Integer latestKnowledge = knowledgeValues ? knowledgeValues.max() : lastTransactionServerKnowledge
-        log.debug('Derived latest server_knowledge={} from {} transactions', latestKnowledge, transactions.size())
-        latestKnowledge
     }
 
     def postTransactions(String budgetId, List<Map<String, Object>> transactions) {
@@ -170,6 +162,64 @@ class YnabBudgetRepository {
             response.bodyText == null ? 'null' : JsonOutput.prettyPrint(JsonOutput.toJson(YnabLogFormatter.formatAmounts(response.body)))
         )
         response.body
+    }
+
+    ChildTransactionLookupResult getChildTransaction(String budgetId, String transactionId) {
+        String path = transactionPath(budgetId, transactionId)
+        YnabHttpResponse response = ynabClient.getJsonWithMetadata(path, [404] as Set)
+        if (response.statusCode == 404) {
+            return new ChildTransactionLookupResult(null, null)
+        }
+        ChildTransactionResult result = mapChildTransactionResponse(response.body, budgetId, transactionId, 'lookup')
+        new ChildTransactionLookupResult(result.transaction, result.serverKnowledge)
+    }
+
+    ChildTransactionResult updateChildTransaction(String budgetId, String transactionId, Map<String, Object> fields) {
+        if (fields == null || fields.isEmpty()) {
+            throw new IllegalArgumentException('Child transaction update fields must not be empty')
+        }
+        Set<String> unsupported = fields.keySet().collect { it as String }.findAll {
+            !SUPPORTED_TRANSACTION_UPDATE_FIELDS.contains(it)
+        } as Set
+        if (unsupported) {
+            throw new IllegalArgumentException("Unsupported child transaction update fields: ${unsupported.sort().join(', ')}")
+        }
+        Map<String, Object> suppliedFields = fields.collectEntries { key, value -> [(key as String): value] }
+        String path = transactionPath(budgetId, transactionId)
+        YnabHttpResponse response = ynabClient.putJsonWithMetadata(path, [transaction: suppliedFields])
+        mapChildTransactionResponse(response.body, budgetId, transactionId, 'update')
+    }
+
+    ChildTransactionResult recoverChildTransactionByImportId(String budgetId, String importId,
+                                                               Map<String, Object> fields) {
+        if (!importId) {
+            throw new IllegalArgumentException('Child transaction recovery import ID is required')
+        }
+        Map<String, Object> suppliedFields = fields.findAll { key, ignored ->
+            SUPPORTED_TRANSACTION_UPDATE_FIELDS.contains(key as String)
+        }.collectEntries { key, value -> [(key as String): value] }
+        suppliedFields.import_id = importId
+        String path = "/v1/plans/${budgetId}/transactions"
+        YnabHttpResponse response = ynabClient.patchJsonWithMetadata(path, [transactions: [suppliedFields]])
+        Map data = requireData(response.body, 'child transaction import identity recovery')
+        List transactions = data.transactions instanceof List ? data.transactions as List : []
+        if (data.server_knowledge == null || transactions.size() != 1 || !transactions.first()?.id) {
+            throw new IllegalStateException(
+                "YNAB child transaction import identity recovery for budget '${budgetId}', import_id '${importId}' " +
+                    'did not return exactly one transaction with an ID')
+        }
+        mapChildTransaction(data.transactions.first() as Map, data.server_knowledge as Integer,
+            budgetId, importId, 'import identity recovery')
+    }
+
+    ChildTransactionDeleteResult deleteChildTransaction(String budgetId, String transactionId) {
+        String path = transactionPath(budgetId, transactionId)
+        YnabHttpResponse response = ynabClient.deleteJsonWithMetadata(path, [404] as Set)
+        if (response.statusCode == 404) {
+            return new ChildTransactionDeleteResult(null, null, true)
+        }
+        ChildTransactionResult result = mapChildTransactionResponse(response.body, budgetId, transactionId, 'delete')
+        new ChildTransactionDeleteResult(result.transaction, result.serverKnowledge, false)
     }
 
     def getUser() {
@@ -186,5 +236,94 @@ class YnabBudgetRepository {
             return "${month}-01"
         }
         LocalDate.now().toString()
+    }
+
+    private static String transactionPath(String budgetId, String transactionId) {
+        "/v1/plans/${budgetId}/transactions/${transactionId}"
+    }
+
+    private static ParentTransactionEvent mapParentTransaction(Map transaction, Integer serverKnowledge) {
+        new ParentTransactionEvent(
+            transaction.id as String,
+            transaction.date as String,
+            (transaction.amount ?: 0) as Integer,
+            transaction.memo as String,
+            transaction.approved as Boolean,
+            (serverKnowledge ?: transaction.server_knowledge) as Integer,
+            transaction.category_id as String,
+            transaction.category_name as String,
+            ((transaction.subtransactions ?: []) as List).collect { subtransaction ->
+                new ParentSubtransactionEvent(
+                    subtransaction.id as String,
+                    subtransaction.transaction_id as String,
+                    (subtransaction.amount ?: 0) as Integer,
+                    subtransaction.memo as String,
+                    subtransaction.category_id as String,
+                    subtransaction.category_name as String,
+                    subtransaction.deleted as Boolean,
+                    subtransaction.payee_id as String,
+                    subtransaction.payee_name as String
+                )
+            },
+            transaction.payee_id as String,
+            transaction.payee_name as String,
+            transaction.deleted as Boolean
+        )
+    }
+
+    private static Map requireData(def response, String responseName) {
+        if (!(response?.data instanceof Map)) {
+            throw new IllegalStateException("YNAB ${responseName} response is missing data")
+        }
+        response.data as Map
+    }
+
+    private static ChildTransactionResult mapChildTransactionResponse(
+        def response,
+        String budgetId,
+        String transactionId,
+        String operation
+    ) {
+        Map data = requireData(response, "child transaction ${operation}")
+        if (!(data.transaction instanceof Map) || data.server_knowledge == null) {
+            throw new IllegalStateException(
+                "YNAB child transaction ${operation} response for budget '${budgetId}', transaction '${transactionId}' " +
+                    'is missing transaction or server_knowledge'
+            )
+        }
+        Map transaction = data.transaction as Map
+        if (!transaction.id) {
+            throw new IllegalStateException(
+                "YNAB child transaction ${operation} response for budget '${budgetId}', transaction '${transactionId}' is missing transaction.id"
+            )
+        }
+        mapChildTransaction(transaction, data.server_knowledge as Integer, budgetId, transactionId, operation)
+    }
+
+    private static ChildTransactionResult mapChildTransaction(Map transaction, Integer serverKnowledge,
+                                                               String budgetId, String transactionId,
+                                                               String operation) {
+        if (!transaction.id) {
+            throw new IllegalStateException(
+                "YNAB child transaction ${operation} response for budget '${budgetId}', transaction '${transactionId}' is missing transaction.id"
+            )
+        }
+        new ChildTransactionResult(
+            new ChildTransaction(
+                transaction.id as String,
+                transaction.account_id as String,
+                transaction.date as String,
+                transaction.amount as Integer,
+                transaction.payee_id as String,
+                transaction.payee_name as String,
+                transaction.category_id as String,
+                transaction.memo as String,
+                transaction.cleared as String,
+                transaction.approved as Boolean,
+                transaction.flag_color as String,
+                transaction.deleted as Boolean
+            ),
+            serverKnowledge
+        )
     }
 }

@@ -7,3 +7,10 @@ config.yaml
 logs/
 syncstate.db
 .env
+tokens.txt
+qa/artifacts/
+qa/config/qa-sync.yaml
+qa/discovered-provisioning.json
+qa/.campaign-state/
+__pycache__/
+*.pyc

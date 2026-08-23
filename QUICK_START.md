@@ -8,6 +8,8 @@ This repo now has **two** safe-first flows:
 
 For the full field-by-field configuration reference, active allowance modeling, and syncer-specific YAML guidance, see [CONFIGURATION.md](CONFIGURATION.md).
 
+Before enabling live parent/child syncing, read [PARENT_TRANSACTION_RECONCILIATION.md](PARENT_TRANSACTION_RECONCILIATION.md). It explains parent-authoritative and child-owned fields, destructive cases, split transitions, retries and cursors, fresh-state schema versioning, money-movement limitations, and rollback limits.
+
 ## 1. Install prerequisites
 
 1. Install Java JDK 25.
@@ -90,6 +92,8 @@ Specific date:
 
 ## 5. Do a safe parent/child sync dry run
 
+Stop any running syncer. If `syncstate.db` was created by an earlier build, delete it first. This build does not convert old state and rejects nonempty unversioned, newer, noncontiguous, or otherwise unsupported schemas without mutation. Deleting state does not delete child transactions created by an earlier syncer; treat matching creates in the first dry run as potential duplicate financial effects and resolve them before live mode.
+
 Recommended one-cycle dry run:
 
 ```bash
@@ -111,11 +115,11 @@ RunParentChildSync.bat config.yaml syncstate.db
 What this validates safely:
 1. config loading
 2. sync logging bootstrap
-3. SQLite path/bootstrap readiness
+3. read-only access to a supported versioned SQLite database, or empty state when the path is missing
 4. parent/child mapping construction
 5. planned child-budget mutations without live posting
 
-Synced child transactions are planned with `cleared: "cleared"`. Their final `memoPrefix + source memo + memoSuffix` value is trimmed; these settings affect child sync output only. `./gradlew testAll` also verifies this dry-run behavior against simulated YNAB responses without live credentials, child POSTs, or SQLite mutation.
+New child mirrors are planned as cleared and unapproved. Their final `memoPrefix + source memo + memoSuffix` value is trimmed; after creation, the child memo is preserved during reconciliation. Dry-run performs no child mutation and no SQLite schema, row, operation, revision, mirror, or cursor write.
 
 ## 6. Review the dry-run output
 
@@ -131,10 +135,11 @@ Before any live run, verify:
 1. the correct parent budget and child budgets are configured
 2. each child token env var name points to the intended secret
 3. parent category mappings match the child you expect to mirror into
-4. the planned child transactions have the expected date, amount, memo, and payee behavior
-5. custom/default memo decoration is trimmed as expected and the planned child payload is cleared
-6. the SQLite path is where you want long-lived replay-protection state to live
-7. the rolling log path is where you want continuous sync logs written
+4. planned creates and updates have the expected date, amount, payee, account, cleared, and unapproved behavior
+5. planned deletions, split transitions, cross-budget replacements, missing-child recreations, and money-movement changes are expected
+6. custom/default memo decoration is trimmed on creation and existing child memos remain child-owned on later updates
+7. the SQLite path is where you want long-lived replay-protection, cursor, mirror-lineage, and operation-attempt history to live
+8. the rolling log path is where you want continuous sync logs written
 
 ## 7. Optional live allowance run
 
@@ -165,7 +170,9 @@ If that looks correct, you can allow continuous polling:
 ```
 
 Live syncer rollout guidance:
+- confirm a database from an earlier build was deleted before rollout; it cannot be used by this build
 - do not skip the single-cycle dry run
 - prefer a single-cycle live verification before running continuously
 - do not delete `syncstate.db` casually once live syncing has started, because it contains replay-protection and cursor state
+- after a remote update or delete, restoring an old binary or database cannot automatically reconstruct the prior child state; use `sync_operations`, `operation_attempts`, `child_mirrors`, and `source_revisions` for manual recovery
 - keep the parent and child tokens separate; do not reuse a single personal token across all budgets unless that is intentionally how your YNAB setup is administered

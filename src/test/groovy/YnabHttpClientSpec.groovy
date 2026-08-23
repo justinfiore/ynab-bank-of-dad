@@ -99,6 +99,47 @@ class YnabHttpClientSpec extends Specification {
         request.path == '/v1/plans/budget-1/transactions/bulk'
     }
 
+    def "putJsonWithMetadata sends JSON and deleteJsonWithMetadata accepts configured status"() {
+        given:
+        server.enqueue(new MockResponse()
+            .setResponseCode(200)
+            .setHeader('Content-Type', 'application/json')
+            .setBody('{"data":{"transaction":{"id":"txn-1"}}}'))
+        server.enqueue(new MockResponse()
+            .setResponseCode(404)
+            .setHeader('Content-Type', 'application/json')
+            .setBody('{"error":{"detail":"not found"}}'))
+        def client = buildClient()
+        def payload = [transaction: [amount: -1000, approved: false]]
+
+        when:
+        def putResponse = client.putJsonWithMetadata('/v1/plans/budget-1/transactions/txn-1', payload)
+        def putRequest = server.takeRequest()
+        def deleteResponse = client.deleteJsonWithMetadata('/v1/plans/budget-1/transactions/missing', [404] as Set)
+        def deleteRequest = server.takeRequest()
+
+        then:
+        putResponse.statusCode == 200
+        putRequest.method == 'PUT'
+        new JsonSlurper().parseText(putRequest.body.readUtf8()) == payload
+        putRequest.getHeader('Authorization') == 'Bearer token'
+        deleteResponse.statusCode == 404
+        deleteRequest.method == 'DELETE'
+        deleteRequest.getHeader('Authorization') == 'Bearer token'
+    }
+
+    def "malformed JSON success includes HTTP operation context"() {
+        given:
+        server.enqueue(new MockResponse().setResponseCode(200).setBody('{not-json'))
+
+        when:
+        buildClient().putJsonWithMetadata('/v1/plans/budget-1/transactions/txn-1', [transaction: [amount: -1]])
+
+        then:
+        def ex = thrown(IllegalStateException)
+        ex.message == 'YNAB PUT /v1/plans/budget-1/transactions/txn-1 returned invalid JSON'
+    }
+
     def "successful blank response body returns null"() {
         given:
         server.enqueue(new MockResponse()
@@ -125,6 +166,52 @@ class YnabHttpClientSpec extends Specification {
 
         then:
         response == null
+    }
+
+    def "retries a rate-limited GET with bounded retry-after delay"() {
+        given:
+        server.enqueue(new MockResponse()
+            .setResponseCode(429)
+            .setHeader('Retry-After', '3')
+            .setHeader('Content-Type', 'application/json')
+            .setBody('{"error":{"detail":"too many requests"}}'))
+        server.enqueue(new MockResponse()
+            .setResponseCode(200)
+            .setHeader('Content-Type', 'application/json')
+            .setBody('{"data":{"plans":[{"id":"budget-1"}]}}'))
+        List<Duration> waits = []
+        def client = new YnabHttpClient(server.url('/').toString(), 'token',
+            HttpClient.newHttpClient(), Duration.ofSeconds(7), 1, { Duration delay -> waits << delay })
+
+        when:
+        def response = client.getJson('/v1/plans')
+
+        then:
+        response.data.plans[0].id == 'budget-1'
+        server.takeRequest().path == '/v1/plans'
+        server.takeRequest().path == '/v1/plans'
+        waits == [Duration.ofSeconds(3)]
+    }
+
+    def "does not retry a rate-limited POST because its outcome may be ambiguous"() {
+        given:
+        server.enqueue(new MockResponse()
+            .setResponseCode(429)
+            .setHeader('Retry-After', '1')
+            .setBody('{"error":{"detail":"too many requests"}}'))
+        List<Duration> waits = []
+        def client = new YnabHttpClient(server.url('/').toString(), 'token',
+            HttpClient.newHttpClient(), Duration.ofSeconds(7), 1, { Duration delay -> waits << delay })
+
+        when:
+        client.postJson('/v1/plans/budget-1/transactions/bulk', [transactions: []])
+
+        then:
+        def ex = thrown(IllegalStateException)
+        ex.message.contains('YNAB POST /v1/plans/budget-1/transactions/bulk failed with status 429')
+        server.takeRequest().path == '/v1/plans/budget-1/transactions/bulk'
+        server.takeRequest(100, java.util.concurrent.TimeUnit.MILLISECONDS) == null
+        waits.empty
     }
 
     def "non-2xx responses surface a clear error"() {
@@ -173,6 +260,34 @@ class YnabHttpClientSpec extends Specification {
 
         cleanup:
         Thread.interrupted()
+    }
+
+    def "new HTTP verbs preserve timeout and interruption behavior"() {
+        given:
+        def timeout = Duration.ofSeconds(7)
+        def httpClient = failure == 'timeout' ? new TimeoutThrowingHttpClient() : new InterruptingHttpClient()
+        def client = new YnabHttpClient('https://api.ynab.com', 'token', httpClient, timeout)
+
+        when:
+        if (method == 'PUT') {
+            client.putJsonWithMetadata('/v1/plans/budget-1/transactions/txn-1', [transaction: [amount: -1]])
+        } else {
+            client.deleteJsonWithMetadata('/v1/plans/budget-1/transactions/txn-1')
+        }
+
+        then:
+        def ex = thrown(IllegalStateException)
+        ex.message == expectedMessage
+        ex.cause.class == expectedCause
+        Thread.currentThread().isInterrupted() == interrupted
+
+        cleanup:
+        Thread.interrupted()
+
+        where:
+        method   | failure     | expectedCause          | interrupted | expectedMessage
+        'PUT'    | 'timeout'   | HttpTimeoutException   | false       | 'YNAB PUT /v1/plans/budget-1/transactions/txn-1 timed out after PT7S'
+        'DELETE' | 'interrupt' | InterruptedException   | true        | 'YNAB DELETE /v1/plans/budget-1/transactions/txn-1 interrupted'
     }
 
     private YnabHttpClient buildClient() {

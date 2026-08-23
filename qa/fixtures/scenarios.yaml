@@ -1,0 +1,22 @@
+scenarios:
+  - id: A4-dry-create
+    phase: A
+    operations: {creates: 1, updates: 0, deletes: 0}
+  - id: A6-unapproved-unmapped
+    phase: A
+    operations: {creates: 0, updates: 0, deletes: 0}
+  - id: A7-split-fanout
+    phase: A
+    operations: {creates: 2, updates: 0, deletes: 0}
+  - id: A8-money-movement
+    phase: A
+    operations: {creates: 2, updates: 0, deletes: 0}
+  - id: B1-live-create
+    phase: B
+    operations: {creates: 1, updates: 0, deletes: 0}
+  - id: C4-cross-budget-reroute
+    phase: C
+    operations: {creates: 1, updates: 0, deletes: 1}
+
+# This committed catalog describes reviewed operation shapes only. It contains
+# no immutable plan IDs and is never itself sufficient to authorize a write.

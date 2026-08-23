@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="SyntheticWireMockSpec">
+  <properties>
+    <property name="Authorization" value="synthetic-xml-header"/>
+  </properties>
+  <system-out><![CDATA[Request headers:
+Authorization: Bearer wiremock-parent-token
+Authorization: Digest username=wiremock-user, nonce=synthetic-nonce
+]]></system-out>
+</testsuite>

@@ -137,7 +137,7 @@ For live testing, use the long-lived path you intend to keep:
 LIVE_STATE_DB=syncstate.db
 ```
 
-Do **not** delete `$LIVE_STATE_DB` after live transactions have been posted unless you intentionally want to reset replay protection.
+If `$LIVE_STATE_DB` was created by an earlier build, stop every syncer process and delete it before testing this build. The syncer requires fresh state and rejects nonempty unversioned, newer, noncontiguous, and otherwise unsupported schemas without mutation. Deleting state does not remove child transactions created by an earlier syncer, so resolve any matching creates reported by the first dry run before live mode. After live transactions have been posted with the supported schema, do **not** delete `$LIVE_STATE_DB` unless you intentionally want to reset replay protection.
 
 ### 0.5 Start with logs visible
 
@@ -166,10 +166,10 @@ Expected common dry-run behavior:
 - The process exits after one cycle.
 - Logs show `Starting parent-child budget syncer`.
 - Logs show `Cycle 1 read ... parent transactions and ... money movements`.
-- For qualifying work, logs include `[DRY RUN] child transaction for <childKey> -> ...`.
-- For qualifying work, logs include `[DRY RUN] sqlite state for <childKey> -> <idempotencyKey>`.
+- For qualifying work, logs include `[DRY RUN] <action> child transaction for <childKey> ... payload=...`.
 - No new transaction appears in any child budget.
 - Mutable replay-protection rows should not be persisted for the planned work.
+- A missing dry-run database remains absent; a supported database remains byte-for-byte unchanged.
 
 ### 1.1 Smoke test: config, token, budget, account, log, and SQLite bootstrap
 
@@ -268,7 +268,7 @@ Pass criteria:
 
 ### 1.6 Split parent transaction fans out by subtransaction category
 
-Purpose: verify split handling and per-subtransaction replay identity.
+Purpose: verify split handling and stable per-subtransaction source identity.
 
 1. In the parent budget, create one approved split transaction.
 2. Add at least two subtransactions:
@@ -413,7 +413,7 @@ Expected common live behavior:
 
 - The process exits after one cycle.
 - Qualifying child transactions are posted to child budgets.
-- Logs include `Posted child transaction for <childKey>: <createdTransactionId>`.
+- Logs include `Reconciliation decision action=...` before remote work and `Reconciliation outcome action=... outcome=...` after completion.
 - SQLite state is written to `$LIVE_STATE_DB`.
 - Rerunning the same cycle should skip already-applied idempotency keys instead of duplicating child transactions.
 
@@ -424,12 +424,7 @@ Before your first live command:
 1. Confirm the latest dry run for the exact same config looks correct.
 2. Confirm child budgets do **not** already contain the planned test child transactions.
 3. Confirm `$LIVE_STATE_DB` is the state file you intend to keep.
-4. Back up an existing live state DB if it exists:
-
-   ```bash
-   cp "$LIVE_STATE_DB" "$LIVE_STATE_DB.before-manual-test.$(date +%Y%m%d-%H%M%S).bak"
-   ```
-
+4. Delete `$LIVE_STATE_DB` if it came from an earlier build. Do not expect this build to convert it.
 5. Keep the YNAB UI open for the parent and target child budgets.
 
 ### 2.2 Live approved parent transaction mirrors once
@@ -451,7 +446,7 @@ Pass criteria:
 - Date, amount, and memo match the source transaction behavior expected from dry run.
 - The memo has the configured final-trimmed decoration and the child transaction is cleared.
 - Child transaction category is unset/blank.
-- Logs include `Posted child transaction for <childKey>` and a created transaction ID.
+- Logs include a create decision and `Reconciliation outcome action=create` with the created child transaction ID.
 - `$LIVE_STATE_DB` exists.
 
 ### 2.3 Live idempotency rerun does not duplicate
@@ -469,7 +464,7 @@ Immediately after scenario 2.2:
 Pass criteria:
 
 - No second child transaction is created for the same parent source event.
-- Logs include a duplicate/replay-protection skip such as `Skipping duplicate child sync plan <idempotencyKey>`, or there is otherwise no new post for the already-applied event.
+- Logs contain no second applied create outcome for the same source, or report an idempotent `already_complete` outcome.
 - Existing child transaction remains unchanged.
 
 ### 2.4 Live unapproved transaction remains ignored
@@ -481,7 +476,7 @@ Pass criteria:
 Pass criteria:
 
 - No child transaction is created.
-- There is no `Posted child transaction` line for that parent transaction.
+- There is no applied create outcome for that parent transaction.
 
 Then approve the parent transaction and run one live cycle again.
 
@@ -559,16 +554,16 @@ Pass criteria:
 - Money movements create the expected positive/negative child-side effects with the expected memo/payee.
 - The unapproved transaction is still absent until it is approved.
 - The second live run creates no duplicate child transactions.
-- SQLite `sync_mappings` rows include enough mapping/account context to audit the routing.
+- SQLite `child_mirrors` rows show the selected target budget/account and child transaction lineage.
 
 Helpful SQLite audit query after the live matrix:
 
 ```bash
 sqlite3 "$LIVE_STATE_DB" \
-  "select target_child_key, target_mapping_key, target_account_name, target_account_id, count(*)
-   from sync_mappings
-   group by target_child_key, target_mapping_key, target_account_name, target_account_id
-   order by target_child_key, target_mapping_key;"
+  "select target_budget_id, target_account_id, direction, status, count(*)
+   from child_mirrors
+   group by target_budget_id, target_account_id, direction, status
+   order by target_budget_id, target_account_id, direction, status;"
 ```
 
 ### 2.9 Live child failure isolation
@@ -596,30 +591,38 @@ After restoring config, rerun a dry run before another live run.
 
 The live state DB should contain replay/audit data. You do not normally need to edit it manually.
 
-To inspect table counts:
+To verify baseline version 1 and inspect all nine table counts:
 
 ```bash
 sqlite3 "$LIVE_STATE_DB" \
-  "select 'sync_runs', count(*) from sync_runs union all
-   select 'source_events', count(*) from source_events union all
-   select 'sync_mappings', count(*) from sync_mappings union all
-   select 'applied_transactions', count(*) from applied_transactions union all
-   select 'sync_cursors', count(*) from sync_cursors;"
+  "select 'schema_versions', count(*) from schema_versions union all
+   select 'sync_runs', count(*) from sync_runs union all
+   select 'sync_cursors', count(*) from sync_cursors union all
+   select 'source_entities', count(*) from source_entities union all
+   select 'ingestion_batches', count(*) from ingestion_batches union all
+   select 'source_revisions', count(*) from source_revisions union all
+   select 'child_mirrors', count(*) from child_mirrors union all
+   select 'sync_operations', count(*) from sync_operations union all
+   select 'operation_attempts', count(*) from operation_attempts;"
 ```
 
 Pass criteria after live scenarios:
 
+- `select version from schema_versions order by version;` returns exactly `1` for the current baseline.
 - `sync_runs` has entries for live cycles.
-- `source_events`, `sync_mappings`, and `applied_transactions` increase when live child transactions are posted or failed records are captured.
-- `applied_transactions.status` should show `applied` for successful child posts and `failed` for captured child-target failures.
+- source entities/revisions, ingestion batches, mirrors, operations, and attempts increase as corresponding work is observed and applied.
+- `sync_operations.status` shows `applied`, `pending`, or `retryable_failed`; `operation_attempts.outcome` shows `applied`, `failed`, or `already_complete`.
 
 Useful failure inspection query:
 
 ```bash
 sqlite3 "$LIVE_STATE_DB" \
-  "select id, target_budget_id, created_child_transaction_id, status, failure_reason, applied_at
-   from applied_transactions
-   order by id desc
+  "select o.id, o.operation_type, o.target_budget_id, o.child_transaction_id,
+          o.status, a.attempted_at, a.outcome, a.failure_reason,
+          a.returned_child_transaction_id
+   from sync_operations o
+   left join operation_attempts a on a.sync_operation_id = o.id
+   order by o.id desc, a.id desc
    limit 20;"
 ```
 
@@ -627,23 +630,25 @@ Do **not** manually edit this DB to force a test to pass. If you need to reset a
 
 ### 3.1 Inspect mapping/account routing
 
-For mapped-account scenarios, inspect routing context directly:
+For mapped-account scenarios, inspect current and historical mirror routing directly:
 
 ```bash
 sqlite3 "$LIVE_STATE_DB" \
-  "select target_child_key, target_mapping_key, target_account_name, target_account_id, idempotency_key
-   from sync_mappings
-   order by id desc
+  "select m.id, e.entity_type, e.parent_transaction_id, e.parent_subtransaction_id,
+          e.money_movement_id, m.target_budget_id, m.target_account_id,
+          m.direction, m.child_transaction_id, m.status
+   from child_mirrors m
+   join source_entities e on e.id = m.source_entity_id
+   order by m.id desc
    limit 30;"
 ```
 
 Pass criteria:
 
-- `target_child_key` matches the child budget that received the transaction.
-- `target_mapping_key` matches the configured account mapping that selected the child account.
-- `target_account_name` matches the configured `childAccountName`.
-- `target_account_id` is populated for live applied transactions.
-- Idempotency keys are distinct when different mappings/accounts are involved.
+- `target_budget_id` matches the child budget that received the transaction.
+- `target_account_id` matches the YNAB account resolved from the configured mapping.
+- transaction, subtransaction, or movement identity columns identify the source lineage.
+- `child_transaction_id`, `direction`, and `status` distinguish each historical and active mirror.
 
 ---
 
@@ -721,7 +726,7 @@ Use this as the final go/no-go list before trusting the syncer with normal famil
 - [ ] Split transaction fan-out creates the expected child transactions only.
 - [ ] Money movement fan-out creates the expected child transactions only.
 - [ ] Four-child/multi-account live matrix creates expected transactions only, in the expected child accounts, and does not duplicate on rerun.
-- [ ] SQLite `sync_mappings` rows show the expected `target_mapping_key` and `target_account_name` routing context.
+- [ ] SQLite `child_mirrors` rows show the expected target budget/account, direction, child ID, and lineage status.
 - [ ] Child-target failure identifies the failed child and can be retried after fixing config/token.
 - [ ] SQLite state DB is present and backed up if desired.
 

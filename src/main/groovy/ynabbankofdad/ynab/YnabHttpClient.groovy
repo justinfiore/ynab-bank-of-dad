@@ -20,7 +20,7 @@ import java.util.concurrent.TimeoutException
  * - keeps call sites in RecordAllowance easy to read
  * - centralizes auth headers, JSON serialization, and error handling in one obvious place
  *
- * Deliberately not a generic DSL. It only implements the small JSON GET/POST surface this
+ * Deliberately not a generic DSL. It only implements the small JSON HTTP surface this
  * script actually needs.
  */
 @Slf4j
@@ -30,6 +30,8 @@ class YnabHttpClient {
     final HttpClient httpClient
     final JsonSlurper jsonSlurper = new JsonSlurper()
     final Duration requestTimeout
+    final int maxGetRateLimitRetries
+    final Closure sleeper
 
     YnabHttpClient(String baseUrl, String accessToken) {
         this(baseUrl, accessToken, HttpClient.newBuilder()
@@ -42,17 +44,34 @@ class YnabHttpClient {
     }
 
     YnabHttpClient(String baseUrl, String accessToken, HttpClient httpClient, Duration requestTimeout) {
+        this(baseUrl, accessToken, httpClient, requestTimeout, 1, { Duration delay -> Thread.sleep(delay.toMillis()) })
+    }
+
+    YnabHttpClient(String baseUrl, String accessToken, HttpClient httpClient, Duration requestTimeout,
+                   int maxGetRateLimitRetries, Closure sleeper) {
+        if (maxGetRateLimitRetries < 0) {
+            throw new IllegalArgumentException('maxGetRateLimitRetries must be non-negative')
+        }
         this.baseUrl = baseUrl.endsWith('/') ? baseUrl[0..-2] : baseUrl
         this.accessToken = accessToken
         this.httpClient = httpClient
         this.requestTimeout = requestTimeout
+        this.maxGetRateLimitRetries = maxGetRateLimitRetries
+        this.sleeper = sleeper
     }
 
     def getJson(String path) {
         HttpRequest request = baseRequest(path)
             .GET()
             .build()
-        return sendJson(request, 'GET', path).body
+        return sendJson(request, 'GET', path, [] as Set).body
+    }
+
+    YnabHttpResponse getJsonWithMetadata(String path, Set<Integer> acceptedStatuses = [] as Set) {
+        HttpRequest request = baseRequest(path)
+            .GET()
+            .build()
+        sendJson(request, 'GET', path, acceptedStatuses)
     }
 
     def postJson(String path, Object payload) {
@@ -61,7 +80,7 @@ class YnabHttpClient {
             .header('Content-Type', 'application/json')
             .POST(HttpRequest.BodyPublishers.ofString(json))
             .build()
-        return sendJson(request, 'POST', path).body
+        return sendJson(request, 'POST', path, [] as Set).body
     }
 
     YnabHttpResponse postJsonWithMetadata(String path, Object payload) {
@@ -70,7 +89,32 @@ class YnabHttpClient {
             .header('Content-Type', 'application/json')
             .POST(HttpRequest.BodyPublishers.ofString(json))
             .build()
-        return sendJson(request, 'POST', path)
+        return sendJson(request, 'POST', path, [] as Set)
+    }
+
+    YnabHttpResponse putJsonWithMetadata(String path, Object payload, Set<Integer> acceptedStatuses = [] as Set) {
+        String json = JsonOutput.toJson(payload)
+        HttpRequest request = baseRequest(path)
+            .header('Content-Type', 'application/json')
+            .PUT(HttpRequest.BodyPublishers.ofString(json))
+            .build()
+        sendJson(request, 'PUT', path, acceptedStatuses)
+    }
+
+    YnabHttpResponse patchJsonWithMetadata(String path, Object payload, Set<Integer> acceptedStatuses = [] as Set) {
+        String json = JsonOutput.toJson(payload)
+        HttpRequest request = baseRequest(path)
+            .header('Content-Type', 'application/json')
+            .method('PATCH', HttpRequest.BodyPublishers.ofString(json))
+            .build()
+        sendJson(request, 'PATCH', path, acceptedStatuses)
+    }
+
+    YnabHttpResponse deleteJsonWithMetadata(String path, Set<Integer> acceptedStatuses = [] as Set) {
+        HttpRequest request = baseRequest(path)
+            .DELETE()
+            .build()
+        sendJson(request, 'DELETE', path, acceptedStatuses)
     }
 
     private HttpRequest.Builder baseRequest(String path) {
@@ -85,24 +129,57 @@ class YnabHttpClient {
         return URI.create(baseUrl + normalized)
     }
 
-    private YnabHttpResponse sendJson(HttpRequest request, String method, String path) {
+    private YnabHttpResponse sendJson(HttpRequest request, String method, String path, Set<Integer> acceptedStatuses) {
         HttpResponse<String> response
-        try {
-            response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt()
-            throw new IllegalStateException("YNAB ${method} ${path} interrupted", e)
-        } catch (HttpTimeoutException | TimeoutException e) {
-            throw new IllegalStateException("YNAB ${method} ${path} timed out after ${requestTimeout}", e)
+        int rateLimitRetries = 0
+        while (true) {
+            try {
+                response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt()
+                throw new IllegalStateException("YNAB ${method} ${path} interrupted", e)
+            } catch (HttpTimeoutException | TimeoutException e) {
+                throw new IllegalStateException("YNAB ${method} ${path} timed out after ${requestTimeout}", e)
+            }
+            if (response.statusCode() != 429 || method != 'GET' || rateLimitRetries >= maxGetRateLimitRetries) {
+                break
+            }
+            Duration delay = boundedRetryDelay(response)
+            log.warn('YNAB GET {} was rate limited; retrying once after {}', path, delay)
+            try {
+                sleeper.call(delay)
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt()
+                throw new IllegalStateException("YNAB ${method} ${path} interrupted while waiting to retry", e)
+            }
+            rateLimitRetries++
         }
         String bodyText = response.body()
 
-        if (response.statusCode() < 200 || response.statusCode() >= 300) {
+        if ((response.statusCode() < 200 || response.statusCode() >= 300) && !acceptedStatuses.contains(response.statusCode())) {
             throw new IllegalStateException("YNAB ${method} ${path} failed with status ${response.statusCode()}: ${bodyText}")
         }
 
-        def parsedBody = (bodyText == null || bodyText.isBlank()) ? null : jsonSlurper.parseText(bodyText)
+        def parsedBody
+        try {
+            parsedBody = (bodyText == null || bodyText.isBlank()) ? null : jsonSlurper.parseText(bodyText)
+        } catch (RuntimeException e) {
+            throw new IllegalStateException("YNAB ${method} ${path} returned invalid JSON", e)
+        }
         return new YnabHttpResponse(response.statusCode(), bodyText, parsedBody)
+    }
+
+    private static Duration boundedRetryDelay(HttpResponse<String> response) {
+        String header = response.headers().firstValue('Retry-After').orElse('')
+        try {
+            long seconds = Long.parseLong(header)
+            if (seconds > 0) {
+                return Duration.ofSeconds(Math.min(seconds, 30L))
+            }
+        } catch (NumberFormatException ignored) {
+            // YNAB may omit or use a non-numeric Retry-After value; use a conservative fallback.
+        }
+        return Duration.ofSeconds(5)
     }
 }
 

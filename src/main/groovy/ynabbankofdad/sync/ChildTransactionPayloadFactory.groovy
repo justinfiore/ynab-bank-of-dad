@@ -1,32 +1,33 @@
 package ynabbankofdad.sync
 
-import ynabbankofdad.sync.model.ChildTransactionPlan
+import ynabbankofdad.sync.state.SourceEntityKey
+import ynabbankofdad.sync.state.SourceEntityType
+
+import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 
 class ChildTransactionPayloadFactory {
-
-    Map<String, Object> buildTransaction(ChildTransactionPlan plan, String accountId, String memoPrefix, String memoSuffix) {
-        String finalMemo = ((memoPrefix ?: "") + (plan.memo ?: "") + (memoSuffix ?: "")).trim()
-        [
-            account_id : accountId,
-            date       : plan.date,
-            amount     : plan.amount,
-            payee_name : plan.payeeName,
-            category_id: null,
-            memo       : finalMemo,
-            cleared    : "cleared",
-            approved   : plan.approved,
-            import_id  : buildImportId(plan)
+    String buildImportId(SourceEntityKey source, String targetBudgetId, String direction, String generation = null) {
+        if (!source?.sourceBudgetId || !source.type || !targetBudgetId || !direction) {
+            throw new IllegalArgumentException('Reconciliation create must have stable source and target identity')
+        }
+        List<String> identityParts = [
+            source.sourceBudgetId, targetBudgetId, source.type.databaseValue,
+            source.parentTransactionId ?: '', source.parentSubtransactionId ?: '',
+            source.moneyMovementId ?: '',
+            source.type == SourceEntityType.MONEY_MOVEMENT ? direction : ''
         ]
+        if (generation) {
+            identityParts << generation
+        }
+        hashImportIdentity(identityParts)
     }
 
-    String buildImportId(ChildTransactionPlan plan) {
-        if (!plan?.idempotencyKey) {
-            throw new IllegalArgumentException('Child transaction plan must have an idempotency key')
-        }
-        String compact = plan.idempotencyKey.replaceAll(/[^A-Za-z0-9]/, '').takeRight(28)
-        String datePart = (plan.date ?: '1970-01-01').replace('-', '')
-        BigInteger amountAbs = BigInteger.valueOf((plan.amount ?: 0) as long).abs()
-        "PCBS:${datePart}:${amountAbs}:${compact}"
+    private static String hashImportIdentity(List<String> identityParts) {
+        String stableIdentity = identityParts.join('\u001f')
+        byte[] digest = MessageDigest.getInstance('SHA-256').digest(stableIdentity.getBytes(StandardCharsets.UTF_8))
+        String hash = digest.encodeHex().toString()
+        "PCBS:${hash.substring(0, 31)}"
     }
 
     String extractCreatedTransactionId(def response) {
