@@ -78,7 +78,7 @@ class YnabQaClient:
     def get(self, identity: PlanIdentity, resource: str) -> dict[str, Any]:
         self.require_allowed(identity)
         resource = resource.strip("/")
-        if resource not in {"accounts", "categories", "transactions"} and not resource.startswith(
+        if resource not in {"accounts", "categories", "transactions", "money_movements"} and not resource.startswith(
             "transactions/"
         ):
             raise QaSafetyError("Read resource is outside the QA client contract")

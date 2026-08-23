@@ -52,6 +52,16 @@ class QaClientGuardTest(unittest.TestCase):
         with self.assertRaises(QaSafetyError):
             self.client.require_allowed(PlanIdentity("Jorsten's Plan", IDS["Borsten's Plan"]))
 
+    def test_get_allows_money_movements_and_rejects_unknown_resources(self):
+        with patch.object(self.client, "_request", return_value={"data": {"money_movements": []}}) as request:
+            self.assertEqual(
+                self.client.get(self.parent, "money_movements"),
+                {"data": {"money_movements": []}},
+            )
+        request.assert_called_once_with("GET", f"plans/{self.parent.plan_id}/money_movements")
+        with self.assertRaises(QaSafetyError):
+            self.client.get(self.parent, "payees")
+
     def test_rate_limited_get_retries_once_but_post_does_not_retry(self):
         waits = []
         client = YnabQaClient("test-token", IDS, sleeper=waits.append)
