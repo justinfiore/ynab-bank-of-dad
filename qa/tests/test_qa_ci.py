@@ -111,3 +111,14 @@ class JunitWriterTest(unittest.TestCase):
         self.assertIn(receipts[0]["scenario_id"], text)
         self.assertNotIn("A8-money-movement", text)
         self.assertNotIn("C8-split-component-removed", text)
+
+    def test_missing_or_crash_receipts_are_junit_failures(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        output = Path(directory.name) / "TEST-qaAutomated.xml"
+        failures = write_automated_junit([], output, automated_ids=AUTOMATED_SCENARIO_IDS)
+        text = output.read_text(encoding="utf-8")
+        self.assertEqual(failures, len(AUTOMATED_SCENARIO_IDS))
+        self.assertIn("<failure", text)
+        self.assertIn(AUTOMATED_SCENARIO_IDS[0], text)
+        self.assertNotIn("A8-money-movement", text)

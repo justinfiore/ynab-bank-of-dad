@@ -62,55 +62,65 @@ def new_campaign(suite: str) -> Campaign:
     return campaign
 
 
-def run_automated() -> int:
-    require_live_confirmation()
-    load_tokens()
-    campaign = new_campaign("automated")
-    try:
-        campaign._baseline()
-        resources = campaign._resources()
-        campaign._a2_guard()
-        campaign._a3_smoke()
-        campaign._a4_a5()
-        campaign._a6()
-        campaign._a7(resources)
-        if campaign._b1():
-            campaign._b2()
-            campaign._b3()
-            campaign._b4()
-            campaign._c1()
-            campaign._c2()
-            campaign._c3()
-            campaign._c4()
-            campaign._c5()
-            campaign._c6()
-            campaign._c7()
-            campaign._c9()
-            campaign._d1()
-            campaign._d2()
-            campaign._d3()
-            campaign._d4()
-        for scenario_id in MANUAL_SCENARIO_IDS:
-            if scenario_id not in campaign.receipts:
-                campaign.receipt(
-                    scenario_id, "NOT_RUN",
-                    "Manual UI suite. Run ./gradlew qaManual.",
-                )
-        campaign.cleanup()
-        campaign._final_metadata()
-    except Exception:
-        campaign.cleanup()
-        campaign._final_metadata()
-        raise
+def _write_automated_junit(receipts: list) -> int:
     junit = REPO_ROOT / "build/test-results/qaAutomated/TEST-qaAutomated.xml"
     failures = write_automated_junit(
-        list(campaign.receipts.values()),
+        receipts,
         junit,
         automated_ids=AUTOMATED_SCENARIO_IDS,
     )
+    print(f"JUnit: {junit}")
+    return failures
+
+
+def run_automated() -> int:
+    require_live_confirmation()
+    junit_receipts: list = []
+    try:
+        load_tokens()
+        campaign = new_campaign("automated")
+        try:
+            campaign._baseline()
+            resources = campaign._resources()
+            campaign._a2_guard()
+            campaign._a3_smoke()
+            campaign._a4_a5()
+            campaign._a6()
+            campaign._a7(resources)
+            if campaign._b1():
+                campaign._b2()
+                campaign._b3()
+                campaign._b4()
+                campaign._c1()
+                campaign._c2()
+                campaign._c3()
+                campaign._c4()
+                campaign._c5()
+                campaign._c6()
+                campaign._c7()
+                campaign._c9()
+                campaign._d1()
+                campaign._d2()
+                campaign._d3()
+                campaign._d4()
+            for scenario_id in MANUAL_SCENARIO_IDS:
+                if scenario_id not in campaign.receipts:
+                    campaign.receipt(
+                        scenario_id, "NOT_RUN",
+                        "Manual UI suite. Run ./gradlew qaManual.",
+                    )
+            campaign.cleanup()
+            campaign._final_metadata()
+        except Exception:
+            campaign.cleanup()
+            campaign._final_metadata()
+            raise
+        finally:
+            junit_receipts = list(campaign.receipts.values())
+    finally:
+        failures = _write_automated_junit(junit_receipts)
     print(f"Automated QA complete: {campaign.campaign_id}")
     print(f"Covered scenarios: {', '.join(AUTOMATED_SCENARIO_IDS)}")
-    print(f"JUnit: {junit}")
     return 1 if failures else 0
 
 
