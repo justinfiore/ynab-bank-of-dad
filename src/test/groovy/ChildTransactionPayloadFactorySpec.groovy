@@ -17,6 +17,10 @@ class ChildTransactionPayloadFactorySpec extends Specification {
             factory.buildImportId(source, 'child-two', 'outflow')
         factory.buildImportId(source, 'child-one', 'outflow') !=
             factory.buildImportId(transactionSource('txn-2'), 'child-one', 'outflow')
+        factory.buildImportId(source, 'child-one', 'outflow') !=
+            factory.buildImportId(source, 'child-one', 'outflow', 'retired-child')
+        factory.buildImportId(source, 'child-one', 'outflow', 'retired-child') ==
+            factory.buildImportId(source, 'child-one', 'outflow', 'retired-child')
     }
 
     def "money movement import ids distinguish mirror directions"() {

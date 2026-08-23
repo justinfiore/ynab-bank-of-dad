@@ -7,7 +7,7 @@ import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 
 class ChildTransactionPayloadFactory {
-    String buildImportId(SourceEntityKey source, String targetBudgetId, String direction) {
+    String buildImportId(SourceEntityKey source, String targetBudgetId, String direction, String generation = null) {
         if (!source?.sourceBudgetId || !source.type || !targetBudgetId || !direction) {
             throw new IllegalArgumentException('Reconciliation create must have stable source and target identity')
         }
@@ -15,7 +15,8 @@ class ChildTransactionPayloadFactory {
             source.sourceBudgetId, targetBudgetId, source.type.databaseValue,
             source.parentTransactionId ?: '', source.parentSubtransactionId ?: '',
             source.moneyMovementId ?: '',
-            source.type == SourceEntityType.MONEY_MOVEMENT ? direction : ''
+            source.type == SourceEntityType.MONEY_MOVEMENT ? direction : '',
+            generation ?: ''
         ])
     }
 
