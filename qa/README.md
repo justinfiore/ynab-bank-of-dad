@@ -117,6 +117,10 @@ These are not part of `test`, `testAll`, `check`, `build`, or `installDist`.
 ./gradlew qaManual -PqaConfirmLive=YES -PqaManualReady=YES
 ```
 
+Tokens may be supplied as environment variables instead of `tokens.txt`. Plan `fullId` values may be `${QA_*_PLAN_ID}` placeholders. See `qa/SETUP.md`.
+
+Opt-in GitHub Actions: label a same-repo PR `end-to-end-qa` when the author is `justinfiore` or `jhorgenson`. That job runs `qaAutomated` only.
+
 Account and token setup is in `qa/SETUP.md`.
 
 Perform a fresh fail-closed, read-only API discovery after loading the four

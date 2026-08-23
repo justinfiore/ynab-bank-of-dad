@@ -14,35 +14,19 @@ REPO_ROOT = QA_ROOT.parent
 sys.path.insert(0, str(QA_ROOT))
 
 from lib.campaign_matrix import AUTOMATED_SCENARIO_IDS, MANUAL_SCENARIO_IDS
+from lib.junit_writer import write_automated_junit
+from lib.qa_config import QaConfigBlocked, load_tokens as load_token_env
 from run_live_campaign import Campaign, PARENT, CHILDREN, write_json
 
 
 TOKEN_FILE = REPO_ROOT / "tokens.txt"
-TOKEN_NAMES = (
-    "PARENT_ACCESS_TOKEN",
-    "JORSTEN_JR_ACCESS_TOKEN",
-    "BORSTEN_ACCESS_TOKEN",
-    "THORSTEN_ACCESS_TOKEN",
-)
 
 
 def load_tokens() -> None:
-    if not TOKEN_FILE.is_file():
-        raise SystemExit(
-            "BLOCKED: tokens.txt is missing. Copy qa/config/tokens.txt.example "
-            "to tokens.txt at the repo root and fill the four QA tokens. "
-            "See qa/SETUP.md."
-        )
-    for raw in TOKEN_FILE.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        name, value = line.split("=", 1)
-        if name in TOKEN_NAMES and value.strip():
-            os.environ.setdefault(name, value.strip())
-    missing = [name for name in TOKEN_NAMES if not os.environ.get(name)]
-    if missing:
-        raise SystemExit("BLOCKED: required QA token environment values are missing.")
+    try:
+        load_token_env(os.environ, TOKEN_FILE if TOKEN_FILE.is_file() else None)
+    except QaConfigBlocked as error:
+        raise SystemExit(f"BLOCKED: {error}. See qa/SETUP.md.")
 
 
 def require_live_confirmation() -> None:
@@ -118,9 +102,16 @@ def run_automated() -> int:
         campaign.cleanup()
         campaign._final_metadata()
         raise
+    junit = REPO_ROOT / "build/test-results/qaAutomated/TEST-qaAutomated.xml"
+    failures = write_automated_junit(
+        list(campaign.receipts.values()),
+        junit,
+        automated_ids=AUTOMATED_SCENARIO_IDS,
+    )
     print(f"Automated QA complete: {campaign.campaign_id}")
     print(f"Covered scenarios: {', '.join(AUTOMATED_SCENARIO_IDS)}")
-    return 0
+    print(f"JUnit: {junit}")
+    return 1 if failures else 0
 
 
 def run_manual(*, ui_complete: bool) -> int:
