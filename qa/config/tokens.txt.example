@@ -1,0 +1,9 @@
+# Copy this file to the repository root as `tokens.txt` (mode 0600).
+# Never commit tokens.txt. Never paste token values into Slack, Git, or artifacts.
+#
+# Create four personal YNAB developer tokens from the four disposable QA plans
+# (or one parent token that can see all four plans plus three child tokens).
+PARENT_ACCESS_TOKEN=replace-with-parent-qa-token
+JORSTEN_JR_ACCESS_TOKEN=replace-with-jorsten-jr-qa-token
+BORSTEN_ACCESS_TOKEN=replace-with-borsten-qa-token
+THORSTEN_ACCESS_TOKEN=replace-with-thorsten-qa-token

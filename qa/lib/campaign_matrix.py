@@ -37,6 +37,21 @@ SCENARIOS = (
     ("D4-controlled-continuous", "Controlled two-to-three-cycle session has no duplicate", "live"),
 )
 
+AUTOMATED_SCENARIO_IDS = tuple(
+    scenario_id
+    for scenario_id, _requirement, _kind in SCENARIOS
+    if scenario_id not in {
+        "A8-money-movement",
+        "B5-live-movement",
+        "C8-split-component-removed",
+    }
+)
+MANUAL_SCENARIO_IDS = (
+    "A8-money-movement",
+    "B5-live-movement",
+    "C8-split-component-removed",
+)
+
 
 def prepare_blocked_campaign(root: Path, branch: str, commit: str, discovery_path: Path) -> None:
     discovery = json.loads(discovery_path.read_text(encoding="utf-8"))

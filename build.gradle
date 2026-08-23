@@ -82,3 +82,27 @@ def combinedTestTask = tasks.register('testAll') {
 tasks.named('check') {
     dependsOn(combinedTestTask)
 }
+
+def qaPython = providers.gradleProperty('qaPython').orElse('python3')
+def qaConfirmLive = providers.gradleProperty('qaConfirmLive').orElse('')
+def qaManualReady = providers.gradleProperty('qaManualReady').orElse('')
+
+tasks.register('qaAutomated', Exec) {
+    group = 'qa'
+    description = 'Runs disposable YNAB QA scenarios that need no UI. Not part of test/build/check.'
+    workingDir = layout.projectDirectory
+    commandLine qaPython.get(), 'qa/run_qa_suite.py', '--suite', 'automated'
+    environment 'QA_CONFIRM_LIVE_MUTATIONS', qaConfirmLive.get() == 'YES' ? 'YES' : ''
+}
+
+tasks.register('qaManual', Exec) {
+    group = 'qa'
+    description = 'Prepares or continues UI-gated disposable YNAB QA (A8/B5/C8). Not part of test/build/check.'
+    workingDir = layout.projectDirectory
+    def args = ['qa/run_qa_suite.py', '--suite', 'manual']
+    if (qaManualReady.get() == 'YES') {
+        args.add('--ui-complete')
+    }
+    commandLine qaPython.get(), *args
+    environment 'QA_CONFIRM_LIVE_MUTATIONS', qaConfirmLive.get() == 'YES' ? 'YES' : ''
+}

@@ -102,6 +102,23 @@ Run the harness unit tests with:
 python3 -m unittest discover -s qa/tests -v
 ```
 
+## Explicit live QA suites
+
+These are not part of `test`, `testAll`, `check`, `build`, or `installDist`.
+
+```bash
+# No UI. Mutates only the four disposable QA plans.
+./gradlew qaAutomated -PqaConfirmLive=YES
+
+# Prepare Move Money + C8b fixtures and print UI steps.
+./gradlew qaManual -PqaConfirmLive=YES
+
+# After the UI edits:
+./gradlew qaManual -PqaConfirmLive=YES -PqaManualReady=YES
+```
+
+Account and token setup is in `qa/SETUP.md`.
+
 Perform a fresh fail-closed, read-only API discovery after loading the four
 test-token environment variables locally:
 

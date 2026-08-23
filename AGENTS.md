@@ -24,3 +24,7 @@ Small Gradle + Groovy CLI for Bank of Dad workflows on YNAB.
     - Unit Tests: `./gradlew test`
     - Integration Tests: `./gradlew integrationTest`
     - All Tests: `./gradlew testAll`.
+- Disposable YNAB QA campaigns are **not** part of `test`, `testAll`, `check`, `build`, or `installDist`. Invoke them explicitly:
+  - `./gradlew qaAutomated -PqaConfirmLive=YES` — live API scenarios that need no YNAB UI (A1–A7, B1–B4, C1–C7, C9, D1–D4). Validates create/replay, reconciliation, isolation, lock, and multi-cycle behavior against the four disposable QA plans.
+  - `./gradlew qaManual -PqaConfirmLive=YES` — prepares A8/B5 Move Money funding and the C8b remain-a-split fixture, then prints UI steps. After those UI edits: `./gradlew qaManual -PqaConfirmLive=YES -PqaManualReady=YES`.
+- Setup for those suites (plans, categories, tokens) is in `qa/SETUP.md`. Never commit `tokens.txt` or `qa/config/qa-sync.yaml`.
