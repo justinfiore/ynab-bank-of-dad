@@ -21,6 +21,12 @@ class ChildTransactionPayloadFactorySpec extends Specification {
             factory.buildImportId(source, 'child-one', 'outflow', 'retired-child')
         factory.buildImportId(source, 'child-one', 'outflow', 'retired-child') ==
             factory.buildImportId(source, 'child-one', 'outflow', 'retired-child')
+        factory.buildImportId(source, 'child-one', 'outflow') ==
+            factory.buildImportId(source, 'child-one', 'outflow', null)
+        factory.buildImportId(source, 'child-one', 'outflow') ==
+            factory.buildImportId(source, 'child-one', 'outflow', '')
+        factory.buildImportId(source, 'child-one', 'outflow') ==
+            'PCBS:fafc540bc31c2fe27034bfe4d360a31'
     }
 
     def "money movement import ids distinguish mirror directions"() {

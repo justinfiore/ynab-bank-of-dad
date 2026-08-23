@@ -11,13 +11,16 @@ class ChildTransactionPayloadFactory {
         if (!source?.sourceBudgetId || !source.type || !targetBudgetId || !direction) {
             throw new IllegalArgumentException('Reconciliation create must have stable source and target identity')
         }
-        hashImportIdentity([
+        List<String> identityParts = [
             source.sourceBudgetId, targetBudgetId, source.type.databaseValue,
             source.parentTransactionId ?: '', source.parentSubtransactionId ?: '',
             source.moneyMovementId ?: '',
-            source.type == SourceEntityType.MONEY_MOVEMENT ? direction : '',
-            generation ?: ''
-        ])
+            source.type == SourceEntityType.MONEY_MOVEMENT ? direction : ''
+        ]
+        if (generation) {
+            identityParts << generation
+        }
+        hashImportIdentity(identityParts)
     }
 
     private static String hashImportIdentity(List<String> identityParts) {
