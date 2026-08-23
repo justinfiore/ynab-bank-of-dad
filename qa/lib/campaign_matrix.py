@@ -29,7 +29,7 @@ SCENARIOS = (
     ("C5-parent-unapproved", "Parent unapproval deletes child mirror", "live"),
     ("C6-parent-unmapped", "Parent unmapping deletes child mirror", "live"),
     ("C7-parent-deleted", "Parent deletion deletes child mirror", "live"),
-    ("C8-split-component-removed", "Remove only one mapped split component", "live"),
+    ("C8-split-component-removed", "2-line split collapse replaces the remaining component mirror", "live"),
     ("C9-child-mirror-recreated", "Missing child mirror is recreated on parent revision", "live"),
     ("D1-invalid-child-token", "Invalid Child B token isolates and retries", "live"),
     ("D2-invalid-child-mapping", "Invalid Child B mapping does not delete mirror", "live"),

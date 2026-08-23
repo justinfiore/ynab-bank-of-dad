@@ -600,9 +600,13 @@ class Campaign:
                                  dry="FAIL", live="NOT_RUN", api="FAIL", sqlite="NOT_RUN")
             finally:
                 self.cleanup()
-        self.receipt("C8-split-component-removed", "BLOCKED",
-                     "The official transaction API does not support updating subtransactions on an existing split.",
-                     dry="BLOCKED", live="BLOCKED", api="API contract limitation", sqlite="NOT_RUN")
+        if "C8-split-component-removed" not in self.receipts:
+            self.receipt(
+                "C8-split-component-removed",
+                "BLOCKED",
+                "API cannot edit existing split lines. Official C8 is the accepted 2-line collapse edge case from a manual UI edit; remain-a-split coverage is C8b.",
+                dry="BLOCKED", live="BLOCKED", api="API contract limitation", sqlite="NOT_RUN",
+            )
         self._final_metadata()
 
     def _simple_create_scenario(self, scenario: str, *, approved: bool = True,
