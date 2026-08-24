@@ -29,7 +29,7 @@
 
 ## 5. Docs and verification
 
-- [x] 5.1 Update `qa/SETUP.md` and `qa/README.md` with the label, authors, secrets, and env-only rule (`AGENTS.md` write was blocked by the agent-instruction guard)
+- [x] 5.1 Update `AGENTS.md`, `qa/SETUP.md`, and `qa/README.md` with the label, authors, secrets, and env-only rule
 - [x] 5.2 Run `python3 -m unittest discover -s qa/tests -v`
 - [x] 5.3 Run `./gradlew testAll`
 - [x] 5.4 Confirm `./gradlew check --dry-run` still does not include `qaAutomated` / `qaManual`
