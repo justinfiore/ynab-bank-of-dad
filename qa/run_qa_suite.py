@@ -77,7 +77,6 @@ def run_automated() -> int:
     require_live_confirmation()
     junit_receipts: list = []
     try:
-        raise RuntimeError("INTENTIONAL CI QA FAILURE: automated gate verification only")
         load_tokens()
         campaign = new_campaign("automated")
         try:
