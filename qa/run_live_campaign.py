@@ -33,6 +33,7 @@ from lib.live_campaign import (
     evidence_transaction,
     fixture_amount,
     fixture_import_id,
+    memo_has_exact_campaign,
     successful_operation_attempts,
 )
 from lib.run_capture import capture_sqlite_audit, redact, write_receipt
@@ -113,7 +114,7 @@ class Campaign:
         response = self.clients[name].get(self.identities[name], "transactions")
         tag = f"{self.campaign_id}:{scenario}" if scenario else self.campaign_id
         return [item for item in response.get("data", {}).get("transactions", [])
-                if tag in str(item.get("memo") or "") and not item.get("deleted")]
+                if memo_has_exact_campaign(item.get("memo"), tag) and not item.get("deleted")]
 
     @staticmethod
     def attempt_rows(state_db: Path) -> list[dict[str, Any]]:
@@ -886,7 +887,7 @@ class Campaign:
             identity = self.identities[name]
             response = self.clients[name].get(identity, "transactions")
             tagged = [item for item in response.get("data", {}).get("transactions", [])
-                      if self.campaign_id in str(item.get("memo") or "") and not item.get("deleted")]
+                      if memo_has_exact_campaign(item.get("memo"), self.campaign_id) and not item.get("deleted")]
             for item in tagged:
                 scenario = "cleanup"
                 self.mutate(scenario, "DELETE", name, None, item["id"])

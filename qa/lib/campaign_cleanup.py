@@ -6,20 +6,12 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
-from .live_campaign import FreshMutationGate
+from .live_campaign import FreshMutationGate, memo_has_exact_campaign
 from .read_only_discovery import _plans, _require_exact_pairs
 from .ynab_qa_client import KNOWN_NAMES, PlanIdentity, QaSafetyError, YnabQaClient
 
 
 CAMPAIGN_ID = re.compile(r"QA-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*")
-
-
-def _memo_has_exact_campaign(memo: Any, campaign_id: str) -> bool:
-    value = str(memo or "")
-    exact = re.search(
-        rf"(?<![A-Za-z0-9-]){re.escape(campaign_id)}(?![A-Za-z0-9-])", value,
-    )
-    return "BOD QA" in value and exact is not None
 
 
 def cleanup_exact_campaign(
@@ -59,7 +51,7 @@ def cleanup_exact_campaign(
             raise QaSafetyError("Transaction discovery did not return a list")
         candidates.extend(
             (name, item) for item in transactions
-            if not item.get("deleted") and _memo_has_exact_campaign(item.get("memo"), campaign_id)
+            if not item.get("deleted") and memo_has_exact_campaign(item.get("memo"), campaign_id)
         )
 
     if any(not isinstance(item.get("id"), str) or not item.get("id") for _, item in candidates):

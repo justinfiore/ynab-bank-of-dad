@@ -5,11 +5,23 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
 from .read_only_discovery import _require_exact_pairs
 from .ynab_qa_client import KNOWN_NAMES, PlanIdentity, QaSafetyError
+
+
+def memo_has_exact_campaign(memo: Any, campaign_id: str) -> bool:
+    """Match one complete BOD QA campaign tag, never a campaign-ID prefix."""
+    value = str(memo or "")
+    return (
+        "BOD QA" in value
+        and re.search(
+            rf"(?<![A-Za-z0-9-]){re.escape(campaign_id)}(?![A-Za-z0-9-])", value,
+        ) is not None
+    )
 
 
 class FreshMutationGate:
@@ -50,7 +62,7 @@ class FreshMutationGate:
             if not transaction_id or existing_transaction is None:
                 raise QaSafetyError("Existing target observation is required")
             memo = str(existing_transaction.get("memo") or "")
-            if self._campaign_id not in memo or "BOD QA" not in memo:
+            if not memo_has_exact_campaign(memo, self._campaign_id):
                 raise QaSafetyError("An untagged transaction must never be modified")
         elif transaction_id is not None:
             raise QaSafetyError("Create must not name an existing transaction")

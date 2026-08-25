@@ -11,6 +11,7 @@ from lib.live_campaign import (
     evidence_transaction,
     fixture_import_id,
     fixture_amount,
+    memo_has_exact_campaign,
     successful_operation_attempts,
 )
 from lib.ynab_qa_client import PlanIdentity, QaSafetyError
@@ -109,6 +110,11 @@ class FreshMutationGateTest(unittest.TestCase):
             {"status": "applied"},
         ]
         self.assertEqual(successful_operation_attempts(attempts), 2)
+
+    def test_campaign_tag_matching_rejects_campaign_id_prefixes(self):
+        self.assertTrue(memo_has_exact_campaign("BOD QA QA-123:B1", "QA-123"))
+        self.assertFalse(memo_has_exact_campaign("BOD QA QA-1234:B1", "QA-123"))
+        self.assertFalse(memo_has_exact_campaign("ordinary QA-123", "QA-123"))
 
 
 if __name__ == "__main__":
