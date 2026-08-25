@@ -19,6 +19,8 @@ from typing import Any, Callable, Mapping
 
 
 API_ROOT = "https://api.ynab.com/v1"
+MAX_GET_RATE_LIMIT_RETRIES = 3
+MAX_RETRY_AFTER_SECONDS = 30
 KNOWN_NAMES = {
     "Jorsten's Plan",
     "Jorsten Jr's Plan",
@@ -44,7 +46,7 @@ class YnabQaClient:
         allowlist: Mapping[str, str],
         timeout: int = 30,
         *,
-        max_get_rate_limit_retries: int = 3,
+        max_get_rate_limit_retries: int = MAX_GET_RATE_LIMIT_RETRIES,
         sleeper: Callable[[float], None] = time.sleep,
     ):
         if not token or any(ch.isspace() for ch in token):
@@ -53,8 +55,14 @@ class YnabQaClient:
             raise QaSafetyError("Allowlist must contain exactly the four QA name/ID pairs")
         if any(not self._looks_like_uuid(value) for value in allowlist.values()):
             raise QaSafetyError("Every allowlisted plan ID must be a full UUID")
-        if max_get_rate_limit_retries < 0:
-            raise QaSafetyError("Rate-limit retry count must be non-negative")
+        if (
+            isinstance(max_get_rate_limit_retries, bool)
+            or not isinstance(max_get_rate_limit_retries, int)
+            or not 0 <= max_get_rate_limit_retries <= MAX_GET_RATE_LIMIT_RETRIES
+        ):
+            raise QaSafetyError(
+                f"Rate-limit retry count must be between 0 and {MAX_GET_RATE_LIMIT_RETRIES}"
+            )
         self._token = token
         self._allowlist = dict(allowlist)
         self._timeout = timeout
@@ -311,11 +319,11 @@ class YnabQaClient:
 
     @staticmethod
     def _retry_delay(error: urllib.error.HTTPError) -> float:
-        """Use a bounded numeric Retry-After, or a conservative 30-second fallback."""
+        """Use a bounded numeric Retry-After, or the maximum allowed fallback."""
         try:
             seconds = int(error.headers.get("Retry-After", ""))
             if seconds > 0:
-                return float(min(seconds, 30))
+                return float(min(seconds, MAX_RETRY_AFTER_SECONDS))
         except (TypeError, ValueError):
             pass
-        return 30.0
+        return float(MAX_RETRY_AFTER_SECONDS)

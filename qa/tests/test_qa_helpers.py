@@ -12,7 +12,13 @@ sys.path.insert(0, str(QA_ROOT))
 
 from lib.fixtures import TransactionFixture, normalize_transaction, tagged_matches
 from lib.read_only_discovery import DiscoveryBlocked, run_discovery
-from lib.ynab_qa_client import KNOWN_NAMES, PlanIdentity, QaSafetyError, YnabQaClient
+from lib.ynab_qa_client import (
+    KNOWN_NAMES,
+    MAX_RETRY_AFTER_SECONDS,
+    PlanIdentity,
+    QaSafetyError,
+    YnabQaClient,
+)
 
 
 IDS = {
@@ -75,17 +81,40 @@ class QaClientGuardTest(unittest.TestCase):
             self.assertEqual(client._request("GET", "plans"), {"data": {"plans": []}})
         self.assertEqual(urlopen.call_count, 2)
         self.assertEqual(waits, [2.0])
-        self.assertEqual(
-            client._retry_delay(urllib.error.HTTPError("https://example.test", 429, "", {}, None)),
-            30.0,
-        )
-
         waits.clear()
         with patch("urllib.request.urlopen", side_effect=rate_limited) as urlopen:
             with self.assertRaisesRegex(RuntimeError, "HTTP 429"):
                 client._request("POST", "plans/example/transactions", {"transaction": {}})
         self.assertEqual(urlopen.call_count, 1)
         self.assertEqual(waits, [])
+
+    def test_rate_limited_get_stops_after_retry_exhaustion(self):
+        waits = []
+        client = YnabQaClient(
+            "test-token", IDS, max_get_rate_limit_retries=2, sleeper=waits.append
+        )
+        rate_limited = urllib.error.HTTPError(
+            "https://example.test", 429, "too many requests", {"Retry-After": "1"}, None
+        )
+
+        with patch("urllib.request.urlopen", side_effect=rate_limited) as urlopen:
+            with self.assertRaisesRegex(RuntimeError, "HTTP 429"):
+                client._request("GET", "plans")
+
+        self.assertEqual(urlopen.call_count, 3)
+        self.assertEqual(waits, [1.0, 1.0])
+
+    def test_retry_after_above_allowed_range_is_clamped(self):
+        client = YnabQaClient("test-token", IDS, sleeper=lambda _: None)
+        rate_limited = urllib.error.HTTPError(
+            "https://example.test",
+            429,
+            "too many requests",
+            {"Retry-After": str(MAX_RETRY_AFTER_SECONDS + 1)},
+            None,
+        )
+
+        self.assertEqual(client._retry_delay(rate_limited), float(MAX_RETRY_AFTER_SECONDS))
 
     def test_missing_confirmation_blocks_before_request(self):
         with patch.object(self.client, "_request") as request:
