@@ -36,7 +36,9 @@ from lib.live_campaign import (
     successful_operation_attempts,
 )
 from lib.run_capture import capture_sqlite_audit, redact, write_receipt
-from lib.ynab_qa_client import PlanIdentity, QaSafetyError, YnabQaClient
+from lib.ynab_qa_client import (
+    PlanIdentity, QaSafetyError, YnabQaClient, merge_request_telemetry,
+)
 
 
 TOKEN_ENV = {
@@ -917,6 +919,16 @@ class Campaign:
             "cleanup": "All campaign-tagged transactions were deleted and API verification found none.",
             "release_recommendation": "NOT READY", "secret_scan": "PENDING",
         })
+        write_json(
+            self.artifacts / "api-observations" / "request-telemetry.json",
+            {
+                "schema_version": 1,
+                "safe_fields": [
+                    "method", "resource_class", "status_class", "count", "retry_count",
+                ],
+                "requests": merge_request_telemetry(self.clients),
+            },
+        )
 
 
 def main() -> int:

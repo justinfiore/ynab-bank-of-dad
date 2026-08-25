@@ -49,8 +49,8 @@ jobs:
       - name: Install QA config placeholders
         run: cp qa/config/qa-sync.yaml.example qa/config/qa-sync.yaml
 
-      - name: Run automated disposable-plan QA
-        run: ./gradlew --no-daemon qaAutomated -PqaConfirmLive=YES
+      - name: Run bounded automated disposable-plan smoke QA
+        run: ./gradlew --no-daemon qaAutomatedSmoke -PqaConfirmLive=YES
 
       - name: Upload JUnit XML test results
         if: always()

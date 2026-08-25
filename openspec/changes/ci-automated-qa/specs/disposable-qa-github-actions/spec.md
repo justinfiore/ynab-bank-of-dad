@@ -1,12 +1,12 @@
 ## ADDED Requirements
 
 ### Requirement: Opt-in end-to-end QA SHALL run only on authorized same-repo pull requests
-The repository SHALL provide a GitHub Actions workflow that runs the fully automated disposable-plan QA suite (`qaAutomated` scenarios only) on pull requests when, and only when, all of the following are true: the event is a pull request against this repository; the pull request head repository equals `github.repository` (not a fork); the pull request has the label `end-to-end-qa`; and the pull request author login is `justinfiore` or `jhorgenson`.
+The repository SHALL provide a GitHub Actions workflow that runs the rate-budgeted disposable-plan smoke suite (`qaAutomatedSmoke`: A2, A3, B1, B2) on pull requests when, and only when, all of the following are true: the event is a pull request against this repository; the pull request head repository equals `github.repository` (not a fork); the pull request has the label `end-to-end-qa`; and the pull request author login is `justinfiore` or `jhorgenson`. The broader `qaAutomated` suite SHALL remain explicit and SHALL NOT be silently reduced.
 
 #### Scenario: Labeled maintainer PR runs live automated QA
 - **WHEN** a pull request in `justinfiore/ynab-bank-of-dad` authored by `justinfiore` or `jhorgenson` has the label `end-to-end-qa`
 - **THEN** GitHub Actions SHALL start the end-to-end QA job
-- **AND** that job SHALL execute the UI-free automated scenario set against the four disposable QA plans
+- **AND** that job SHALL execute the reviewed rate-budgeted smoke scenario set against the four disposable QA plans
 
 #### Scenario: Missing label skips live QA
 - **WHEN** a pull request does not have the label `end-to-end-qa`
@@ -47,8 +47,8 @@ QA config loading SHALL accept `qa/config/qa-sync.yaml` (or the checked-in examp
 - **THEN** QA SHALL block before writes
 - **AND** it SHALL NOT invent or suffix-match a plan ID
 
-### Requirement: Automated CI SHALL exclude UI-gated scenarios
-The Actions job SHALL run only `AUTOMATED_SCENARIO_IDS` (A1–A7, B1–B4, C1–C7, C9, D1–D4). It SHALL NOT run `qaManual` or scenarios `A8-money-movement`, `B5-live-movement`, or `C8-split-component-removed`.
+### Requirement: Automated CI SHALL run a reviewed, rate-budgeted smoke subset
+The Actions job SHALL run only the checked-in `qaAutomatedSmoke` selection (A2, A3, B1, B2). It SHALL NOT run `qaAutomated`, `qaManual`, or scenarios `A8-money-movement`, `B5-live-movement`, or `C8-split-component-removed`. The broader UI-free scenario matrix remains available through explicit `qaAutomated` execution.
 
 #### Scenario: Manual scenarios are not executed in Actions
 - **WHEN** the end-to-end QA job runs

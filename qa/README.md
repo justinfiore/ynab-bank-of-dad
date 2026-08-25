@@ -110,6 +110,9 @@ These are not part of `test`, `testAll`, `check`, `build`, or `installDist`.
 # No UI. Mutates only the four disposable QA plans.
 ./gradlew qaAutomated -PqaConfirmLive=YES
 
+# Narrow rate-budgeted live smoke contract: A2, A3, B1, B2.
+./gradlew qaAutomatedSmoke -PqaConfirmLive=YES
+
 # Prepare Move Money + C8b fixtures and print UI steps.
 ./gradlew qaManual -PqaConfirmLive=YES
 
@@ -119,7 +122,9 @@ These are not part of `test`, `testAll`, `check`, `build`, or `installDist`.
 
 Tokens may be supplied as environment variables instead of `tokens.txt`. Plan `fullId` values may be `${QA_*_PLAN_ID}` placeholders. See `qa/SETUP.md`.
 
-Opt-in GitHub Actions: label a same-repo PR `end-to-end-qa` when the author is `justinfiore` or `jhorgenson`. That job runs `qaAutomated` only.
+Opt-in GitHub Actions: label a same-repo PR `end-to-end-qa` when the author is `justinfiore` or `jhorgenson`. That job runs `qaAutomatedSmoke` only; the broader `qaAutomated` campaign remains an explicit, rate-budgeted local/release-validation operation.
+
+If a prior campaign needs recovery, use `qaCleanupCampaign` with its exact `QA-...` campaign ID. It performs fresh exact four-plan discovery before deleting only matching `BOD QA` transactions and writes a redacted request-telemetry receipt.
 
 Account and token setup is in `qa/SETUP.md`.
 

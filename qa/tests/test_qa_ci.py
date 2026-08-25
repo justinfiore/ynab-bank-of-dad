@@ -88,12 +88,31 @@ budgets:
         self.assertIn("justinfiore", text)
         self.assertIn("jhorgenson", text)
         self.assertIn("head.repo.full_name == github.repository", text)
-        self.assertIn("qaAutomated", text)
+        self.assertIn("qaAutomatedSmoke", text)
+        self.assertNotIn("run: ./gradlew --no-daemon qaAutomated -PqaConfirmLive=YES", text)
         self.assertNotIn("qaManual", text)
         self.assertNotIn("tokens.txt", text)
 
 
 class JunitWriterTest(unittest.TestCase):
+    def test_smoke_selection_writes_its_own_junit_suite(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        output = Path(directory.name) / "TEST-qaAutomatedSmoke.xml"
+        selected = ("A3-config-smoke", "B1-live-create")
+        receipts = [
+            {"scenario_id": scenario_id, "status": "PASS", "reason": "ok"}
+            for scenario_id in selected
+        ]
+        failures = write_automated_junit(
+            receipts, output, automated_ids=selected, suite_name="qaAutomatedSmoke",
+        )
+        text = output.read_text(encoding="utf-8")
+        self.assertEqual(failures, 0)
+        self.assertIn('<testsuite name="qaAutomatedSmoke" tests="2"', text)
+        self.assertIn('classname="qaAutomatedSmoke"', text)
+        self.assertNotIn("A1-baseline", text)
+
     def test_fail_and_blocked_are_junit_failures(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)

@@ -8,8 +8,11 @@ from typing import Iterable, Mapping
 from xml.sax.saxutils import escape
 
 
-def write_automated_junit(receipts: Iterable[Mapping], output: Path, *, automated_ids: Iterable[str]) -> int:
-    automated = set(automated_ids)
+def write_automated_junit(
+    receipts: Iterable[Mapping], output: Path, *, automated_ids: Iterable[str],
+    suite_name: str = "qaAutomated",
+) -> int:
+    automated = tuple(dict.fromkeys(automated_ids))
     by_id = {item.get("scenario_id"): item for item in receipts}
     cases: list[str] = []
     failures = 0
@@ -19,20 +22,20 @@ def write_automated_junit(receipts: Iterable[Mapping], output: Path, *, automate
         reason = str(receipt.get("reason") or status)
         name = escape(str(scenario_id))
         if status == "PASS":
-            cases.append(f'    <testcase classname="qaAutomated" name="{name}"/>')
+            cases.append(f'    <testcase classname="{escape(suite_name)}" name="{name}"/>')
             continue
         failures += 1
         message = escape(reason)
         body = html.escape(reason)
         cases.append(
-            f'    <testcase classname="qaAutomated" name="{name}">\n'
+            f'    <testcase classname="{escape(suite_name)}" name="{name}">\n'
             f'      <failure message="{message}">{body}</failure>\n'
             f"    </testcase>"
         )
     output.parent.mkdir(parents=True, exist_ok=True)
     xml = (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
-        f'<testsuite name="qaAutomated" tests="{len(automated)}" failures="{failures}" errors="0">\n'
+        f'<testsuite name="{escape(suite_name)}" tests="{len(automated)}" failures="{failures}" errors="0">\n'
         + "\n".join(cases)
         + "\n</testsuite>\n"
     )

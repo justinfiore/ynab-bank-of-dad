@@ -71,6 +71,8 @@ class YnabQaClient:
         self._consumed_manifest_authorizations: set[str] = set()
         self._manifest_authorization_lock = Lock()
         self._consumed_provisioning_authorizations: set[str] = set()
+        self._request_telemetry: dict[tuple[str, str, str], dict[str, int]] = {}
+        self._request_telemetry_lock = Lock()
 
     @staticmethod
     def _looks_like_uuid(value: str) -> bool:
@@ -94,6 +96,28 @@ class YnabQaClient:
 
     def discover_plans(self) -> dict[str, Any]:
         return self._request("GET", "plans")
+
+    def request_telemetry(self) -> list[dict[str, Any]]:
+        """Return aggregate request evidence containing only an intentionally safe schema."""
+        with self._request_telemetry_lock:
+            rows = [
+                {
+                    "method": method,
+                    "resource_class": resource_class,
+                    "status_class": status_class,
+                    "count": totals["count"],
+                    "retry_count": totals["retry_count"],
+                }
+                for (method, resource_class, status_class), totals
+                in self._request_telemetry.items()
+            ]
+        return sorted(
+            rows,
+            key=lambda item: (
+                item["method"], item["resource_class"],
+                item["status_class"],
+            ),
+        )
 
     def create_category_group(
         self,
@@ -287,6 +311,7 @@ class YnabQaClient:
         return self._request(method, f"plans/{identity.plan_id}/transactions{suffix}", payload)
 
     def _request(self, method: str, path: str, payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        resource_class = self._logical_resource_class(path)
         data = None if payload is None else json.dumps(payload).encode("utf-8")
         request = urllib.request.Request(
             f"{API_ROOT}/{path}",
@@ -302,6 +327,8 @@ class YnabQaClient:
         while True:
             try:
                 with urllib.request.urlopen(request, timeout=self._timeout) as response:
+                    status = getattr(response, "status", None)
+                    self._record_request(method, resource_class, self._status_class(status or 200))
                     return json.load(response)
             except urllib.error.HTTPError as error:
                 if (
@@ -309,13 +336,41 @@ class YnabQaClient:
                     and error.code == 429
                     and attempts < self._max_get_rate_limit_retries
                 ):
+                    self._record_request(
+                        method, resource_class, self._status_class(error.code), retried=True,
+                    )
                     self._sleeper(self._retry_delay(error))
                     attempts += 1
                     continue
+                self._record_request(method, resource_class, self._status_class(error.code))
                 # Never include headers, token, or a response URL in evidence/logs.
                 raise RuntimeError(f"YNAB API returned HTTP {error.code}") from None
             except urllib.error.URLError as error:
+                self._record_request(method, resource_class, "transport_error")
                 raise RuntimeError(f"YNAB API request failed: {error.reason}") from None
+
+    @staticmethod
+    def _logical_resource_class(path: str) -> str:
+        parts = path.strip("/").split("/")
+        if parts == ["plans"]:
+            return "plans"
+        resource = parts[2] if len(parts) >= 3 and parts[0] == "plans" else "unknown"
+        return resource if resource in {
+            "accounts", "categories", "category_groups", "transactions", "money_movements",
+        } else "unknown"
+
+    @staticmethod
+    def _status_class(status: int) -> str:
+        return f"{status // 100}xx" if 100 <= status <= 599 else "unknown"
+
+    def _record_request(
+        self, method: str, resource_class: str, status_class: str, *, retried: bool = False,
+    ) -> None:
+        key = (method, resource_class, status_class)
+        with self._request_telemetry_lock:
+            totals = self._request_telemetry.setdefault(key, {"count": 0, "retry_count": 0})
+            totals["count"] += 1
+            totals["retry_count"] += int(retried)
 
     @staticmethod
     def _retry_delay(error: urllib.error.HTTPError) -> float:
@@ -327,3 +382,21 @@ class YnabQaClient:
         except (TypeError, ValueError):
             pass
         return float(MAX_RETRY_AFTER_SECONDS)
+
+
+def merge_request_telemetry(clients: Mapping[str, YnabQaClient]) -> list[dict[str, Any]]:
+    """Merge client metrics without retaining which token or plan issued a request."""
+    totals: dict[tuple[str, str, str], dict[str, int]] = {}
+    for client in clients.values():
+        for row in client.request_telemetry():
+            key = (row["method"], row["resource_class"], row["status_class"])
+            aggregate = totals.setdefault(key, {"count": 0, "retry_count": 0})
+            aggregate["count"] += row["count"]
+            aggregate["retry_count"] += row["retry_count"]
+    return [
+        {
+            "method": key[0], "resource_class": key[1], "status_class": key[2],
+            "count": totals[key]["count"], "retry_count": totals[key]["retry_count"],
+        }
+        for key in sorted(totals)
+    ]

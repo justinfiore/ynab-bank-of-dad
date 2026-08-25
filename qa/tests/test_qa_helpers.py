@@ -88,6 +88,36 @@ class QaClientGuardTest(unittest.TestCase):
         self.assertEqual(urlopen.call_count, 1)
         self.assertEqual(waits, [])
 
+    def test_request_telemetry_retains_only_safe_aggregate_fields(self):
+        client = YnabQaClient("secret-token-value", IDS, sleeper=lambda _: None)
+        rate_limited = urllib.error.HTTPError(
+            "https://api.ynab.com/v1/plans/secret-plan-id/transactions",
+            429, "too many requests", {"Retry-After": "1", "Secret": "header"}, None,
+        )
+        response = MagicMock()
+        response.__enter__.return_value = io.StringIO('{"data":{"transactions":[]}}')
+        response.__exit__.return_value = False
+        with patch("urllib.request.urlopen", side_effect=[rate_limited, response]):
+            client._request("GET", "plans/secret-plan-id/transactions/secret-transaction-id")
+
+        telemetry = client.request_telemetry()
+        self.assertEqual(telemetry, [
+            {
+                "method": "GET", "resource_class": "transactions",
+                "status_class": "2xx", "count": 1, "retry_count": 0,
+            },
+            {
+                "method": "GET", "resource_class": "transactions",
+                "status_class": "4xx", "count": 1, "retry_count": 1,
+            },
+        ])
+        serialized = json.dumps(telemetry)
+        for forbidden in (
+            "secret-token-value", "header", "api.ynab.com", "secret-plan-id",
+            "secret-transaction-id", "Authorization", "url", "headers",
+        ):
+            self.assertNotIn(forbidden, serialized)
+
     def test_rate_limited_get_stops_after_retry_exhaustion(self):
         waits = []
         client = YnabQaClient(
