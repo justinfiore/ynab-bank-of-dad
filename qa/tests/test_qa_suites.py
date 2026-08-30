@@ -59,3 +59,10 @@ class QaSuitePartitionTest(unittest.TestCase):
         }), encoding="utf-8")
         with self.assertRaises(SystemExit):
             load_smoke_selection(selection)
+
+    def test_labeled_workflow_invokes_full_automated_suite(self):
+        workflow = (QA_ROOT.parent / ".github/workflows/end-to-end-qa.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("run: ./gradlew --no-daemon qaAutomated -PqaConfirmLive=YES", workflow)
+        self.assertNotIn("run: ./gradlew --no-daemon qaAutomatedSmoke", workflow)

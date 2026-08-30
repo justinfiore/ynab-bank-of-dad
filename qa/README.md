@@ -122,7 +122,9 @@ These are not part of `test`, `testAll`, `check`, `build`, or `installDist`.
 
 Tokens may be supplied as environment variables instead of `tokens.txt`. Plan `fullId` values may be `${QA_*_PLAN_ID}` placeholders. See `qa/SETUP.md`.
 
-Opt-in GitHub Actions: label a same-repo PR `end-to-end-qa` when the author is `justinfiore` or `jhorgenson`. That job runs `qaAutomatedSmoke` only; the broader `qaAutomated` campaign remains an explicit, rate-budgeted local/release-validation operation.
+Opt-in GitHub Actions: label a same-repo PR `end-to-end-qa` when the author is `justinfiore` or `jhorgenson`. That job runs the full UI-free `qaAutomated` campaign; `qaManual` remains local-only.
+
+The QA HTTP client retries HTTP 429 responses for every request method until success by default. It waits for a usable case-insensitive `Retry-After` value (integer seconds or an HTTP date) or a `RateLimit-Reset`, `X-RateLimit-Reset`, or `X-Rate-Limit-Reset` epoch. Without a usable resume header it uses 5-second linear backoff (5, 10, 15, ... seconds). Each wait is capped at one hour; other 4xx responses fail immediately. Cleanup additionally spaces every client request by `QA_CLEANUP_PACING_MS` milliseconds. The cleanup-only default is `500`, an empty value also uses that default, and `0` disables pacing.
 
 If a prior campaign needs recovery, use `qaCleanupCampaign` with its exact `QA-...` campaign ID. It performs fresh exact four-plan discovery before deleting only matching `BOD QA` transactions and writes a redacted request-telemetry receipt.
 

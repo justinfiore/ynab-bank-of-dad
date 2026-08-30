@@ -38,7 +38,8 @@ from lib.live_campaign import (
 )
 from lib.run_capture import capture_sqlite_audit, redact, write_receipt
 from lib.ynab_qa_client import (
-    PlanIdentity, QaSafetyError, YnabQaClient, merge_request_telemetry,
+    PlanIdentity, QaSafetyError, YnabQaClient, cleanup_pacing_ms,
+    merge_request_telemetry,
 )
 
 
@@ -882,23 +883,30 @@ class Campaign:
     def cleanup(self) -> None:
         cleanup_dir = self.artifacts / "cleanup"
         results = []
-        # Discover every currently tagged transaction, then delete only those exact tagged IDs.
-        for name in (PARENT, *CHILDREN):
-            identity = self.identities[name]
-            response = self.clients[name].get(identity, "transactions")
-            tagged = [item for item in response.get("data", {}).get("transactions", [])
-                      if memo_has_exact_campaign(item.get("memo"), self.campaign_id) and not item.get("deleted")]
-            for item in tagged:
-                scenario = "cleanup"
-                self.mutate(scenario, "DELETE", name, None, item["id"])
-                results.append({"target": name, "transaction": evidence_transaction(item),
-                                "cleanup": "DELETE APPLIED"})
-        remaining = self.snapshot("cleanup", "verification")
-        clean = all(not values for values in remaining.values())
-        write_json(cleanup_dir / "cleanup-manifest.json", {
-            "campaign_id": self.campaign_id, "deleted": results,
-            "verification": "PASS" if clean else "FAIL", "remaining_tagged": remaining,
-        })
+        pacing_ms = cleanup_pacing_ms()
+        for client in self.clients.values():
+            client.set_request_pacing_ms(pacing_ms)
+        try:
+            # Discover every currently tagged transaction, then delete only those exact tagged IDs.
+            for name in (PARENT, *CHILDREN):
+                identity = self.identities[name]
+                response = self.clients[name].get(identity, "transactions")
+                tagged = [item for item in response.get("data", {}).get("transactions", [])
+                          if memo_has_exact_campaign(item.get("memo"), self.campaign_id) and not item.get("deleted")]
+                for item in tagged:
+                    scenario = "cleanup"
+                    self.mutate(scenario, "DELETE", name, None, item["id"])
+                    results.append({"target": name, "transaction": evidence_transaction(item),
+                                    "cleanup": "DELETE APPLIED"})
+            remaining = self.snapshot("cleanup", "verification")
+            clean = all(not values for values in remaining.values())
+            write_json(cleanup_dir / "cleanup-manifest.json", {
+                "campaign_id": self.campaign_id, "deleted": results,
+                "verification": "PASS" if clean else "FAIL", "remaining_tagged": remaining,
+            })
+        finally:
+            for client in self.clients.values():
+                client.set_request_pacing_ms(0)
 
     def _final_metadata(self) -> None:
         environment_path = self.artifacts / "environment.json"

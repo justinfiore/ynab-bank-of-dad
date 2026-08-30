@@ -4,6 +4,8 @@ import os
 import sys
 import unittest
 import urllib.error
+from datetime import datetime, timezone
+from email.utils import format_datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -13,11 +15,13 @@ sys.path.insert(0, str(QA_ROOT))
 from lib.fixtures import TransactionFixture, normalize_transaction, tagged_matches
 from lib.read_only_discovery import DiscoveryBlocked, run_discovery
 from lib.ynab_qa_client import (
+    DEFAULT_CLEANUP_PACING_MS,
     KNOWN_NAMES,
-    MAX_RETRY_AFTER_SECONDS,
+    MAX_RATE_LIMIT_WAIT_SECONDS,
     PlanIdentity,
     QaSafetyError,
     YnabQaClient,
+    cleanup_pacing_ms,
 )
 
 
@@ -68,25 +72,34 @@ class QaClientGuardTest(unittest.TestCase):
         with self.assertRaises(QaSafetyError):
             self.client.get(self.parent, "payees")
 
-    def test_rate_limited_get_retries_once_but_post_does_not_retry(self):
-        waits = []
-        client = YnabQaClient("test-token", IDS, sleeper=waits.append)
-        rate_limited = urllib.error.HTTPError(
-            "https://example.test", 429, "too many requests", {"Retry-After": "2"}, None
-        )
+    @staticmethod
+    def response(body='{"data":{}}'):
         response = MagicMock()
-        response.__enter__.return_value = io.StringIO('{"data":{"plans":[]}}')
+        response.__enter__.return_value = io.StringIO(body)
         response.__exit__.return_value = False
-        with patch("urllib.request.urlopen", side_effect=[rate_limited, response]) as urlopen:
-            self.assertEqual(client._request("GET", "plans"), {"data": {"plans": []}})
-        self.assertEqual(urlopen.call_count, 2)
-        self.assertEqual(waits, [2.0])
-        waits.clear()
-        with patch("urllib.request.urlopen", side_effect=rate_limited) as urlopen:
-            with self.assertRaisesRegex(RuntimeError, "HTTP 429"):
-                client._request("POST", "plans/example/transactions", {"transaction": {}})
-        self.assertEqual(urlopen.call_count, 1)
-        self.assertEqual(waits, [])
+        return response
+
+    @staticmethod
+    def rate_limited(headers=None):
+        return urllib.error.HTTPError(
+            "https://example.test", 429, "too many requests", headers or {}, None
+        )
+
+    def test_rate_limited_post_and_delete_retry_until_success(self):
+        for method, payload in (("POST", {"transaction": {}}), ("DELETE", None)):
+            with self.subTest(method=method):
+                waits = []
+                client = YnabQaClient("test-token", IDS, sleeper=waits.append)
+                with patch(
+                    "urllib.request.urlopen",
+                    side_effect=[self.rate_limited({"retry-after": "2"}), self.response()],
+                ) as urlopen:
+                    self.assertEqual(
+                        client._request(method, "plans/example/transactions", payload),
+                        {"data": {}},
+                    )
+                self.assertEqual(urlopen.call_count, 2)
+                self.assertEqual(waits, [2.0])
 
     def test_request_telemetry_retains_only_safe_aggregate_fields(self):
         client = YnabQaClient("secret-token-value", IDS, sleeper=lambda _: None)
@@ -118,10 +131,10 @@ class QaClientGuardTest(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, serialized)
 
-    def test_rate_limited_get_stops_after_retry_exhaustion(self):
+    def test_rate_limit_override_stops_after_retry_exhaustion(self):
         waits = []
         client = YnabQaClient(
-            "test-token", IDS, max_get_rate_limit_retries=2, sleeper=waits.append
+            "test-token", IDS, max_rate_limit_retries=2, sleeper=waits.append
         )
         rate_limited = urllib.error.HTTPError(
             "https://example.test", 429, "too many requests", {"Retry-After": "1"}, None
@@ -134,17 +147,75 @@ class QaClientGuardTest(unittest.TestCase):
         self.assertEqual(urlopen.call_count, 3)
         self.assertEqual(waits, [1.0, 1.0])
 
-    def test_retry_after_above_allowed_range_is_clamped(self):
+    def test_retry_after_seconds_is_not_clamped_below_hour(self):
         client = YnabQaClient("test-token", IDS, sleeper=lambda _: None)
-        rate_limited = urllib.error.HTTPError(
-            "https://example.test",
-            429,
-            "too many requests",
-            {"Retry-After": str(MAX_RETRY_AFTER_SECONDS + 1)},
-            None,
+        self.assertEqual(client._retry_delay(self.rate_limited({"rEtRy-AfTeR": "120"}), 0), 120.0)
+        self.assertEqual(
+            client._retry_delay(
+                self.rate_limited({"Retry-After": str(MAX_RATE_LIMIT_WAIT_SECONDS + 1)}), 0,
+            ),
+            float(MAX_RATE_LIMIT_WAIT_SECONDS),
         )
 
-        self.assertEqual(client._retry_delay(rate_limited), float(MAX_RETRY_AFTER_SECONDS))
+    def test_http_date_retry_after_uses_injected_clock(self):
+        now = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc).timestamp()
+        resume = datetime(2026, 8, 30, 12, 2, tzinfo=timezone.utc)
+        client = YnabQaClient("test-token", IDS, clock=lambda: now)
+        error = self.rate_limited({"Retry-After": format_datetime(resume, usegmt=True)})
+        self.assertEqual(client._retry_delay(error, 0), 120.0)
+
+    def test_reset_epoch_headers_are_honored_case_insensitively(self):
+        for header in ("RateLimit-Reset", "X-RateLimit-Reset", "X-Rate-Limit-Reset"):
+            with self.subTest(header=header):
+                client = YnabQaClient("test-token", IDS, clock=lambda: 1_000.0)
+                self.assertEqual(
+                    client._retry_delay(self.rate_limited({header.swapcase(): "1090"}), 0),
+                    90.0,
+                )
+
+    def test_missing_resume_headers_use_linear_backoff(self):
+        waits = []
+        client = YnabQaClient("test-token", IDS, sleeper=waits.append)
+        with patch(
+            "urllib.request.urlopen",
+            side_effect=[self.rate_limited(), self.rate_limited(), self.rate_limited(), self.response()],
+        ):
+            client._request("GET", "plans")
+        self.assertEqual(waits, [5.0, 10.0, 15.0])
+
+    def test_non_rate_limit_4xx_fails_without_retry(self):
+        waits = []
+        client = YnabQaClient("test-token", IDS, sleeper=waits.append)
+        for status in (400, 401, 403):
+            with self.subTest(status=status), patch(
+                "urllib.request.urlopen",
+                side_effect=urllib.error.HTTPError(
+                    "https://example.test/private", status, "failure", {"Secret": "value"}, None,
+                ),
+            ) as urlopen:
+                with self.assertRaisesRegex(RuntimeError, f"YNAB API returned HTTP {status}") as raised:
+                    client._request("GET", "plans")
+                self.assertEqual(str(raised.exception), f"YNAB API returned HTTP {status}")
+                self.assertEqual(urlopen.call_count, 1)
+        self.assertEqual(waits, [])
+
+    def test_cleanup_pacing_env_defaults_disables_and_rejects_invalid_values(self):
+        self.assertEqual(cleanup_pacing_ms({}), DEFAULT_CLEANUP_PACING_MS)
+        self.assertEqual(cleanup_pacing_ms({"QA_CLEANUP_PACING_MS": ""}), 500)
+        self.assertEqual(cleanup_pacing_ms({"QA_CLEANUP_PACING_MS": "0"}), 0)
+        for value in ("-1", "abc", "1.5"):
+            with self.subTest(value=value), self.assertRaises(QaSafetyError):
+                cleanup_pacing_ms({"QA_CLEANUP_PACING_MS": value})
+
+    def test_request_pacing_applies_before_each_http_attempt(self):
+        waits = []
+        client = YnabQaClient("test-token", IDS, sleeper=waits.append, request_pacing_ms=500)
+        with patch(
+            "urllib.request.urlopen",
+            side_effect=[self.rate_limited({"Retry-After": "2"}), self.response()],
+        ):
+            client._request("GET", "plans")
+        self.assertEqual(waits, [0.5, 2.0, 0.5])
 
     def test_missing_confirmation_blocks_before_request(self):
         with patch.object(self.client, "_request") as request:

@@ -20,7 +20,7 @@ jobs:
       (github.event.pull_request.user.login == 'justinfiore' ||
        github.event.pull_request.user.login == 'jhorgenson')
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 360
 
     steps:
       - name: Check out repository
@@ -39,7 +39,7 @@ jobs:
       - name: Install QA config placeholders
         run: cp qa/config/qa-sync.yaml.example qa/config/qa-sync.yaml
 
-      - name: Run bounded automated disposable-plan smoke QA
+      - name: Run full automated disposable-plan QA
         env:
           PARENT_ACCESS_TOKEN: ${{ secrets.PARENT_ACCESS_TOKEN }}
           JORSTEN_JR_ACCESS_TOKEN: ${{ secrets.JORSTEN_JR_ACCESS_TOKEN }}
@@ -50,7 +50,8 @@ jobs:
           QA_BORSTEN_PLAN_ID: ${{ secrets.QA_BORSTEN_PLAN_ID }}
           QA_THORSTEN_PLAN_ID: ${{ secrets.QA_THORSTEN_PLAN_ID }}
           QA_CONFIRM_LIVE_MUTATIONS: YES
-        run: ./gradlew --no-daemon qaAutomatedSmoke -PqaConfirmLive=YES
+          QA_CLEANUP_PACING_MS: "500"
+        run: ./gradlew --no-daemon qaAutomated -PqaConfirmLive=YES
 
       - name: Upload JUnit XML test results
         if: always()
@@ -66,7 +67,7 @@ jobs:
         if: always()
         uses: dorny/test-reporter@df6247429542221bc30d46a036ee47af1102c451 # v2
         with:
-          name: Disposable-plan Smoke QA JUnit Results
+          name: Disposable-plan Automated QA JUnit Results
           path: build/test-results/**/*.xml
           reporter: java-junit
           fail-on-error: false

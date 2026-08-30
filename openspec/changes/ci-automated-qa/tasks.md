@@ -33,3 +33,12 @@
 - [x] 5.2 Run `python3 -m unittest discover -s qa/tests -v`
 - [x] 5.3 Run `./gradlew testAll`
 - [x] 5.4 Confirm `./gradlew check --dry-run` still does not include `qaAutomated` / `qaManual`
+
+## 6. HTTP 429 resume and cleanup pacing amendment
+
+- [x] 6.1 Retry 429 for every QA HTTP method until success by default, with a finite test override and redacted errors/telemetry
+- [x] 6.2 Honor case-insensitive Retry-After seconds/date and reset epochs, with capped linear fallback
+- [x] 6.3 Apply validated `QA_CLEANUP_PACING_MS` pacing across both cleanup windows and disable it afterward
+- [x] 6.4 Run full `qaAutomated` in the labeled workflow with step-scoped pacing and a 360-minute timeout
+- [x] 6.5 Update focused QA tests, documentation, and this OpenSpec delta
+- [x] 6.6 Run `python3 -m unittest discover -s qa/tests -v` and review the diff

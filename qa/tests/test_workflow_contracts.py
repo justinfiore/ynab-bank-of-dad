@@ -50,18 +50,20 @@ class TestResultsPublicationWorkflowContractTest(unittest.TestCase):
         for key in SECRET_KEYS:
             self.assertNotIn(key, text)
 
-    def test_smoke_qa_publishes_junit_results_as_a_distinct_check(self):
+    def test_full_qa_publishes_junit_results_as_a_distinct_check(self):
         text = workflow_text("end-to-end-qa.yml")
-        self.assert_common_publication(text, "Disposable-plan Smoke QA JUnit Results")
+        self.assert_common_publication(text, "Disposable-plan Automated QA JUnit Results")
         self.assertIn("if: always()", text)
-        self.assertIn("qaAutomatedSmoke", text)
-        self.assertNotIn("run: ./gradlew --no-daemon qaAutomated -PqaConfirmLive=YES", text)
-        job_prefix, smoke_step = text.split("- name: Run bounded automated disposable-plan smoke QA", 1)
+        self.assertIn("run: ./gradlew --no-daemon qaAutomated -PqaConfirmLive=YES", text)
+        self.assertNotIn("run: ./gradlew --no-daemon qaAutomatedSmoke", text)
+        self.assertIn('QA_CLEANUP_PACING_MS: "500"', text)
+        self.assertIn("timeout-minutes: 360", text)
+        job_prefix, live_step = text.split("- name: Run full automated disposable-plan QA", 1)
         self.assertTrue(job_prefix.strip())
         for key in SECRET_KEYS:
             self.assertNotIn(key, job_prefix)
-            self.assertIn(key, smoke_step.split("- name: Upload JUnit XML test results", 1)[0])
-        reporter_block = smoke_step.split("- name: Publish JUnit results as a GitHub Check", 1)[1]
+            self.assertIn(key, live_step.split("- name: Upload JUnit XML test results", 1)[0])
+        reporter_block = live_step.split("- name: Publish JUnit results as a GitHub Check", 1)[1]
         for key in SECRET_KEYS:
             self.assertNotIn(key, reporter_block)
 

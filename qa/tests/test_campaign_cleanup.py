@@ -1,7 +1,9 @@
 import json
+import os
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 QA_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(QA_ROOT))
@@ -25,16 +27,26 @@ class FakeClient:
         self.transactions = transactions
         self.events = events
         self.writes = []
+        self.pacing_ms = 0
+        self.pacing_history = []
+        self.request_pacing_seen = []
+
+    def set_request_pacing_ms(self, pacing_ms):
+        self.pacing_ms = pacing_ms
+        self.pacing_history.append(pacing_ms)
 
     def discover_plans(self):
+        self.request_pacing_seen.append(self.pacing_ms)
         self.events.append(("plans", self.name))
         return {"data": {"plans": self.plans}}
 
     def get(self, identity, resource):
+        self.request_pacing_seen.append(self.pacing_ms)
         self.events.append(("get", self.name, resource))
         return {"data": {"transactions": self.transactions}}
 
     def transaction_write(self, method, identity, payload, **kwargs):
+        self.request_pacing_seen.append(self.pacing_ms)
         self.events.append(("write", self.name))
         self.writes.append((method, identity, payload, kwargs))
         return {"data": {}}
@@ -106,6 +118,24 @@ class ExactCampaignCleanupTest(unittest.TestCase):
             self.assertNotIn(plan_id, serialized)
         self.assertEqual(artifact["deleted_count"], 1)
         self.assertFalse(artifact["transaction_ids_retained"])
+
+    def test_default_pacing_covers_every_cleanup_request_then_is_disabled(self):
+        clients = self.clients()
+        with patch.dict(os.environ, {"QA_CLEANUP_PACING_MS": ""}, clear=False):
+            cleanup_exact_campaign("QA-123", self.identities, clients, confirmation="YES")
+        for client in clients.values():
+            self.assertEqual(client.pacing_history, [500, 0])
+            self.assertTrue(client.request_pacing_seen)
+            self.assertEqual(set(client.request_pacing_seen), {500})
+
+    def test_zero_cleanup_pacing_disables_waits(self):
+        clients = self.clients()
+        cleanup_exact_campaign(
+            "QA-123", self.identities, clients, confirmation="YES", pacing_ms=0,
+        )
+        for client in clients.values():
+            self.assertEqual(client.pacing_history, [0, 0])
+            self.assertEqual(set(client.request_pacing_seen), {0})
 
 
 if __name__ == "__main__":

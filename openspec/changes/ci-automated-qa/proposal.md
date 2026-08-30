@@ -4,12 +4,13 @@ The disposable-plan QA campaign can already run without YNAB UI for most A–D s
 
 ## What Changes
 
-- Add a **separate** GitHub Actions job (not part of `build-test`) that runs `qaAutomated` against the four disposable QA plans.
+- Add a **separate** GitHub Actions job (not part of `build-test`) that runs the full `qaAutomated` suite against the four disposable QA plans.
 - Gate that job so it runs only on pull requests in `justinfiore/ynab-bank-of-dad` when the PR has label `end-to-end-qa` **and** the author is `justinfiore` or `jhorgenson`. Forks never run it.
 - Emit one JUnit testcase per automated scenario. Upload JUnit XML and publish suite/case results in the PR check UI. Any FAIL or unexpected BLOCKED fails the job.
 - Change `qa/run_qa_suite.py` to load tokens from environment variables only. Do not require, create, or write `tokens.txt`.
 - Change QA config loading so `qa/config/qa-sync.yaml` can resolve plan `fullId` values from env vars (no token material in any generated file).
 - Document required GitHub secrets and the opt-in label. Do **not** run `qaManual` (A8/B5/C8) in Actions.
+- Make the shared QA HTTP client resume every method after 429 responses until success, using resume headers or capped linear backoff, and pace cleanup requests through `QA_CLEANUP_PACING_MS`.
 
 ## Capabilities
 

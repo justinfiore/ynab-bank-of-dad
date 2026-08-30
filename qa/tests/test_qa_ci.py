@@ -88,8 +88,10 @@ budgets:
         self.assertIn("justinfiore", text)
         self.assertIn("jhorgenson", text)
         self.assertIn("head.repo.full_name == github.repository", text)
-        self.assertIn("qaAutomatedSmoke", text)
-        self.assertNotIn("run: ./gradlew --no-daemon qaAutomated -PqaConfirmLive=YES", text)
+        self.assertIn("run: ./gradlew --no-daemon qaAutomated -PqaConfirmLive=YES", text)
+        self.assertNotIn("run: ./gradlew --no-daemon qaAutomatedSmoke", text)
+        self.assertIn('QA_CLEANUP_PACING_MS: "500"', text)
+        self.assertIn("timeout-minutes: 360", text)
         self.assertNotIn("qaManual", text)
         self.assertNotIn("tokens.txt", text)
 

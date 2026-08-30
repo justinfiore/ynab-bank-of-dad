@@ -14,13 +14,17 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from datetime import timezone
+from email.utils import parsedate_to_datetime
 from threading import Lock
 from typing import Any, Callable, Mapping
 
 
 API_ROOT = "https://api.ynab.com/v1"
-MAX_GET_RATE_LIMIT_RETRIES = 3
-MAX_RETRY_AFTER_SECONDS = 30
+LINEAR_STEP_SECONDS = 5
+MAX_RATE_LIMIT_WAIT_SECONDS = 3600
+DEFAULT_CLEANUP_PACING_MS = 500
+RESET_HEADERS = ("ratelimit-reset", "x-ratelimit-reset", "x-rate-limit-reset")
 KNOWN_NAMES = {
     "Jorsten's Plan",
     "Jorsten Jr's Plan",
@@ -46,8 +50,10 @@ class YnabQaClient:
         allowlist: Mapping[str, str],
         timeout: int = 30,
         *,
-        max_get_rate_limit_retries: int = MAX_GET_RATE_LIMIT_RETRIES,
+        max_rate_limit_retries: int | None = None,
         sleeper: Callable[[float], None] = time.sleep,
+        clock: Callable[[], float] = time.time,
+        request_pacing_ms: int = 0,
     ):
         if not token or any(ch.isspace() for ch in token):
             raise QaSafetyError("A non-empty test token is required")
@@ -55,24 +61,30 @@ class YnabQaClient:
             raise QaSafetyError("Allowlist must contain exactly the four QA name/ID pairs")
         if any(not self._looks_like_uuid(value) for value in allowlist.values()):
             raise QaSafetyError("Every allowlisted plan ID must be a full UUID")
-        if (
-            isinstance(max_get_rate_limit_retries, bool)
-            or not isinstance(max_get_rate_limit_retries, int)
-            or not 0 <= max_get_rate_limit_retries <= MAX_GET_RATE_LIMIT_RETRIES
+        if max_rate_limit_retries is not None and (
+            isinstance(max_rate_limit_retries, bool)
+            or not isinstance(max_rate_limit_retries, int)
+            or max_rate_limit_retries < 0
         ):
-            raise QaSafetyError(
-                f"Rate-limit retry count must be between 0 and {MAX_GET_RATE_LIMIT_RETRIES}"
-            )
+            raise QaSafetyError("Rate-limit retry count must be a non-negative integer or None")
         self._token = token
         self._allowlist = dict(allowlist)
         self._timeout = timeout
-        self._max_get_rate_limit_retries = max_get_rate_limit_retries
+        self._max_rate_limit_retries = max_rate_limit_retries
         self._sleeper = sleeper
+        self._clock = clock
+        self._request_pacing_ms = 0
+        self.set_request_pacing_ms(request_pacing_ms)
         self._consumed_manifest_authorizations: set[str] = set()
         self._manifest_authorization_lock = Lock()
         self._consumed_provisioning_authorizations: set[str] = set()
         self._request_telemetry: dict[tuple[str, str, str], dict[str, int]] = {}
         self._request_telemetry_lock = Lock()
+
+    def set_request_pacing_ms(self, pacing_ms: int) -> None:
+        if isinstance(pacing_ms, bool) or not isinstance(pacing_ms, int) or pacing_ms < 0:
+            raise QaSafetyError("Request pacing must be a non-negative integer number of milliseconds")
+        self._request_pacing_ms = pacing_ms
 
     @staticmethod
     def _looks_like_uuid(value: str) -> bool:
@@ -325,29 +337,30 @@ class YnabQaClient:
         )
         attempts = 0
         while True:
+            if self._request_pacing_ms:
+                self._sleeper(self._request_pacing_ms / 1000.0)
             try:
                 with urllib.request.urlopen(request, timeout=self._timeout) as response:
                     status = getattr(response, "status", None)
                     self._record_request(method, resource_class, self._status_class(status or 200))
                     return json.load(response)
             except urllib.error.HTTPError as error:
-                if (
-                    method == "GET"
-                    and error.code == 429
-                    and attempts < self._max_get_rate_limit_retries
+                if error.code == 429 and (
+                    self._max_rate_limit_retries is None
+                    or attempts < self._max_rate_limit_retries
                 ):
                     self._record_request(
                         method, resource_class, self._status_class(error.code), retried=True,
                     )
-                    self._sleeper(self._retry_delay(error))
+                    self._sleeper(self._retry_delay(error, attempts))
                     attempts += 1
                     continue
                 self._record_request(method, resource_class, self._status_class(error.code))
                 # Never include headers, token, or a response URL in evidence/logs.
                 raise RuntimeError(f"YNAB API returned HTTP {error.code}") from None
-            except urllib.error.URLError as error:
+            except urllib.error.URLError:
                 self._record_request(method, resource_class, "transport_error")
-                raise RuntimeError(f"YNAB API request failed: {error.reason}") from None
+                raise RuntimeError("YNAB API request failed") from None
 
     @staticmethod
     def _logical_resource_class(path: str) -> str:
@@ -372,16 +385,57 @@ class YnabQaClient:
             totals["count"] += 1
             totals["retry_count"] += int(retried)
 
-    @staticmethod
-    def _retry_delay(error: urllib.error.HTTPError) -> float:
-        """Use a bounded numeric Retry-After, or the maximum allowed fallback."""
-        try:
-            seconds = int(error.headers.get("Retry-After", ""))
-            if seconds > 0:
-                return float(min(seconds, MAX_RETRY_AFTER_SECONDS))
-        except (TypeError, ValueError):
-            pass
-        return float(MAX_RETRY_AFTER_SECONDS)
+    def _retry_delay(self, error: urllib.error.HTTPError, attempt: int) -> float:
+        """Return a bounded resume delay without retaining or exposing raw headers."""
+        def header_value(target: str) -> Any:
+            for name, value in error.headers.items() if error.headers else ():
+                if str(name).lower() == target:
+                    return value
+            return None
+
+        waits: list[float] = []
+        retry_after = header_value("retry-after")
+        if retry_after is not None:
+            value = str(retry_after).strip()
+            try:
+                seconds = int(value)
+                if seconds > 0:
+                    waits.append(float(seconds))
+            except ValueError:
+                try:
+                    resume_at = parsedate_to_datetime(value)
+                    if resume_at.tzinfo is None:
+                        resume_at = resume_at.replace(tzinfo=timezone.utc)
+                    seconds = resume_at.timestamp() - self._clock()
+                    if seconds > 0:
+                        waits.append(seconds)
+                except (TypeError, ValueError, OverflowError):
+                    pass
+        for name in RESET_HEADERS:
+            try:
+                seconds = float(str(header_value(name) or "").strip()) - self._clock()
+                if seconds > 0:
+                    waits.append(seconds)
+            except (TypeError, ValueError, OverflowError):
+                pass
+        wait = max(waits) if waits else LINEAR_STEP_SECONDS * (attempt + 1)
+        return float(min(wait, MAX_RATE_LIMIT_WAIT_SECONDS))
+
+
+def cleanup_pacing_ms(environ: Mapping[str, str] | None = None) -> int:
+    """Parse cleanup-only request pacing without exposing environment contents."""
+    source = os.environ if environ is None else environ
+    raw = source.get("QA_CLEANUP_PACING_MS", "")
+    value = str(raw).strip()
+    if not value:
+        return DEFAULT_CLEANUP_PACING_MS
+    try:
+        pacing_ms = int(value)
+    except ValueError:
+        raise QaSafetyError("QA_CLEANUP_PACING_MS must be a non-negative integer") from None
+    if pacing_ms < 0:
+        raise QaSafetyError("QA_CLEANUP_PACING_MS must be a non-negative integer")
+    return pacing_ms
 
 
 def merge_request_telemetry(clients: Mapping[str, YnabQaClient]) -> list[dict[str, Any]]:

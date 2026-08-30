@@ -12,7 +12,7 @@ This change adds an opt-in live job against the four disposable plans only: `Jor
 
 **Goals:**
 
-- Run only fully automated disposable-plan scenarios on GitHub Actions.
+- Run the full set of UI-free automated disposable-plan scenarios on GitHub Actions.
 - Trigger only on pull_request events when label `end-to-end-qa` is present.
 - Allow only authors `justinfiore` and `jhorgenson`.
 - Refuse fork PRs (`head.repo.full_name` must equal `github.repository`).
@@ -105,9 +105,13 @@ GitHub’s native JUnit annotation path, if used, must stay SHA-pinned and must 
 
 `qaAutomated` currently calls `_baseline()`, which can run `./gradlew testAll --rerun-tasks`. That is redundant and too slow next to `build-test`. When `GITHUB_ACTIONS=true` (or `--skip-gradle-baseline`), A1 records the Python harness only, not a nested `testAll`.
 
-### Concurrency and rate limits
+### Concurrency, rate limits, and cleanup pacing
 
-Use a workflow `concurrency` group so two labeled PRs do not mutate the same disposable plans at once (`cancel-in-progress: false` preferred so an in-flight campaign is not killed mid-mutation). Timeout at least 60 minutes. Keep existing QA 429 backoff.
+Use a workflow `concurrency` group so two labeled PRs do not mutate the same disposable plans at once (`cancel-in-progress: false` preferred so an in-flight campaign is not killed mid-mutation). The job timeout is 360 minutes.
+
+The shared QA client retries 429 for all methods until success by default, while retaining an explicit finite retry override for unit tests. It derives a wait from case-insensitive `Retry-After` integer/HTTP-date values and common reset-epoch headers. If none is usable, it waits linearly in five-second increments. A single wait is capped at YNAB's one-hour window. No other 4xx is retried, and errors and telemetry retain no headers, URLs, tokens, or plan IDs.
+
+Cleanup temporarily enables client-level request pacing for every cleanup HTTP request, using `QA_CLEANUP_PACING_MS` with a 500 ms default and `0` to disable. Invalid values fail closed before cleanup discovery. Pacing is disabled after the cleanup window.
 
 ### Safety
 
@@ -119,7 +123,7 @@ Use a workflow `concurrency` group so two labeled PRs do not mutate the same dis
 ## Risks / Trade-offs
 
 - Shared disposable plans: only one live campaign at a time; queued PRs wait.
-- YNAB 429s can still flake a labeled PR; treat that as a real job failure, not a silent skip.
+- Sustained YNAB rate limiting can make a labeled PR take hours, but the campaign resumes rather than failing solely because of HTTP 429.
 - Plan UUIDs in GitHub secrets are still secrets; never print them.
 
 ## Migration
