@@ -67,6 +67,30 @@ class TestResultsPublicationWorkflowContractTest(unittest.TestCase):
         for key in SECRET_KEYS:
             self.assertNotIn(key, reporter_block)
 
+    def test_full_qa_always_packages_and_uploads_only_sanitized_evidence(self):
+        text = workflow_text("end-to-end-qa.yml")
+        self.assertIn(
+            "- name: Package sanitized partial CI evidence\n"
+            "        if: always()",
+            text,
+        )
+        self.assertIn("run: python3 qa/package_ci_evidence.py", text)
+        self.assertIn(
+            "- name: Upload sanitized partial CI evidence\n"
+            "        if: always()",
+            text,
+        )
+        self.assertIn(
+            "uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4",
+            text,
+        )
+        self.assertIn("path: build/qa-ci-evidence/", text)
+        self.assertIn("retention-days: 7", text)
+        self.assertNotIn("path: qa/artifacts", text)
+        package_block = text.split("- name: Package sanitized partial CI evidence", 1)[1]
+        package_block = package_block.split("- name: Upload sanitized partial CI evidence", 1)[0]
+        self.assertNotIn("continue-on-error", package_block)
+
 
 if __name__ == "__main__":
     unittest.main()

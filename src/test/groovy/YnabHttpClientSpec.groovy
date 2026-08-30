@@ -15,6 +15,9 @@ import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.net.http.HttpTimeoutException
 import java.time.Duration
+import java.time.Instant
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
 import java.util.Optional
 import java.util.concurrent.TimeoutException
 import java.util.concurrent.CompletableFuture
@@ -137,7 +140,7 @@ class YnabHttpClientSpec extends Specification {
 
         then:
         def ex = thrown(IllegalStateException)
-        ex.message == 'YNAB PUT /v1/plans/budget-1/transactions/txn-1 returned invalid JSON'
+        ex.message == 'YNAB PUT transactions returned invalid JSON'
     }
 
     def "successful blank response body returns null"() {
@@ -168,67 +171,134 @@ class YnabHttpClientSpec extends Specification {
         response == null
     }
 
-    def "retries a rate-limited GET with bounded retry-after delay"() {
+    def "all HTTP methods retry explicit 429 rejection with the same request"() {
         given:
         server.enqueue(new MockResponse()
             .setResponseCode(429)
             .setHeader('Retry-After', '3')
-            .setHeader('Content-Type', 'application/json')
-            .setBody('{"error":{"detail":"too many requests"}}'))
+            .setBody('rejected request'))
         server.enqueue(new MockResponse()
             .setResponseCode(200)
             .setHeader('Content-Type', 'application/json')
-            .setBody('{"data":{"plans":[{"id":"budget-1"}]}}'))
+            .setBody('{"data":{}}'))
         List<Duration> waits = []
         def client = new YnabHttpClient(server.url('/').toString(), 'token',
-            HttpClient.newHttpClient(), Duration.ofSeconds(7), 1, { Duration delay -> waits << delay })
+            HttpClient.newHttpClient(), Duration.ofSeconds(7), null,
+            { Duration delay -> waits << delay }, { Instant.EPOCH })
+
+        when:
+        issueRequest(client, method)
+        def first = server.takeRequest()
+        def second = server.takeRequest()
+
+        then:
+        first.method == method
+        second.method == method
+        first.path == second.path
+        first.body.readUtf8() == second.body.readUtf8()
+        waits == [Duration.ofSeconds(3)]
+
+        where:
+        method << ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']
+    }
+
+    def "retry delay honors case-insensitive numeric date and reset headers"() {
+        given:
+        Instant now = Instant.parse('2026-08-30T12:00:00Z')
+        server.enqueue(new MockResponse()
+            .setResponseCode(429)
+            .setHeader('rEtRy-AfTeR', '3'))
+        server.enqueue(new MockResponse()
+            .setResponseCode(429)
+            .setHeader('Retry-After', DateTimeFormatter.RFC_1123_DATE_TIME.format(
+                now.plusSeconds(20).atZone(ZoneOffset.UTC))))
+        server.enqueue(new MockResponse()
+            .setResponseCode(429)
+            .setHeader('x-RaTe-LiMiT-ReSeT', now.plusSeconds(30).epochSecond.toString()))
+        server.enqueue(new MockResponse().setResponseCode(200).setBody('{"data":{}}'))
+        List<Duration> waits = []
+        def client = new YnabHttpClient(server.url('/').toString(), 'token',
+            HttpClient.newHttpClient(), Duration.ofSeconds(7), null,
+            { Duration delay -> waits << delay }, { now })
+
+        when:
+        client.postJson('/v1/plans/private-plan/transactions', [secret: 'payload'])
+
+        then:
+        waits == [Duration.ofSeconds(3), Duration.ofSeconds(20), Duration.ofSeconds(30)]
+    }
+
+    def "retry delay uses capped linear fallback and caps a resume header at one hour"() {
+        given:
+        server.enqueue(new MockResponse().setResponseCode(429).setHeader('Retry-After', 'invalid'))
+        server.enqueue(new MockResponse().setResponseCode(429).setHeader('Retry-After', '9999'))
+        server.enqueue(new MockResponse().setResponseCode(429))
+        server.enqueue(new MockResponse().setResponseCode(200).setBody('{"data":{}}'))
+        List<Duration> waits = []
+        def client = new YnabHttpClient(server.url('/').toString(), 'token',
+            HttpClient.newHttpClient(), Duration.ofSeconds(7), null,
+            { Duration delay -> waits << delay }, { Instant.EPOCH })
+
+        when:
+        client.getJson('/v1/plans')
+
+        then:
+        waits == [Duration.ofSeconds(5), Duration.ofSeconds(3600), Duration.ofSeconds(15)]
+    }
+
+    def "out of Instant range reset epoch falls through to linear retry"() {
+        given:
+        server.enqueue(new MockResponse()
+            .setResponseCode(429)
+            .setHeader('RateLimit-Reset', Long.MAX_VALUE.toString()))
+        server.enqueue(new MockResponse().setResponseCode(200).setBody('{"data":{}}'))
+        List<Duration> waits = []
+        def client = new YnabHttpClient(server.url('/').toString(), 'token',
+            HttpClient.newHttpClient(), Duration.ofSeconds(7), null,
+            { Duration delay -> waits << delay }, { Instant.EPOCH })
 
         when:
         def response = client.getJson('/v1/plans')
 
         then:
-        response.data.plans[0].id == 'budget-1'
-        server.takeRequest().path == '/v1/plans'
-        server.takeRequest().path == '/v1/plans'
-        waits == [Duration.ofSeconds(3)]
+        response == [data: [:]]
+        waits == [Duration.ofSeconds(5)]
+        server.requestCount == 2
     }
 
-    def "does not retry a rate-limited POST because its outcome may be ambiguous"() {
+    def "finite retry exhaustion and non-429 errors fail immediately without leakage"() {
         given:
+        String privatePath = '/v1/plans/private-plan-id/transactions/private-transaction-id'
+        String secretBody = '{"token":"body-secret","url":"https://secret.example/path"}'
+        int status = initialStatus
         server.enqueue(new MockResponse()
-            .setResponseCode(429)
-            .setHeader('Retry-After', '1')
-            .setBody('{"error":{"detail":"too many requests"}}'))
+            .setResponseCode(status).setHeader('Authorization', 'Bearer header-secret')
+            .setBody(secretBody))
+        if (status == 429) {
+            server.enqueue(new MockResponse().setResponseCode(429).setBody(secretBody))
+        }
         List<Duration> waits = []
-        def client = new YnabHttpClient(server.url('/').toString(), 'token',
-            HttpClient.newHttpClient(), Duration.ofSeconds(7), 1, { Duration delay -> waits << delay })
+        def client = new YnabHttpClient(server.url('/').toString(), 'access-token-secret',
+            HttpClient.newHttpClient(), Duration.ofSeconds(7), 1,
+            { Duration delay -> waits << delay }, { Instant.EPOCH })
 
         when:
-        client.postJson('/v1/plans/budget-1/transactions/bulk', [transactions: []])
+        client.postJson(privatePath, [token: 'payload-secret'])
 
         then:
         def ex = thrown(IllegalStateException)
-        ex.message.contains('YNAB POST /v1/plans/budget-1/transactions/bulk failed with status 429')
-        server.takeRequest().path == '/v1/plans/budget-1/transactions/bulk'
-        server.takeRequest(100, java.util.concurrent.TimeUnit.MILLISECONDS) == null
-        waits.empty
-    }
+        ex.message == "YNAB POST transactions failed with status ${status}"
+        !['private-plan-id', 'private-transaction-id', 'body-secret', 'header-secret',
+          'access-token-secret', 'payload-secret', 'secret.example'].any { ex.message.contains(it) }
+        server.requestCount == expectedRequests
+        waits.size() == expectedWaits
 
-    def "non-2xx responses surface a clear error"() {
-        given:
-        server.enqueue(new MockResponse()
-            .setResponseCode(500)
-            .setHeader('Content-Type', 'application/json')
-            .setBody('{"error":{"detail":"boom"}}'))
-        def client = buildClient()
-
-        when:
-        client.postJson('/v1/plans/budget-1/transactions/bulk', [transactions: []])
-
-        then:
-        def ex = thrown(IllegalStateException)
-        ex.message.contains('YNAB POST /v1/plans/budget-1/transactions/bulk failed with status 500')
-        ex.message.contains('boom')
+        where:
+        initialStatus | expectedRequests | expectedWaits
+        429           | 2                | 1
+        400           | 1                | 0
+        401           | 1                | 0
+        403           | 1                | 0
     }
 
     def "timeouts surface a clear error with configured duration"() {
@@ -241,7 +311,7 @@ class YnabHttpClientSpec extends Specification {
 
         then:
         def ex = thrown(IllegalStateException)
-        ex.message == 'YNAB GET /v1/plans timed out after PT7S'
+        ex.message == 'YNAB GET plans timed out'
         ex.cause instanceof HttpTimeoutException
     }
 
@@ -254,7 +324,7 @@ class YnabHttpClientSpec extends Specification {
 
         then:
         def ex = thrown(IllegalStateException)
-        ex.message == 'YNAB GET /v1/plans interrupted'
+        ex.message == 'YNAB GET plans interrupted'
         ex.cause instanceof InterruptedException
         Thread.currentThread().isInterrupted()
 
@@ -286,12 +356,24 @@ class YnabHttpClientSpec extends Specification {
 
         where:
         method   | failure     | expectedCause          | interrupted | expectedMessage
-        'PUT'    | 'timeout'   | HttpTimeoutException   | false       | 'YNAB PUT /v1/plans/budget-1/transactions/txn-1 timed out after PT7S'
-        'DELETE' | 'interrupt' | InterruptedException   | true        | 'YNAB DELETE /v1/plans/budget-1/transactions/txn-1 interrupted'
+        'PUT'    | 'timeout'   | HttpTimeoutException   | false       | 'YNAB PUT transactions timed out'
+        'DELETE' | 'interrupt' | InterruptedException   | true        | 'YNAB DELETE transactions interrupted'
     }
 
     private YnabHttpClient buildClient() {
         new YnabHttpClient(server.url('/').toString(), 'token')
+    }
+
+    private static void issueRequest(YnabHttpClient client, String method) {
+        String path = '/v1/plans/private-plan/transactions/private-transaction'
+        switch (method) {
+            case 'GET': client.getJson(path); break
+            case 'POST': client.postJson(path, [request: 'same']); break
+            case 'PUT': client.putJsonWithMetadata(path, [request: 'same']); break
+            case 'PATCH': client.patchJsonWithMetadata(path, [request: 'same']); break
+            case 'DELETE': client.deleteJsonWithMetadata(path); break
+            default: throw new AssertionError(method)
+        }
     }
 
     private static class TimeoutThrowingHttpClient extends HttpClient {

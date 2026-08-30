@@ -161,6 +161,34 @@ Finalization rejects raw token values, Authorization header values, full UUIDs
 outside ignored internal config, incomplete matrices, and nonzero blocked-campaign
 write counts. It writes the summary, per-file checksums, ZIP, and ZIP checksum.
 
+The labeled Actions campaign also writes a deterministic, non-secret pointer at
+`build/qa/current-campaign.json`. After `qaAutomated`, including when that step
+fails partway through, Actions runs:
+
+```bash
+python3 qa/package_ci_evidence.py
+```
+
+This separate packager accepts partial campaigns and copies regular files only
+from the pointed `qa/artifacts/<campaign-id>` tree into
+`build/qa-ci-evidence/<campaign-id>/`. It retains partial receipts, sanitized
+dry/live logs (including an interrupted C2 log), API observations, SQLite JSON
+audit exports, cleanup and environment/campaign manifests, and aggregate request
+telemetry. It never copies `qa/.campaign-state`, database files, `tokens.txt`,
+`qa/config/qa-sync.yaml`, or symlinks. The four existing token environment values
+are used only for in-memory redaction and are never printed.
+
+`ci-evidence-manifest.json` records the derived status and completeness, receipt
+counts, cleanup verification, source type, raw-state exclusion, and safety scan.
+The packager sanitizes token values, Authorization values, and full UUIDs, then
+byte-scans every delivered file and refuses publication if any remain.
+`SHA256SUMS` covers every regular file recursively inside the campaign directory
+except `SHA256SUMS` itself; this explicit exclusion avoids checksum
+self-reference. The sibling ZIP contains that directory (including
+`SHA256SUMS`), and the sibling `.zip.sha256` covers the ZIP. Actions always
+uploads only `build/qa-ci-evidence/` for at least seven days; raw
+`qa/artifacts/` is never uploaded.
+
 `qa/artifacts/`, the completed config, raw discovery snapshots, tokens, state
 databases, and campaign state are Gitignored. Report receipts must use one of
 `PASS`, `FAIL`, `BLOCKED`, or `NOT_RUN`; an omitted scenario is a report defect.

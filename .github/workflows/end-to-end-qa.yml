@@ -53,6 +53,24 @@ jobs:
           QA_CLEANUP_PACING_MS: "500"
         run: ./gradlew --no-daemon qaAutomated -PqaConfirmLive=YES
 
+      - name: Package sanitized partial CI evidence
+        if: always()
+        env:
+          PARENT_ACCESS_TOKEN: ${{ secrets.PARENT_ACCESS_TOKEN }}
+          JORSTEN_JR_ACCESS_TOKEN: ${{ secrets.JORSTEN_JR_ACCESS_TOKEN }}
+          BORSTEN_ACCESS_TOKEN: ${{ secrets.BORSTEN_ACCESS_TOKEN }}
+          THORSTEN_ACCESS_TOKEN: ${{ secrets.THORSTEN_ACCESS_TOKEN }}
+        run: python3 qa/package_ci_evidence.py
+
+      - name: Upload sanitized partial CI evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: qa-automated-ci-evidence
+          path: build/qa-ci-evidence/
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Upload JUnit XML test results
         if: always()
         continue-on-error: true

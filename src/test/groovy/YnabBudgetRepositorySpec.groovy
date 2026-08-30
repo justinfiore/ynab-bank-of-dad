@@ -435,7 +435,9 @@ class YnabBudgetRepositorySpec extends Specification {
 
         then:
         def ex = thrown(IllegalStateException)
-        ex.message.contains("YNAB ${method} ${path} failed with status ${status}")
+        ex.message == "YNAB ${method} transactions failed with status ${status}"
+        !ex.message.contains('child-budget')
+        !ex.message.contains('txn-1')
 
         where:
         operation | method   | status

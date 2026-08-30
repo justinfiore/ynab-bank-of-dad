@@ -42,3 +42,13 @@
 - [x] 6.4 Run full `qaAutomated` in the labeled workflow with step-scoped pacing and a 360-minute timeout
 - [x] 6.5 Update focused QA tests, documentation, and this OpenSpec delta
 - [x] 6.6 Run `python3 -m unittest discover -s qa/tests -v` and review the diff
+
+## 7. Actions run 33313572332 failure-remediation amendment
+
+- [x] 7.1 Scope B/C/D snapshots and assertions to exact campaign plus scenario, exclude deleted transactions by default, strengthen C1 identity/field checks, and add contamination regression tests
+- [x] 7.2 Upgrade the production Groovy `YnabHttpClient` to safely retry 429 for every method with injectable limits/time/sleep, resume-header parsing, redacted errors, and complete offline tests
+- [x] 7.3 Isolate independent live scenario execution and cleanup failures, preserve B1→B2 dependency semantics, always finalize metadata/cleanup, and test continuation through C3 and D4
+- [x] 7.4 Correct JUnit pass/failure/error/skipped and aggregate semantics while preserving campaign exit gating, with mixed-result and crash-receipt tests
+- [x] 7.5 Add an always-safe partial CI evidence packager, deterministic campaign pointer, sanitization/refusal/checksums/ZIP, workflow upload steps, and synthetic partial-campaign tests
+- [x] 7.6 Update `qa/README.md`, design, and delta specs for the amended runtime, reporting, retry, and evidence behavior without changing `AGENTS.md`
+- [x] 7.7 Run `python3 -m unittest discover -s qa/tests -v` and `./gradlew testAll`, then review changed files and task status

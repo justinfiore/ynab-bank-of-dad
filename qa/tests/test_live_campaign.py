@@ -1,5 +1,6 @@
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -12,9 +13,12 @@ from lib.live_campaign import (
     fixture_import_id,
     fixture_amount,
     memo_has_exact_campaign,
+    one_transaction_matches,
+    scenario_transactions,
     successful_operation_attempts,
 )
 from lib.ynab_qa_client import PlanIdentity, QaSafetyError
+from run_live_campaign import Campaign
 
 
 IDS = {
@@ -115,6 +119,252 @@ class FreshMutationGateTest(unittest.TestCase):
         self.assertTrue(memo_has_exact_campaign("BOD QA QA-123:B1", "QA-123"))
         self.assertFalse(memo_has_exact_campaign("BOD QA QA-1234:B1", "QA-123"))
         self.assertFalse(memo_has_exact_campaign("ordinary QA-123", "QA-123"))
+
+    def test_scenario_selection_excludes_prior_fixtures_and_deleted_by_default(self):
+        transactions = [
+            {"id": "prior", "memo": "BOD QA QA-123:B4-live-split"},
+            {"id": "current", "memo": "YBOD: BOD QA QA-123:C1-financial-update"},
+            {"id": "deleted", "memo": "BOD QA QA-123:C1-financial-update", "deleted": True},
+            {"id": "other", "memo": "BOD QA QA-123:C2-child-memo-owned"},
+        ]
+        selected = scenario_transactions(transactions, "QA-123", "C1-financial-update")
+        self.assertEqual([item["id"] for item in selected], ["current"])
+        with_deleted = scenario_transactions(
+            transactions, "QA-123", "C1-financial-update", include_deleted=True,
+        )
+        self.assertEqual([item["id"] for item in with_deleted], ["current", "deleted"])
+
+    def test_c1_field_verification_ignores_prior_scenarios_but_requires_stable_identity(self):
+        transactions = [
+            {"id": "b-fixture", "memo": "BOD QA QA-123:B1-live-create", "amount": -10},
+            {"id": "child-c1", "memo": "BOD QA QA-123:C1-financial-update", "date": "2026-08-20",
+             "amount": -15, "payee_name": "Synthetic C1 changed", "cleared": "cleared",
+             "approved": False},
+            {"id": "child-c2", "memo": "BOD QA QA-123:C2-child-memo-owned"},
+        ]
+        selected = scenario_transactions(transactions, "QA-123", "C1-financial-update")
+        fields = {"date": "2026-08-20", "amount": -15,
+                  "payee_name": "Synthetic C1 changed", "cleared": "cleared",
+                  "approved": False}
+        self.assertTrue(one_transaction_matches(selected, "child-c1", fields))
+        self.assertFalse(one_transaction_matches(selected, "different-child", fields))
+
+    def test_automated_matrix_isolates_executor_and_cleanup_failures(self):
+        campaign = Campaign.__new__(Campaign)
+        campaign.campaign_id = "QA-test"
+        campaign.secrets = ["private-token"]
+        campaign.receipts = {}
+        campaign.cleanup_failures = []
+        events = []
+
+        def receipt(scenario, status, reason, **outcome):
+            campaign.receipts[scenario] = {
+                "scenario_id": scenario, "status": status, "reason": reason, **outcome,
+            }
+
+        campaign.receipt = receipt
+
+        scenario_methods = {
+            "_baseline": "A1-baseline",
+            "_a2_guard": "A2-guard-rejection",
+            "_a3_smoke": "A3-config-smoke",
+            "_a4_a5": "A4-dry-create",
+            "_a6": "A6-unapproved-unmapped",
+            "_b1": "B1-live-create",
+            "_b3": "B3-approval-transition",
+            "_b4": "B4-live-split",
+            "_c1": "C1-financial-update",
+            "_c2": "C2-child-memo-owned",
+            "_c3": "C3-same-child-reroute",
+            "_c4": "C4-cross-child-reroute",
+            "_c5": "C5-parent-unapproved",
+            "_c6": "C6-parent-unmapped",
+            "_c7": "C7-parent-deleted",
+            "_c9": "C9-child-mirror-recreated",
+            "_d1": "D1-invalid-child-token",
+            "_d2": "D2-invalid-child-mapping",
+            "_d3": "D3-single-writer-lock",
+            "_d4": "D4-controlled-continuous",
+        }
+
+        def action(scenario):
+            def run():
+                events.append(("action", scenario))
+                if scenario == "C2-child-memo-owned":
+                    raise RuntimeError(
+                        "private-token failed at https://api.ynab.com/v1/budgets/private"
+                    )
+                return False if scenario == "B1-live-create" else None
+            return run
+
+        for method, scenario in scenario_methods.items():
+            setattr(campaign, method, action(scenario))
+        campaign._resources = lambda: {}
+        campaign._a7 = lambda _resources: events.append(("action", "A7-split-fanout"))
+
+        cleanup_failed = False
+
+        def cleanup():
+            nonlocal cleanup_failed
+            prior_scenario = events[-1][1]
+            events.append(("cleanup", prior_scenario))
+            if prior_scenario == "C1-financial-update" and not cleanup_failed:
+                cleanup_failed = True
+                raise RuntimeError("private-token cleanup failed")
+
+        campaign.cleanup = cleanup
+
+        campaign.run_automated_matrix()
+
+        c2 = campaign.receipts["C2-child-memo-owned"]
+        self.assertEqual(c2["status"], "FAIL")
+        self.assertTrue(c2["execution_error"])
+        self.assertNotIn("private-token", c2["executor_cause"])
+        self.assertNotIn("api.ynab.com", c2["executor_cause"])
+        self.assertIn("[REDACTED", c2["executor_cause"])
+        self.assertIn(("action", "C3-same-child-reroute"), events)
+        self.assertIn(("action", "D4-controlled-continuous"), events)
+
+        for first, second in zip(
+            ("A1-baseline", "A2-guard-rejection", "A3-config-smoke",
+             "A4-dry-create", "A6-unapproved-unmapped"),
+            ("A2-guard-rejection", "A3-config-smoke", "A4-dry-create",
+             "A6-unapproved-unmapped", "A7-split-fanout"),
+        ):
+            self.assertLess(events.index(("action", first)), events.index(("cleanup", first)))
+            self.assertLess(events.index(("cleanup", first)), events.index(("action", second)))
+
+        cleanup_receipt = campaign.receipts["C1-financial-update"]
+        self.assertEqual(cleanup_receipt["status"], "FAIL")
+        self.assertTrue(cleanup_receipt["cleanup_failure"])
+        self.assertEqual(campaign.cleanup_failures[0]["scenario_id"], "C1-financial-update")
+        self.assertNotIn("private-token", campaign.cleanup_failures[0]["cause"])
+        self.assertLess(
+            events.index(("cleanup", "C1-financial-update")),
+            events.index(("action", "C2-child-memo-owned")),
+        )
+
+    def test_remaining_tagged_cleanup_verification_gates_and_later_scenario_can_continue(self):
+        class Client:
+            def set_request_pacing_ms(self, _value):
+                pass
+
+            def get(self, _identity, _resource):
+                return {"data": {"transactions": []}}
+
+        with tempfile.TemporaryDirectory() as temporary:
+            campaign = Campaign.__new__(Campaign)
+            campaign.campaign_id = "QA-test"
+            campaign.artifacts = Path(temporary)
+            campaign.secrets = []
+            campaign.receipts = {}
+            campaign.cleanup_failures = []
+            campaign.identities = {
+                name: PlanIdentity(name, plan_id) for name, plan_id in IDS.items()
+            }
+            campaign.clients = {name: Client() for name in IDS}
+            campaign.mutate = lambda *_args, **_kwargs: None
+            remaining = [{name: [{"id": "still-tagged"}] for name in IDS},
+                         {name: [] for name in IDS}]
+            campaign.snapshot = lambda *_args, **_kwargs: remaining.pop(0)
+
+            def receipt(scenario, status, reason, **outcome):
+                campaign.receipts[scenario] = {
+                    "campaign_id": campaign.campaign_id,
+                    "scenario_id": scenario,
+                    "status": status,
+                    "reason": reason,
+                    "safety": {"api_write_attempts": 0},
+                    "assertions": [{"name": reason, "status": status}],
+                    **outcome,
+                }
+
+            campaign.receipt = receipt
+            later_actions = []
+
+            campaign.run_scenario("C1-financial-update", lambda: receipt(
+                "C1-financial-update", "PASS", "scenario passed",
+            ))
+
+            cleanup_manifest = json.loads(
+                (campaign.artifacts / "cleanup/cleanup-manifest.json").read_text()
+            )
+            self.assertEqual(cleanup_manifest["verification"], "FAIL")
+            self.assertEqual(campaign.receipts["C1-financial-update"]["status"], "FAIL")
+            self.assertTrue(campaign.receipts["C1-financial-update"]["cleanup_failure"])
+
+            campaign.run_scenario(
+                "C2-child-memo-owned", lambda: later_actions.append("C2-child-memo-owned")
+            )
+
+            self.assertEqual(later_actions, ["C2-child-memo-owned"])
+            self.assertEqual(len(campaign.cleanup_failures), 1)
+
+
+class CampaignFinalMetadataTest(unittest.TestCase):
+    def final_manifest(self, selected, receipts, *, cleanup_failures=None):
+        with tempfile.TemporaryDirectory() as temporary:
+            artifacts = Path(temporary)
+            (artifacts / "api-observations").mkdir()
+            (artifacts / "environment.json").write_text(json.dumps({
+                "selected_scenario_ids": selected,
+            }))
+            for receipt in receipts:
+                receipt_dir = artifacts / "scenarios" / receipt["scenario_id"]
+                receipt_dir.mkdir(parents=True)
+                (receipt_dir / "receipt.json").write_text(json.dumps(receipt))
+
+            campaign = Campaign.__new__(Campaign)
+            campaign.campaign_id = "QA-test"
+            campaign.artifacts = artifacts
+            campaign.api_write_attempts = 0
+            campaign.successful_writes = 0
+            campaign.cleanup_failures = cleanup_failures or []
+            campaign.clients = {}
+            campaign._final_metadata()
+
+            return json.loads((artifacts / "campaign-manifest.json").read_text())
+
+    def test_all_selected_pass_with_extra_manual_not_run_is_pass(self):
+        manifest = self.final_manifest(
+            ["A1-baseline", "A2-guard-rejection"],
+            [
+                {"scenario_id": "A1-baseline", "status": "PASS"},
+                {"scenario_id": "A2-guard-rejection", "status": "PASS"},
+                {"scenario_id": "A8-money-movement", "status": "NOT_RUN"},
+            ],
+        )
+        self.assertEqual(manifest["status"], "PASS")
+        self.assertEqual(manifest["release_recommendation"], "NOT READY")
+
+    def test_selected_fail_is_fail(self):
+        manifest = self.final_manifest(
+            ["A1-baseline"],
+            [{"scenario_id": "A1-baseline", "status": "FAIL"}],
+        )
+        self.assertEqual(manifest["status"], "FAIL")
+
+    def test_missing_or_selected_not_run_is_blocked(self):
+        cases = (
+            [],
+            [{"scenario_id": "A1-baseline", "status": "NOT_RUN"}],
+        )
+        for receipts in cases:
+            with self.subTest(receipts=receipts):
+                manifest = self.final_manifest(["A1-baseline"], receipts)
+                self.assertEqual(manifest["status"], "BLOCKED")
+
+    def test_cleanup_failure_is_fail(self):
+        manifest = self.final_manifest(
+            ["A1-baseline"],
+            [{"scenario_id": "A1-baseline", "status": "PASS"}],
+            cleanup_failures=[{"scenario_id": "cleanup", "cause": "verification failed"}],
+        )
+        self.assertEqual(manifest["status"], "FAIL")
+        self.assertEqual(
+            manifest["cleanup"],
+            "Cleanup failed; campaign-tagged transaction removal was not verified.",
+        )
 
 
 if __name__ == "__main__":

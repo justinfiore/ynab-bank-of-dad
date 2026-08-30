@@ -24,6 +24,31 @@ def memo_has_exact_campaign(memo: Any, campaign_id: str) -> bool:
     )
 
 
+def scenario_transactions(
+    transactions: Sequence[Mapping[str, Any]], campaign_id: str, scenario_id: str,
+    *, include_deleted: bool = False,
+) -> list[Mapping[str, Any]]:
+    """Select only one exact campaign/scenario tag, excluding tombstones by default."""
+    tag = f"{campaign_id}:{scenario_id}"
+    return [
+        item for item in transactions
+        if memo_has_exact_campaign(item.get("memo"), tag)
+        and (include_deleted or not item.get("deleted"))
+    ]
+
+
+def one_transaction_matches(
+    transactions: Sequence[Mapping[str, Any]], expected_id: Any,
+    expected_fields: Mapping[str, Any],
+) -> bool:
+    """Verify stable identity and all named fields for one scenario-scoped transaction."""
+    return (
+        len(transactions) == 1
+        and transactions[0].get("id") == expected_id
+        and all(transactions[0].get(key) == value for key, value in expected_fields.items())
+    )
+
+
 class FreshMutationGate:
     """Authorize one exact manifest entry after fresh parent and target discovery."""
 

@@ -34,6 +34,8 @@ from lib.live_campaign import (
     fixture_amount,
     fixture_import_id,
     memo_has_exact_campaign,
+    one_transaction_matches,
+    scenario_transactions,
     successful_operation_attempts,
 )
 from lib.run_capture import capture_sqlite_audit, redact, write_receipt
@@ -101,6 +103,7 @@ class Campaign:
         self.created: list[tuple[str, str]] = []
         self.fixture_ordinal = self.api_write_attempts + 100 if resume else 0
         self.receipts: dict[str, dict[str, Any]] = {}
+        self.cleanup_failures: list[dict[str, str]] = []
         self.branch = subprocess.check_output(
             ["git", "branch", "--show-current"], cwd=REPO_ROOT, text=True
         ).strip()
@@ -111,11 +114,19 @@ class Campaign:
         self.state_db = self.raw / "campaign.db"
         self._write_runtime_config()
 
-    def raw_transactions(self, name: str, scenario: str | None = None) -> list[dict[str, Any]]:
+    def raw_transactions(self, name: str, scenario: str | None = None,
+                         *, include_deleted: bool = False) -> list[dict[str, Any]]:
         response = self.clients[name].get(self.identities[name], "transactions")
-        tag = f"{self.campaign_id}:{scenario}" if scenario else self.campaign_id
-        return [item for item in response.get("data", {}).get("transactions", [])
-                if memo_has_exact_campaign(item.get("memo"), tag) and not item.get("deleted")]
+        values = response.get("data", {}).get("transactions", [])
+        if scenario is not None:
+            return list(scenario_transactions(
+                values, self.campaign_id, scenario, include_deleted=include_deleted,
+            ))
+        return [
+            item for item in values
+            if memo_has_exact_campaign(item.get("memo"), self.campaign_id)
+            and (include_deleted or not item.get("deleted"))
+        ]
 
     @staticmethod
     def attempt_rows(state_db: Path) -> list[dict[str, Any]]:
@@ -276,13 +287,20 @@ class Campaign:
         self.created.append((PARENT, transaction_id))
         return transaction_id
 
-    def snapshot(self, scenario: str, label: str) -> dict[str, list[dict[str, Any]]]:
+    def snapshot(self, scenario: str, label: str, *, scope_scenario: str | None = "") -> dict[str, list[dict[str, Any]]]:
+        selected_scenario = scenario if scope_scenario == "" else scope_scenario
         result: dict[str, list[dict[str, Any]]] = {}
         for name in (PARENT, *CHILDREN):
             response = self.clients[name].get(self.identities[name], "transactions")
             values = response.get("data", {}).get("transactions", [])
-            result[name] = [evidence_transaction(item) for item in values
-                            if self.campaign_id in str(item.get("memo") or "")]
+            selected = (
+                scenario_transactions(values, self.campaign_id, selected_scenario)
+                if selected_scenario is not None
+                else [item for item in values
+                      if memo_has_exact_campaign(item.get("memo"), self.campaign_id)
+                      and not item.get("deleted")]
+            )
+            result[name] = [evidence_transaction(item) for item in selected]
         write_json(self.artifacts / "scenarios" / scenario / f"api-{label}.json", result)
         return result
 
@@ -310,7 +328,7 @@ class Campaign:
 
     def receipt(self, scenario: str, status: str, reason: str, *, expected=None, observed=None,
                 dry="NOT_RUN", live="NOT_RUN", api="NOT_RUN", sqlite="NOT_RUN",
-                assertions=None, links=None, attempts=0) -> None:
+                assertions=None, links=None, attempts=0, **outcome: Any) -> None:
         requirement = next(item[1] for item in SCENARIOS if item[0] == scenario)
         value = {
             "campaign_id": self.campaign_id, "scenario_id": scenario, "phase": scenario[0],
@@ -322,6 +340,7 @@ class Campaign:
             "dry_run": dry, "live_run": live, "api_observation": api,
             "sqlite_audit": sqlite, "assertions": assertions or [{"name": reason, "status": status}],
             "reason": reason, "status": status, "artifact_links": links or ["receipt.json"],
+            **outcome,
         }
         write_receipt(self.artifacts / "scenarios" / scenario / "receipt.json", value)
         self.receipts[scenario] = value
@@ -518,8 +537,7 @@ class Campaign:
         live_rc, _live_log, _ = self.run_live_counted(scenario, self.state_db)
         after = self.snapshot(scenario, "after")
         before_count = len(before["Jorsten Jr's Plan"])
-        matches = [item for item in after["Jorsten Jr's Plan"]
-                   if f"{self.campaign_id}:{scenario}" in str(item.get("memo") or "")]
+        matches = after["Jorsten Jr's Plan"]
         created = max(0, len(matches) - before_count)
         audit_status = "NOT_PRESENT"
         sync_write_attempts = 0
@@ -544,10 +562,10 @@ class Campaign:
 
     def _b2(self) -> None:
         scenario = "B2-live-replay"
-        before = self.snapshot(scenario, "before")
+        before = self.snapshot(scenario, "before", scope_scenario="B1-live-create")
         dry_rc, _ = self.run_sync(scenario, True, self.state_db)
         live_rc, _, _ = self.run_live_counted(scenario, self.state_db)
-        after = self.snapshot(scenario, "after")
+        after = self.snapshot(scenario, "after", scope_scenario="B1-live-create")
         stable = before == after
         passed = dry_rc == 0 and live_rc == 0 and stable
         self.receipt(scenario, "PASS" if passed else "FAIL",
@@ -589,6 +607,102 @@ class Campaign:
         capture_sqlite_audit(state_db, self.raw / f"{scenario}-audit.db", output)
         return "PASS"
 
+    def _redacted_executor_cause(self, error: Exception) -> str:
+        cause = safe_text(str(error), self.secrets)
+        cause = re.sub(r"https?://\S+", "[REDACTED-URL]", cause)
+        return cause[:1000] or error.__class__.__name__
+
+    def _record_cleanup_failure(self, scenario: str, error: Exception) -> None:
+        cause = self._redacted_executor_cause(error)
+        self.cleanup_failures.append({"scenario_id": scenario, "cause": cause})
+        existing = self.receipts.get(scenario)
+        if existing is None:
+            self.receipt(
+                scenario, "FAIL", "Tagged cleanup failed after scenario execution.",
+                dry="NOT_RUN", live="NOT_RUN", api="FAIL", sqlite="NOT_RUN",
+                cleanup_failure=True, cleanup_cause=cause,
+            )
+            return
+        existing["status"] = "FAIL"
+        existing["cleanup_failure"] = True
+        existing["cleanup_cause"] = cause
+        existing["reason"] = "Scenario cleanup failed; campaign isolation is not verified."
+        existing.setdefault("assertions", []).append({
+            "name": "Exact campaign tagged cleanup", "status": "FAIL",
+        })
+        write_receipt(
+            self.artifacts / "scenarios" / scenario / "receipt.json", existing,
+        )
+
+    def run_scenario(self, scenario: str, action, *, cleanup_after: bool = True):
+        """Run one independent scenario without aborting later scenarios."""
+        result = None
+        try:
+            result = action()
+        except Exception as error:
+            cause = self._redacted_executor_cause(error)
+            if scenario not in self.receipts:
+                self.receipt(
+                    scenario, "FAIL", "Scenario executor failed before verification completed.",
+                    dry="FAIL", live="NOT_RUN", api="FAIL", sqlite="NOT_RUN",
+                    execution_error=True, executor_cause=cause,
+                )
+        finally:
+            if cleanup_after:
+                try:
+                    self.cleanup()
+                except Exception as cleanup_error:
+                    self._record_cleanup_failure(scenario, cleanup_error)
+        return result
+
+    def run_automated_matrix(self) -> None:
+        """Execute every automated scenario with explicit dependency and cleanup boundaries."""
+        independent = (
+            ("A1-baseline", self._baseline),
+            ("A2-guard-rejection", self._a2_guard),
+            ("A3-config-smoke", self._a3_smoke),
+            ("A4-dry-create", self._a4_a5),
+            ("A6-unapproved-unmapped", self._a6),
+            ("A7-split-fanout", lambda: self._a7(self._resources())),
+        )
+        for scenario, action in independent:
+            self.run_scenario(scenario, action)
+
+        b1_result = self.run_scenario("B1-live-create", self._b1, cleanup_after=False)
+        b1_passed = b1_result is True and self.receipts.get("B1-live-create", {}).get("status") == "PASS"
+        if b1_passed:
+            self.run_scenario("B2-live-replay", self._b2, cleanup_after=False)
+        else:
+            self.receipt(
+                "B2-live-replay", "NOT_RUN",
+                "B2 was skipped because B1 did not establish a verified replay baseline.",
+                dry="NOT_RUN", live="NOT_RUN", api="NOT_RUN", sqlite="NOT_RUN",
+                dependency_blocked=True, dependency="B1-live-create",
+            )
+        try:
+            self.cleanup()
+        except Exception as cleanup_error:
+            self._record_cleanup_failure("B2-live-replay" if b1_passed else "B1-live-create", cleanup_error)
+
+        remaining = (
+            ("B3-approval-transition", self._b3),
+            ("B4-live-split", self._b4),
+            ("C1-financial-update", self._c1),
+            ("C2-child-memo-owned", self._c2),
+            ("C3-same-child-reroute", self._c3),
+            ("C4-cross-child-reroute", self._c4),
+            ("C5-parent-unapproved", self._c5),
+            ("C6-parent-unmapped", self._c6),
+            ("C7-parent-deleted", self._c7),
+            ("C9-child-mirror-recreated", self._c9),
+            ("D1-invalid-child-token", self._d1),
+            ("D2-invalid-child-mapping", self._d2),
+            ("D3-single-writer-lock", self._d3),
+            ("D4-controlled-continuous", self._d4),
+        )
+        for scenario, action in remaining:
+            self.run_scenario(scenario, action)
+
     def execute_remaining(self) -> None:
         methods = (
             self._b3, self._b4, self._c1, self._c2, self._c3, self._c4,
@@ -625,8 +739,7 @@ class Campaign:
             subtransactions=subtransactions,
         )
         observations = self.snapshot(scenario, "after")
-        created = sum(1 for name in expected_children for item in observations[name]
-                      if f"{self.campaign_id}:{scenario}" in str(item.get("memo") or ""))
+        created = sum(len(observations[name]) for name in expected_children)
         expected_count = len(expected_children)
         passed = created == expected_count
         self.receipt(scenario, "PASS" if passed else "FAIL",
@@ -649,8 +762,7 @@ class Campaign:
         rc1, log1 = self.run_sync(scenario, True, state)
         live_rc, _, _ = self.run_live_counted(scenario, state)
         after = self.snapshot(scenario, "after")
-        matches = [item for item in after["Jorsten Jr's Plan"]
-                   if f"{self.campaign_id}:{scenario}" in str(item.get("memo") or "")]
+        matches = after["Jorsten Jr's Plan"]
         passed = rc0 == 0 and no_plan and rc1 == 0 and self.campaign_id in log1 and live_rc == 0 and len(matches) == 1
         self.receipt(scenario, "PASS" if passed else "FAIL",
                      "No mirror before approval and exactly one after approval.",
@@ -685,7 +797,9 @@ class Campaign:
         after = self.snapshot(scenario, "after-change")
         observed, ok = verify(child_before[0], after, dry_log)
         passed = dry_rc == 0 and live_rc == 0 and ok
-        self.receipt(scenario, "PASS" if passed else "FAIL", "Observed reconciliation matched the expected in-place/destructive semantics.",
+        self.receipt(scenario, "PASS" if passed else "FAIL",
+                     "Observed reconciliation matched the expected in-place/destructive semantics." if passed
+                     else "Scenario-scoped API identity or field assertions did not match the expected reconciliation.",
                      expected=expected, observed=observed, dry="PASS" if dry_rc == 0 else "FAIL",
                      live="PASS" if live_rc == 0 else "FAIL", api="PASS" if ok else "FAIL",
                      sqlite=self.audit(scenario, state), attempts=self.api_write_attempts - start,
@@ -698,8 +812,14 @@ class Campaign:
             self.parent_update(scenario, parent_id, date="2026-08-20", amount=-15,
                                payee_id=None, payee_name="Synthetic C1 changed")
         def verify(before, after, _log):
-            matches = [item for item in after["Jorsten Jr's Plan"] if self.campaign_id in str(item.get("memo") or "")]
-            ok = len(matches) == 1 and matches[0]["id"] == evidence_transaction(before)["id"] and matches[0].get("date") == "2026-08-20" and matches[0].get("amount") == -15 and matches[0].get("payee_name") == "Synthetic C1 changed" and matches[0].get("cleared") == "cleared" and matches[0].get("approved") is False
+            matches = after["Jorsten Jr's Plan"]
+            ok = one_transaction_matches(
+                matches, evidence_transaction(before)["id"], {
+                    "date": "2026-08-20", "amount": -15,
+                    "payee_name": "Synthetic C1 changed", "cleared": "cleared",
+                    "approved": False,
+                },
+            )
             return {"creates": 0, "updates": 1 if ok else 0, "deletes": 0}, ok
         self._changed_scenario(scenario, change, {"creates": 0, "updates": 1, "deletes": 0}, verify)
 
@@ -710,7 +830,7 @@ class Campaign:
             self.mutate(scenario, "PUT", "Jorsten Jr's Plan", {"transaction": {"memo": child_memo}}, child["id"])
             self.parent_update(scenario, parent_id, memo=f"BOD QA {self.campaign_id}:{scenario}:parent-edited")
         def verify(before, after, log):
-            matches = [item for item in after["Jorsten Jr's Plan"] if self.campaign_id in str(item.get("memo") or "")]
+            matches = after["Jorsten Jr's Plan"]
             ok = len(matches) == 1 and matches[0].get("memo") == child_memo and "update child transaction" not in log
             return dict(COUNTS), ok
         self._changed_scenario(scenario, change, dict(COUNTS), verify)
@@ -720,7 +840,7 @@ class Campaign:
         category = self._resources()["categories"]["QA Jorsten Jr Bronze"]
         def change(parent_id, _child): self.parent_update(scenario, parent_id, category_id=category)
         def verify(before, after, _log):
-            matches = [item for item in after["Jorsten Jr's Plan"] if self.campaign_id in str(item.get("memo") or "")]
+            matches = after["Jorsten Jr's Plan"]
             ok = len(matches) == 1 and matches[0]["id"] == evidence_transaction(before)["id"] and matches[0].get("account_name") == "Bronze"
             return {"creates": 0, "updates": 1 if ok else 0, "deletes": 0}, ok
         self._changed_scenario(scenario, change, {"creates": 0, "updates": 1, "deletes": 0}, verify)
@@ -730,15 +850,15 @@ class Campaign:
         category = self._resources()["categories"]["QA Borsten Silver"]
         def change(parent_id, _child): self.parent_update(scenario, parent_id, category_id=category)
         def verify(_before, after, _log):
-            old = [item for item in after["Jorsten Jr's Plan"] if self.campaign_id in str(item.get("memo") or "")]
-            new = [item for item in after["Borsten's Plan"] if self.campaign_id in str(item.get("memo") or "")]
+            old = after["Jorsten Jr's Plan"]
+            new = after["Borsten's Plan"]
             ok = not old and len(new) == 1
             return {"creates": 1 if new else 0, "updates": 0, "deletes": 1 if not old else 0}, ok
         self._changed_scenario(scenario, change, {"creates": 1, "updates": 0, "deletes": 1}, verify)
 
     def _deletion_scenario(self, scenario: str, change) -> None:
         def verify(_before, after, _log):
-            matches = [item for item in after["Jorsten Jr's Plan"] if self.campaign_id in str(item.get("memo") or "")]
+            matches = after["Jorsten Jr's Plan"]
             ok = not matches
             return {"creates": 0, "updates": 0, "deletes": 1 if ok else 0}, ok
         self._changed_scenario(scenario, change, {"creates": 0, "updates": 0, "deletes": 1}, verify)
@@ -762,7 +882,7 @@ class Campaign:
             self.mutate(scenario, "DELETE", "Jorsten Jr's Plan", None, child["id"])
             self.parent_update(scenario, parent_id, memo=f"BOD QA {self.campaign_id}:{scenario}:benign-parent-edit")
         def verify(before, after, _log):
-            matches = [item for item in after["Jorsten Jr's Plan"] if self.campaign_id in str(item.get("memo") or "")]
+            matches = after["Jorsten Jr's Plan"]
             ok = len(matches) == 1 and matches[0]["id"] != evidence_transaction(before)["id"]
             return {"creates": 1 if ok else 0, "updates": 0, "deletes": 0}, ok
         self._changed_scenario(scenario, change, {"creates": 1, "updates": 0, "deletes": 0}, verify)
@@ -867,8 +987,7 @@ class Campaign:
         dry_rc, _ = self.run_sync(scenario, True, state)
         live_rc, live_log, _ = self.run_live_counted(scenario, state, max_cycles=2)
         after = self.snapshot(scenario, "after")
-        matches = [item for item in after["Thorsten's Plan"]
-                   if f"{self.campaign_id}:{scenario}" in str(item.get("memo") or "")]
+        matches = after["Thorsten's Plan"]
         two_cycles = "Cycle 2 read" in live_log
         passed = dry_rc == live_rc == 0 and len(matches) == 1 and two_cycles
         self.receipt(scenario, "PASS" if passed else "FAIL",
@@ -898,12 +1017,16 @@ class Campaign:
                     self.mutate(scenario, "DELETE", name, None, item["id"])
                     results.append({"target": name, "transaction": evidence_transaction(item),
                                     "cleanup": "DELETE APPLIED"})
-            remaining = self.snapshot("cleanup", "verification")
+            remaining = self.snapshot("cleanup", "verification", scope_scenario=None)
             clean = all(not values for values in remaining.values())
             write_json(cleanup_dir / "cleanup-manifest.json", {
                 "campaign_id": self.campaign_id, "deleted": results,
                 "verification": "PASS" if clean else "FAIL", "remaining_tagged": remaining,
             })
+            if not clean:
+                raise QaSafetyError(
+                    "Tagged cleanup verification failed; campaign-tagged transactions remain"
+                )
         finally:
             for client in self.clients.values():
                 client.set_request_pacing_ms(0)
@@ -920,12 +1043,48 @@ class Campaign:
         environment["cleanup_api_write_count"] = max(0, self.api_write_attempts - receipt_attempts)
         write_json(environment_path, environment)
         all_receipts = [json.loads(path.read_text()) for path in self.artifacts.glob("scenarios/*/receipt.json")]
+        receipts_by_scenario = {
+            item.get("scenario_id"): item for item in all_receipts if item.get("scenario_id")
+        }
+        selected_scenario_ids = environment.get("selected_scenario_ids", [])
+        selected_receipts = [
+            receipts_by_scenario.get(scenario_id)
+            for scenario_id in selected_scenario_ids
+        ]
+        selected_failed = any(
+            item is not None and (
+                item.get("status") in {"FAIL", "BLOCKED"}
+                or item.get("execution_error") is True
+            )
+            for item in selected_receipts
+        )
+        selected_blocked = any(
+            item is None
+            or item.get("status") == "NOT_RUN"
+            or item.get("dependency_blocked") is True
+            for item in selected_receipts
+        )
+        all_selected_passed = bool(selected_scenario_ids) and all(
+            item is not None and item.get("status") == "PASS"
+            for item in selected_receipts
+        )
+        if self.cleanup_failures or selected_failed:
+            status = "FAIL"
+        elif selected_blocked or not all_selected_passed:
+            status = "BLOCKED"
+        else:
+            status = "PASS"
+        cleanup_summary = (
+            "Cleanup failed; campaign-tagged transaction removal was not verified."
+            if self.cleanup_failures
+            else "All campaign-tagged transactions were deleted and API verification found none."
+        )
         write_json(self.artifacts / "campaign-manifest.json", {
-            "campaign_id": self.campaign_id, "status": "FAIL" if any(
-                item["status"] == "FAIL" for item in all_receipts) else "BLOCKED",
+            "campaign_id": self.campaign_id, "status": status,
             "actual_api_write_count": self.api_write_attempts,
             "successful_api_write_count": self.successful_writes,
-            "cleanup": "All campaign-tagged transactions were deleted and API verification found none.",
+            "cleanup": cleanup_summary,
+            "cleanup_failures": self.cleanup_failures,
             "release_recommendation": "NOT READY", "secret_scan": "PENDING",
         })
         write_json(

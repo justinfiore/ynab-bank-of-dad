@@ -95,3 +95,37 @@ The job SHALL write JUnit XML under `build/test-results/` with one testcase per 
 - **WHEN** a pull request is opened without `end-to-end-qa`
 - **THEN** `build-test` SHALL still run `./gradlew testAll` and `./gradlew installDist`
 - **AND** no disposable-plan token SHALL be required
+
+## ADDED Requirements (Actions run 33313572332 remediation)
+
+### Requirement: Live verification SHALL be scenario-scoped
+All B, C, and D verification SHALL select non-deleted transactions by exact campaign-and-scenario memo identity. A scenario that explicitly verifies deletion MAY include tombstones. C1 SHALL verify that its captured child transaction ID remains stable and that expected fields match.
+
+#### Scenario: Earlier fixtures remain in a full campaign
+- **WHEN** earlier B or C fixtures coexist with the transaction under verification
+- **THEN** they SHALL NOT affect the current scenario's counts, identities, or field assertions
+
+### Requirement: Independent scenario failures SHALL not abort the campaign
+An executor exception SHALL create a redacted `FAIL` receipt with `execution_error=true`, run tagged cleanup in `finally`, and allow later independent scenarios to execute. B2 SHALL be dependency-blocked when B1 fails. Cleanup SHALL write its verification manifest and SHALL raise a safe gating error whenever tagged verification is not `PASS`; the responsible scenario or final cleanup SHALL record `cleanup_failure`. Cleanup failures SHALL fail the campaign, and final cleanup and metadata SHALL always run.
+
+#### Scenario: C2 setup throws
+- **WHEN** C2 raises an executor exception
+- **THEN** C2 SHALL record an execution error
+- **AND** C3 through D4 SHALL still be attempted with cleanup between independent scenarios
+
+### Requirement: JUnit SHALL represent outcome semantics accurately
+PASS SHALL pass, receipt FAIL SHALL be a failure, `execution_error=true` SHALL be an error, and NOT_RUN or `dependency_blocked=true` SHALL be skipped. A safety/precondition BLOCKED without dependency blocking SHALL remain a gate failure. Suite counts and times SHALL be valid finite numbers. Campaign exit status SHALL remain nonzero for assertion/error/safety/cleanup failures or an incomplete expected matrix.
+
+#### Scenario: Partial campaign has mixed results
+- **WHEN** a campaign contains 11 passes, one assertion failure, one executor error, and ten not-run/dependency cases
+- **THEN** JUnit SHALL report 11 passes, one failure, one error, and ten skipped tests
+
+### Requirement: CI SHALL always package sanitized partial evidence
+The workflow SHALL package and upload the campaign selected by `build/qa/current-campaign.json` under `if: always()`. The pointer SHALL contain only a schema version, safe campaign ID, and exact repo-relative artifact source path. A separate packager SHALL accept partial campaigns without requiring zero writes or a complete matrix. It SHALL include partial receipts and sanitized dry/live logs, API observation JSON, SQLite JSON audit exports, cleanup and environment/campaign manifests, and safe request telemetry. It SHALL copy only regular files from the selected `qa/artifacts/<campaign>` tree and SHALL exclude symlinks, raw campaign state, databases, tokens, and config. Packaging SHALL sanitize with the existing token/Authorization/full-UUID routines, byte-scan every delivered file, and refuse output if a token, Authorization value, or full UUID remains. A packaging failure SHALL fail a nominally passing job without masking an earlier QA failure.
+
+The packager SHALL write `ci-evidence-manifest.json` with schema, campaign ID, branch, commit, derived status/completeness, receipt counts, cleanup verification, `source_type=qa-artifacts-copy`, `raw_state_included=false`, explicit stable copy exclusions, and safety scan results. Selected completeness SHALL require one receipt for every selected scenario and no selected `NOT_RUN` or dependency-blocked receipt. A complete selected matrix MAY contain a failure/error but SHALL derive `FAIL`. Missing or not-run selected receipts SHALL derive `PARTIAL` unless another selected failure/error requires `FAIL`. Cleanup `FAIL` SHALL derive `FAIL`; missing, `NOT_RUN`, or other non-PASS cleanup SHALL prevent `PASS` and derive `PARTIAL` unless another failure requires `FAIL`. Only a complete selected all-PASS matrix without execution errors and with cleanup `PASS` SHALL derive `PASS`. Receipts outside the selected scenario IDs SHALL NOT affect selected completeness or derived status. `SHA256SUMS` SHALL cover all regular files recursively in the delivered campaign directory except `SHA256SUMS` itself. The ZIP SHALL contain that directory including `SHA256SUMS`, and `.zip.sha256` SHALL cover the ZIP. Actions SHALL upload only `build/qa-ci-evidence/` with retention of at least seven days and SHALL NOT upload raw `qa/artifacts/`.
+
+#### Scenario: Campaign aborts during C2
+- **WHEN** a partial C2 live log and receipts exist
+- **THEN** the evidence artifact SHALL retain their sanitized forms
+- **AND** its manifest SHALL identify incomplete status and cleanup verification

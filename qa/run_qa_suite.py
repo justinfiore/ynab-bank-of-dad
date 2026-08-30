@@ -15,6 +15,7 @@ REPO_ROOT = QA_ROOT.parent
 sys.path.insert(0, str(QA_ROOT))
 
 from lib.campaign_matrix import AUTOMATED_SCENARIO_IDS, MANUAL_SCENARIO_IDS
+from lib.ci_evidence import write_current_campaign_pointer
 from lib.junit_writer import write_automated_junit
 from lib.qa_config import QaConfigBlocked, load_tokens as load_token_env
 from run_live_campaign import Campaign, PARENT, CHILDREN, write_json
@@ -40,6 +41,8 @@ def require_live_confirmation() -> None:
 
 def new_campaign(suite: str, scenario_ids: tuple[str, ...] | None = None) -> Campaign:
     campaign_id = f"QA-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{suite}"
+    if suite == "automated":
+        write_current_campaign_pointer(REPO_ROOT, campaign_id)
     campaign = Campaign(campaign_id)
     write_json(campaign.artifacts / "environment.json", {
         "campaign_id": campaign.campaign_id,
@@ -86,42 +89,19 @@ def run_automated() -> int:
         load_tokens()
         campaign = new_campaign("automated", AUTOMATED_SCENARIO_IDS)
         try:
-            campaign._baseline()
-            resources = campaign._resources()
-            campaign._a2_guard()
-            campaign._a3_smoke()
-            campaign._a4_a5()
-            campaign._a6()
-            campaign._a7(resources)
-            if campaign._b1():
-                campaign._b2()
-                campaign._b3()
-                campaign._b4()
-                campaign._c1()
-                campaign._c2()
-                campaign._c3()
-                campaign._c4()
-                campaign._c5()
-                campaign._c6()
-                campaign._c7()
-                campaign._c9()
-                campaign._d1()
-                campaign._d2()
-                campaign._d3()
-                campaign._d4()
+            campaign.run_automated_matrix()
             for scenario_id in MANUAL_SCENARIO_IDS:
                 if scenario_id not in campaign.receipts:
                     campaign.receipt(
                         scenario_id, "NOT_RUN",
                         "Manual UI suite. Run ./gradlew qaManual.",
                     )
-            campaign.cleanup()
-            campaign._final_metadata()
-        except Exception:
-            campaign.cleanup()
-            campaign._final_metadata()
-            raise
         finally:
+            try:
+                campaign.cleanup()
+            except Exception as cleanup_error:
+                campaign._record_cleanup_failure("D4-controlled-continuous", cleanup_error)
+            campaign._final_metadata()
             junit_receipts = list(campaign.receipts.values())
     finally:
         failures = _write_automated_junit(

@@ -133,13 +133,56 @@ class JunitWriterTest(unittest.TestCase):
         self.assertNotIn("A8-money-movement", text)
         self.assertNotIn("C8-split-component-removed", text)
 
-    def test_missing_or_crash_receipts_are_junit_failures(self):
+    def test_missing_receipts_are_skipped_but_keep_the_campaign_incomplete(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         output = Path(directory.name) / "TEST-qaAutomated.xml"
         failures = write_automated_junit([], output, automated_ids=AUTOMATED_SCENARIO_IDS)
         text = output.read_text(encoding="utf-8")
         self.assertEqual(failures, len(AUTOMATED_SCENARIO_IDS))
-        self.assertIn("<failure", text)
+        self.assertNotIn("<failure", text)
+        self.assertEqual(text.count("<skipped"), len(AUTOMATED_SCENARIO_IDS))
         self.assertIn(AUTOMATED_SCENARIO_IDS[0], text)
         self.assertNotIn("A8-money-movement", text)
+
+    def test_mixed_actions_run_semantics_are_11_pass_1_failure_1_error_10_skipped(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        output = Path(directory.name) / "TEST-qaAutomated.xml"
+        ids = AUTOMATED_SCENARIO_IDS
+        receipts = [
+            {"scenario_id": scenario_id, "status": "PASS", "reason": "ok", "time": "nan"}
+            for scenario_id in ids[:11]
+        ]
+        receipts.append({"scenario_id": ids[11], "status": "FAIL", "reason": "assertion mismatch"})
+        receipts.append({"scenario_id": ids[12], "status": "FAIL", "reason": "executor failed",
+                         "execution_error": True, "executor_cause": "redacted cause"})
+        receipts.extend(
+            {"scenario_id": scenario_id, "status": "NOT_RUN", "reason": "not reached",
+             "dependency_blocked": True}
+            for scenario_id in ids[13:]
+        )
+
+        gate = write_automated_junit(receipts, output, automated_ids=ids)
+        text = output.read_text(encoding="utf-8")
+
+        self.assertEqual(gate, 2)
+        self.assertIn('tests="23" failures="1" errors="1" skipped="10" time="0.000"', text)
+        self.assertEqual(text.count("<failure"), 1)
+        self.assertEqual(text.count("<error"), 1)
+        self.assertEqual(text.count("<skipped"), 10)
+
+    def test_safety_block_is_failure_and_dependency_block_is_skipped(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        output = Path(directory.name) / "results.xml"
+        ids = ("safety", "dependency")
+        receipts = [
+            {"scenario_id": "safety", "status": "BLOCKED", "reason": "allowlist failed"},
+            {"scenario_id": "dependency", "status": "BLOCKED", "reason": "B1 failed",
+             "dependency_blocked": True},
+        ]
+        gate = write_automated_junit(receipts, output, automated_ids=ids)
+        text = output.read_text(encoding="utf-8")
+        self.assertEqual(gate, 1)
+        self.assertIn('failures="1" errors="0" skipped="1"', text)
