@@ -16,6 +16,7 @@ on:
 
 permissions:
   contents: read
+  checks: write
 
 jobs:
   build-test:
@@ -56,6 +57,15 @@ jobs:
           path: build/test-results/
           if-no-files-found: error
           retention-days: 1
+
+      - name: Publish JUnit results as a GitHub Check
+        if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        uses: dorny/test-reporter@df6247429542221bc30d46a036ee47af1102c451 # v2
+        with:
+          name: CI JUnit Test Results
+          path: build/test-results/**/*.xml
+          reporter: java-junit
+          fail-on-error: false
 
       - name: Upload HTML test reports
         if: always()
