@@ -9,6 +9,10 @@ import java.net.http.HttpTimeoutException
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.StandardOpenOption
 import java.time.DateTimeException
 import java.time.Duration
 import java.time.Instant
@@ -30,6 +34,7 @@ import java.util.concurrent.TimeoutException
  */
 @Slf4j
 class YnabHttpClient {
+    static final String WRITE_ATTEMPT_TELEMETRY_ENV = 'YNAB_WRITE_ATTEMPT_TELEMETRY_FILE'
     final String baseUrl
     final String accessToken
     final HttpClient httpClient
@@ -39,6 +44,7 @@ class YnabHttpClient {
     final Integer maxRateLimitRetries
     final Closure sleeper
     final Closure clock
+    final Path writeAttemptTelemetryPath
 
     YnabHttpClient(String baseUrl, String accessToken) {
         this(baseUrl, accessToken, HttpClient.newBuilder()
@@ -63,6 +69,13 @@ class YnabHttpClient {
 
     YnabHttpClient(String baseUrl, String accessToken, HttpClient httpClient, Duration requestTimeout,
                    Integer maxRateLimitRetries, Closure sleeper, Closure clock) {
+        this(baseUrl, accessToken, httpClient, requestTimeout, maxRateLimitRetries, sleeper, clock,
+            writeAttemptTelemetryPathFromEnvironment())
+    }
+
+    YnabHttpClient(String baseUrl, String accessToken, HttpClient httpClient, Duration requestTimeout,
+                   Integer maxRateLimitRetries, Closure sleeper, Closure clock,
+                   Path writeAttemptTelemetryPath) {
         if (maxRateLimitRetries != null && maxRateLimitRetries < 0) {
             throw new IllegalArgumentException('maxRateLimitRetries must be non-negative')
         }
@@ -73,6 +86,7 @@ class YnabHttpClient {
         this.maxRateLimitRetries = maxRateLimitRetries
         this.sleeper = sleeper
         this.clock = clock
+        this.writeAttemptTelemetryPath = writeAttemptTelemetryPath
     }
 
     def getJson(String path) {
@@ -149,6 +163,7 @@ class YnabHttpClient {
         int rateLimitRetries = 0
         String resourceClass = resourceClass(path)
         while (true) {
+            recordWriteAttempt(method, resourceClass)
             try {
                 response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
             } catch (InterruptedException e) {
@@ -186,6 +201,25 @@ class YnabHttpClient {
             throw new IllegalStateException("YNAB ${method} ${resourceClass} returned invalid JSON", e)
         }
         return new YnabHttpResponse(response.statusCode(), bodyText, parsedBody)
+    }
+
+    private void recordWriteAttempt(String method, String resourceClass) {
+        if (method == 'GET' || writeAttemptTelemetryPath == null) {
+            return
+        }
+        String record = JsonOutput.toJson([method: method, resource_class: resourceClass]) + '\n'
+        try {
+            Files.writeString(writeAttemptTelemetryPath, record, StandardCharsets.UTF_8,
+                StandardOpenOption.CREATE, StandardOpenOption.APPEND)
+        } catch (IOException | RuntimeException ignored) {
+            throw new IllegalStateException(
+                "YNAB ${method} ${resourceClass} could not record write attempt")
+        }
+    }
+
+    private static Path writeAttemptTelemetryPathFromEnvironment() {
+        String configured = System.getenv(WRITE_ATTEMPT_TELEMETRY_ENV)
+        configured == null || configured.isBlank() ? null : Path.of(configured)
     }
 
     private Instant currentInstant() {

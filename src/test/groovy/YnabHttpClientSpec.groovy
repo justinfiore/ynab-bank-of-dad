@@ -10,10 +10,13 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import spock.lang.Specification
 
+import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.net.http.HttpTimeoutException
+import java.nio.file.Files
+import java.nio.file.Path
 import java.time.Duration
 import java.time.Instant
 import java.time.ZoneOffset
@@ -171,8 +174,57 @@ class YnabHttpClientSpec extends Specification {
         response == null
     }
 
+    def "write telemetry records sanitized non-GET attempts before send and excludes GET"() {
+        given:
+        Path telemetry = Files.createTempFile('ynab-write-attempts-', '.jsonl')
+        def recordingClient = new RecordingHttpClient(telemetry)
+        def client = new YnabHttpClient('https://api.ynab.com', 'access-token-secret',
+            recordingClient, Duration.ofSeconds(7), 0, { Duration ignored -> },
+            { Instant.EPOCH }, telemetry)
+
+        when:
+        client.getJson('/v1/plans/private-plan-id')
+        client.postJson('/v1/plans/private-plan-id/transactions/private-transaction-id',
+            [token: 'payload-secret'])
+
+        then:
+        recordingClient.telemetryWasPresentAtSend == [false, true]
+        def records = Files.readAllLines(telemetry).collect { new JsonSlurper().parseText(it) }
+        records == [[method: 'POST', resource_class: 'transactions']]
+        String telemetryText = Files.readString(telemetry)
+        !['private-plan-id', 'private-transaction-id', 'access-token-secret',
+          'payload-secret', 'api.ynab.com'].any { telemetryText.contains(it) }
+
+        cleanup:
+        Files.deleteIfExists(telemetry)
+    }
+
+    def "write telemetry failure prevents the HTTP send"() {
+        given:
+        Path telemetryDirectory = Files.createTempDirectory('ynab-write-attempt-directory-')
+        def recordingClient = new RecordingHttpClient(telemetryDirectory)
+        def client = new YnabHttpClient('https://api.ynab.com', 'token', recordingClient,
+            Duration.ofSeconds(7), 0, { Duration ignored -> }, { Instant.EPOCH },
+            telemetryDirectory)
+
+        when:
+        client.deleteJsonWithMetadata('/v1/plans/private-plan-id/transactions/private-id')
+
+        then:
+        def ex = thrown(IllegalStateException)
+        ex.message == 'YNAB DELETE transactions could not record write attempt'
+        recordingClient.sendCount == 0
+        !ex.message.contains(telemetryDirectory.toString())
+        !ex.message.contains('private-plan-id')
+        !ex.message.contains('private-id')
+
+        cleanup:
+        Files.deleteIfExists(telemetryDirectory)
+    }
+
     def "all HTTP methods retry explicit 429 rejection with the same request"() {
         given:
+        Path telemetry = Files.createTempFile('ynab-retry-write-attempts-', '.jsonl')
         server.enqueue(new MockResponse()
             .setResponseCode(429)
             .setHeader('Retry-After', '3')
@@ -184,7 +236,7 @@ class YnabHttpClientSpec extends Specification {
         List<Duration> waits = []
         def client = new YnabHttpClient(server.url('/').toString(), 'token',
             HttpClient.newHttpClient(), Duration.ofSeconds(7), null,
-            { Duration delay -> waits << delay }, { Instant.EPOCH })
+            { Duration delay -> waits << delay }, { Instant.EPOCH }, telemetry)
 
         when:
         issueRequest(client, method)
@@ -197,9 +249,18 @@ class YnabHttpClientSpec extends Specification {
         first.path == second.path
         first.body.readUtf8() == second.body.readUtf8()
         waits == [Duration.ofSeconds(3)]
+        Files.readAllLines(telemetry).size() == expectedTelemetryRecords
+
+        cleanup:
+        Files.deleteIfExists(telemetry)
 
         where:
-        method << ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']
+        method   | expectedTelemetryRecords
+        'GET'    | 0
+        'POST'   | 2
+        'PUT'    | 2
+        'PATCH'  | 2
+        'DELETE' | 2
     }
 
     def "retry delay honors case-insensitive numeric date and reset headers"() {
@@ -443,5 +504,43 @@ class YnabHttpClientSpec extends Specification {
         <T> HttpResponse<T> send(HttpRequest request, HttpResponse.BodyHandler<T> responseBodyHandler) {
             throw new InterruptedException('interrupted for test')
         }
+    }
+
+    private static class RecordingHttpClient extends TimeoutThrowingHttpClient {
+        int sendCount = 0
+        List<Boolean> telemetryWasPresentAtSend = []
+        final Path telemetryPath
+
+        RecordingHttpClient(Path telemetryPath) {
+            this.telemetryPath = telemetryPath
+        }
+
+        @Override
+        <T> HttpResponse<T> send(HttpRequest request, HttpResponse.BodyHandler<T> responseBodyHandler) {
+            sendCount++
+            telemetryWasPresentAtSend << (Files.isRegularFile(telemetryPath) && Files.size(telemetryPath) > 0)
+            new StubHttpResponse<T>(200, (T) '{"data":{}}')
+        }
+    }
+
+    private static class StubHttpResponse<T> implements HttpResponse<T> {
+        final int status
+        final T responseBody
+
+        StubHttpResponse(int status, T responseBody) {
+            this.status = status
+            this.responseBody = responseBody
+        }
+
+        @Override int statusCode() { status }
+        @Override HttpRequest request() { null }
+        @Override Optional<HttpResponse<T>> previousResponse() { Optional.empty() }
+        @Override java.net.http.HttpHeaders headers() {
+            java.net.http.HttpHeaders.of([:], { String ignoredA, String ignoredB -> true })
+        }
+        @Override T body() { responseBody }
+        @Override Optional<javax.net.ssl.SSLSession> sslSession() { Optional.empty() }
+        @Override URI uri() { URI.create('https://example.invalid') }
+        @Override HttpClient.Version version() { HttpClient.Version.HTTP_1_1 }
     }
 }

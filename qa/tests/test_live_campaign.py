@@ -1,4 +1,5 @@
 import json
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -299,6 +300,157 @@ class FreshMutationGateTest(unittest.TestCase):
 
             self.assertEqual(later_actions, ["C2-child-memo-owned"])
             self.assertEqual(len(campaign.cleanup_failures), 1)
+
+
+class CampaignD3Test(unittest.TestCase):
+    def campaign(self, root: Path) -> Campaign:
+        campaign = Campaign.__new__(Campaign)
+        campaign.raw = root / "raw"
+        campaign.artifacts = root / "artifacts"
+        campaign.raw.mkdir()
+        campaign.api_write_attempts = 7
+        campaign.receipts = {}
+
+        def receipt(scenario, status, reason, **outcome):
+            campaign.receipts[scenario] = {
+                "scenario_id": scenario, "status": status, "reason": reason, **outcome,
+            }
+
+        campaign.receipt = receipt
+        return campaign
+
+    def test_d3_blocked_contender_has_zero_deltas_and_post_release_attempts_may_be_nonzero(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            campaign = self.campaign(Path(temporary))
+
+            def blocked_contender(*_args, **kwargs):
+                telemetry = Path(kwargs["env_override"]["YNAB_WRITE_ATTEMPT_TELEMETRY_FILE"])
+                self.assertTrue(telemetry.is_file())
+                self.assertEqual(telemetry.read_text(), "")
+                return 1, "Another process already holds the live lock"
+
+            campaign.run_sync = blocked_contender
+
+            def run_live_counted(*_args, **kwargs):
+                self.assertIsNone(
+                    kwargs["env_override"]["YNAB_WRITE_ATTEMPT_TELEMETRY_FILE"]
+                )
+                campaign.api_write_attempts += 2
+                return 0, "completed", 2
+
+            campaign.run_live_counted = run_live_counted
+
+            campaign._d3()
+
+            receipt = campaign.receipts["D3-single-writer-lock"]
+            self.assertEqual(receipt["status"], "PASS")
+            self.assertEqual(receipt["blocked_api_write_attempt_delta"], 0)
+            self.assertTrue(receipt["blocked_sqlite_database_family_unchanged"])
+            self.assertEqual(receipt["blocked_sqlite_operation_attempt_row_delta"], 0)
+            self.assertEqual(receipt["post_release_operation_attempts"], 2)
+            self.assertEqual(receipt["attempts"], 2)
+            observation = json.loads((
+                campaign.artifacts / "scenarios/D3-single-writer-lock/lock-observation.json"
+            ).read_text())
+            self.assertEqual(observation["blocked_contender"]["api_write_attempt_delta"], 0)
+            self.assertTrue(
+                observation["blocked_contender"]["sqlite_database_family_unchanged"]
+            )
+            self.assertEqual(
+                observation["blocked_contender"]["sqlite_operation_attempt_row_delta"], 0,
+            )
+            self.assertEqual(observation["post_release_process"]["operation_attempt_rows"], 2)
+
+    def test_d3_fails_if_blocked_contender_records_mutation_attempts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            campaign = self.campaign(Path(temporary))
+
+            def mutating_blocked_contender(*_args, **kwargs):
+                telemetry = Path(kwargs["env_override"]["YNAB_WRITE_ATTEMPT_TELEMETRY_FILE"])
+                with telemetry.open("a", encoding="utf-8") as records:
+                    records.write(
+                        json.dumps({"method": "POST", "resource_class": "transactions"})
+                        + "\n"
+                    )
+                return 1, "Another process already holds the live lock"
+
+            campaign.run_sync = mutating_blocked_contender
+            campaign.run_live_counted = lambda *_args, **_kwargs: (0, "completed", 0)
+
+            campaign._d3()
+
+            receipt = campaign.receipts["D3-single-writer-lock"]
+            self.assertEqual(receipt["status"], "FAIL")
+            self.assertEqual(receipt["blocked_api_write_attempt_delta"], 1)
+            self.assertTrue(receipt["blocked_sqlite_database_family_unchanged"])
+            self.assertEqual(receipt["blocked_sqlite_operation_attempt_row_delta"], 0)
+            self.assertEqual(receipt["assertions"][1]["status"], "FAIL")
+            self.assertEqual(receipt["assertions"][2]["status"], "PASS")
+            self.assertEqual(receipt["assertions"][3]["status"], "PASS")
+            self.assertEqual(campaign.api_write_attempts, 8)
+
+    def test_d3_fails_if_blocked_contender_creates_other_sqlite_table(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            campaign = self.campaign(Path(temporary))
+
+            def schema_creating_blocked_contender(_scenario, _dry, state, **_kwargs):
+                with sqlite3.connect(state) as connection:
+                    connection.execute("CREATE TABLE sync_runs (id INTEGER PRIMARY KEY)")
+                return 1, "Another process already holds the live lock"
+
+            campaign.run_sync = schema_creating_blocked_contender
+            campaign.run_live_counted = lambda *_args, **_kwargs: (0, "completed", 0)
+
+            campaign._d3()
+
+            receipt = campaign.receipts["D3-single-writer-lock"]
+            self.assertEqual(receipt["status"], "FAIL")
+            self.assertFalse(receipt["blocked_sqlite_database_family_unchanged"])
+            self.assertEqual(receipt["blocked_sqlite_operation_attempt_row_delta"], 0)
+            self.assertEqual(receipt["assertions"][2]["status"], "FAIL")
+            self.assertEqual(receipt["assertions"][3]["status"], "PASS")
+
+    def test_d3_fails_if_blocked_contender_mutates_other_sqlite_table(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            campaign = self.campaign(Path(temporary))
+            state = campaign.raw / "D3-single-writer-lock.db"
+            with sqlite3.connect(state) as connection:
+                connection.execute("CREATE TABLE sync_cursors (value TEXT)")
+
+            def mutating_blocked_contender(*_args, **_kwargs):
+                with sqlite3.connect(state) as connection:
+                    connection.execute("INSERT INTO sync_cursors VALUES ('changed')")
+                return 1, "Another process already holds the live lock"
+
+            campaign.run_sync = mutating_blocked_contender
+            campaign.run_live_counted = lambda *_args, **_kwargs: (0, "completed", 0)
+
+            campaign._d3()
+
+            receipt = campaign.receipts["D3-single-writer-lock"]
+            self.assertEqual(receipt["status"], "FAIL")
+            self.assertFalse(receipt["blocked_sqlite_database_family_unchanged"])
+            self.assertEqual(receipt["blocked_sqlite_operation_attempt_row_delta"], 0)
+
+    def test_operation_attempt_count_is_zero_before_schema_exists(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            state = Path(temporary) / "state.db"
+            self.assertEqual(Campaign.operation_attempt_count(state), 0)
+            sqlite3.connect(state).close()
+            self.assertEqual(Campaign.operation_attempt_count(state), 0)
+
+    def test_write_attempt_telemetry_rejects_unsanitized_schema(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            telemetry = Path(temporary) / "attempts.jsonl"
+            telemetry.write_text(json.dumps({
+                "method": "POST", "resource_class": "transactions",
+                "url": "https://example.invalid/private-id",
+            }) + "\n")
+
+            with self.assertRaisesRegex(
+                QaSafetyError, "Write-attempt telemetry contained an unsafe record",
+            ):
+                Campaign.write_attempt_telemetry_count(telemetry)
 
 
 class CampaignFinalMetadataTest(unittest.TestCase):

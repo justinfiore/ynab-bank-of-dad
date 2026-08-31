@@ -8,6 +8,7 @@ qa/artifacts contains stable references only and is safe for final packaging.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -16,6 +17,7 @@ import sqlite3
 import subprocess
 import sys
 import fcntl
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -54,6 +56,7 @@ TOKEN_ENV = {
 PARENT = "Jorsten's Plan"
 CHILDREN = ("Jorsten Jr's Plan", "Borsten's Plan", "Thorsten's Plan")
 COUNTS = {"creates": 0, "updates": 0, "deletes": 0}
+WRITE_ATTEMPT_TELEMETRY_ENV = "YNAB_WRITE_ATTEMPT_TELEMETRY_FILE"
 
 
 def write_json(path: Path, value: Any) -> None:
@@ -141,8 +144,53 @@ class Campaign:
             except sqlite3.OperationalError:
                 return []
 
+    @staticmethod
+    def operation_attempt_count(state_db: Path) -> int:
+        """Return zero until the state database and operation-attempt schema exist."""
+        return len(Campaign.attempt_rows(state_db))
+
+    @staticmethod
+    def sqlite_family_fingerprints(state_db: Path) -> dict[str, str | None]:
+        """Fingerprint the database and standard sidecars without exposing their content."""
+        fingerprints = {}
+        for suffix in ("", "-journal", "-wal", "-shm"):
+            member = Path(str(state_db) + suffix)
+            try:
+                if member.is_symlink():
+                    raise QaSafetyError("SQLite database family contained an unsafe member")
+                if member.exists():
+                    if not member.is_file():
+                        raise QaSafetyError("SQLite database family contained an unsafe member")
+                    fingerprints[suffix] = hashlib.sha256(member.read_bytes()).hexdigest()
+                else:
+                    fingerprints[suffix] = None
+            except OSError as error:
+                raise QaSafetyError("SQLite database family could not be fingerprinted safely") from error
+        return fingerprints
+
+    @staticmethod
+    def write_attempt_telemetry_count(path: Path) -> int:
+        """Count only the HTTP client's fixed, sanitized JSONL telemetry schema."""
+        count = 0
+        try:
+            with path.open(encoding="utf-8") as records:
+                for line in records:
+                    record = json.loads(line)
+                    if (
+                        not isinstance(record, dict)
+                        or set(record) != {"method", "resource_class"}
+                        or record["method"] not in {"POST", "PUT", "PATCH", "DELETE"}
+                        or not isinstance(record["resource_class"], str)
+                        or re.fullmatch(r"[a-z_]+", record["resource_class"]) is None
+                    ):
+                        raise QaSafetyError("Write-attempt telemetry contained an unsafe record")
+                    count += 1
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            raise QaSafetyError("Write-attempt telemetry could not be read safely") from error
+        return count
+
     def run_live_counted(self, scenario: str, state_db: Path, *, max_cycles: int = 1,
-                         env_override: dict[str, str] | None = None) -> tuple[int, str, int]:
+                         env_override: dict[str, str | None] | None = None) -> tuple[int, str, int]:
         before = self.attempt_rows(state_db)
         rc, output = self.run_sync(scenario, False, state_db, max_cycles=max_cycles,
                                    env_override=env_override)
@@ -305,7 +353,7 @@ class Campaign:
         return result
 
     def run_sync(self, scenario: str, dry: bool, state_db: Path, max_cycles: int = 1,
-                 env_override: dict[str, str] | None = None) -> tuple[int, str]:
+                 env_override: dict[str, str | None] | None = None) -> tuple[int, str]:
         # This discovery is intentionally immediately before the one-cycle process.
         parent_plans = self._plans(PARENT)
         for identity in self.identities.values():
@@ -317,7 +365,11 @@ class Campaign:
             *( ["--dry-run"] if dry else [] ), "--max-cycles", str(max_cycles),
         ])]
         environment = dict(os.environ)
-        environment.update(env_override or {})
+        for name, value in (env_override or {}).items():
+            if value is None:
+                environment.pop(name, None)
+            else:
+                environment[name] = value
         completed = subprocess.run(command, cwd=REPO_ROOT, env=environment, text=True,
                                    capture_output=True, check=False)
         output = safe_text(completed.stdout + completed.stderr, self.secrets)
@@ -961,23 +1013,81 @@ class Campaign:
         state = self.raw / f"{scenario}.db"
         lock_path = Path(str(state) + ".lock")
         lock_path.parent.mkdir(parents=True, exist_ok=True)
+        telemetry_directory = self.artifacts / "scenarios" / scenario
+        telemetry_directory.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=telemetry_directory,
+            prefix="blocked-write-attempts-", suffix=".jsonl", delete=False,
+        ) as telemetry_file:
+            telemetry_path = Path(telemetry_file.name)
+        blocked_api_before = self.write_attempt_telemetry_count(telemetry_path)
+        blocked_sqlite_before = self.operation_attempt_count(state)
+        blocked_sqlite_family_before = self.sqlite_family_fingerprints(state)
         with lock_path.open("a+") as handle:
             fcntl.lockf(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            blocked_rc, blocked_log = self.run_sync(scenario, False, state)
+            blocked_rc, blocked_log = self.run_sync(
+                scenario, False, state,
+                env_override={WRITE_ATTEMPT_TELEMETRY_ENV: str(telemetry_path)},
+            )
             fcntl.lockf(handle, fcntl.LOCK_UN)
-        released_rc, released_log, attempts = self.run_live_counted(scenario, state)
+        blocked_api_delta = self.write_attempt_telemetry_count(telemetry_path) - blocked_api_before
+        self.api_write_attempts += blocked_api_delta
+        blocked_sqlite_family_after = self.sqlite_family_fingerprints(state)
+        blocked_sqlite_family_unchanged = (
+            blocked_sqlite_family_after == blocked_sqlite_family_before
+        )
+        blocked_sqlite_delta = self.operation_attempt_count(state) - blocked_sqlite_before
+        released_rc, _released_log, post_release_attempts = self.run_live_counted(
+            scenario, state, env_override={WRITE_ATTEMPT_TELEMETRY_ENV: None},
+        )
         blocked = blocked_rc != 0 and "already holds the live lock" in blocked_log
         released = released_rc == 0
         write_json(self.artifacts / "scenarios" / scenario / "lock-observation.json", {
-            "concurrent_process": "BLOCKED BEFORE API/SQLITE MUTATION" if blocked else "UNEXPECTED",
-            "post_release_process": "PASS" if released else "FAIL", "mutation_attempts": attempts,
+            "blocked_contender": {
+                "lock_rejection": "RECOGNIZED" if blocked else "NOT_RECOGNIZED",
+                "api_write_attempt_delta": blocked_api_delta,
+                "sqlite_database_family_unchanged": blocked_sqlite_family_unchanged,
+                "sqlite_database_family_members_before": sum(
+                    value is not None for value in blocked_sqlite_family_before.values()
+                ),
+                "sqlite_database_family_members_after": sum(
+                    value is not None for value in blocked_sqlite_family_after.values()
+                ),
+                "sqlite_operation_attempt_row_delta": blocked_sqlite_delta,
+                "write_attempt_telemetry": "SANITIZED_JSONL",
+                "write_attempt_telemetry_file": telemetry_path.name,
+            },
+            "post_release_process": {
+                "result": "PASS" if released else "FAIL",
+                "operation_attempt_rows": post_release_attempts,
+            },
         })
-        passed = blocked and released and attempts == 0
+        sqlite_safe = blocked_sqlite_family_unchanged and blocked_sqlite_delta == 0
+        passed = blocked and blocked_api_delta == 0 and sqlite_safe and released
         self.receipt(scenario, "PASS" if passed else "FAIL",
                      "A concurrent live process was rejected before mutation and a post-release max-cycles=1 run succeeded.",
-                     dry="PASS", live="PASS" if passed else "FAIL", api="ZERO MUTATIONS",
-                     sqlite="PASS" if passed else "FAIL", attempts=0,
-                     links=["live-run.log", "lock-observation.json"])
+                     dry="PASS", live="PASS" if released else "FAIL",
+                     api="PASS" if blocked_api_delta == 0 else "FAIL",
+                     sqlite="PASS" if sqlite_safe else "FAIL",
+                     attempts=blocked_api_delta + post_release_attempts,
+                     assertions=[
+                         {"name": "Concurrent live lock rejection recognized",
+                          "status": "PASS" if blocked else "FAIL"},
+                         {"name": "Blocked contender API write-attempt delta is zero",
+                          "status": "PASS" if blocked_api_delta == 0 else "FAIL"},
+                         {"name": "Blocked contender SQLite database family is unchanged",
+                          "status": "PASS" if blocked_sqlite_family_unchanged else "FAIL"},
+                         {"name": "Blocked contender SQLite operation-attempt row delta is zero",
+                          "status": "PASS" if blocked_sqlite_delta == 0 else "FAIL"},
+                         {"name": "Post-release max-cycles=1 run exits successfully",
+                          "status": "PASS" if released else "FAIL"},
+                     ],
+                     blocked_api_write_attempt_delta=blocked_api_delta,
+                     blocked_sqlite_database_family_unchanged=blocked_sqlite_family_unchanged,
+                     blocked_sqlite_operation_attempt_row_delta=blocked_sqlite_delta,
+                     post_release_operation_attempts=post_release_attempts,
+                     links=["live-run.log", "lock-observation.json",
+                            telemetry_path.name])
 
     def _d4(self) -> None:
         scenario = "D4-controlled-continuous"
