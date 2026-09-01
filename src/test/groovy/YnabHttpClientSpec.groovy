@@ -423,11 +423,67 @@ class YnabHttpClientSpec extends Specification {
 
         then:
         waits == [Duration.ofSeconds(3)]
-        infos[0].contains('retry after PT3S')
+        infos[0].contains('retry after 3S')
+        !infos[0].contains('PT3S')
         infos[0].contains('headers=Retry-After')
         !infos[0].contains('access-token-secret')
         !infos[0].contains('header-secret')
         !infos[0].contains('Authorization: Bearer')
+    }
+
+    def "rate limit logs identify budget name token slots hourly call counts and readable delays"() {
+        given:
+        server.enqueue(new MockResponse().setResponseCode(429).setHeader('Retry-After', '3600'))
+        server.enqueue(new MockResponse().setResponseCode(429).setHeader('Retry-After', '3600'))
+        server.enqueue(new MockResponse().setResponseCode(200).setBody('{"data":{}}'))
+        List<Duration> waits = []
+        List<String> infos = []
+        List<String> warnings = []
+        def client = new YnabHttpClient(server.url('/').toString(), 't1,t2',
+            HttpClient.newHttpClient(), Duration.ofSeconds(7), null,
+            { Duration delay -> waits << delay }, { Instant.EPOCH }, null,
+            { String msg -> infos << msg }, { String msg -> warnings << msg })
+        client.registerBudgetName('budget-1', 'Fiores')
+
+        when:
+        client.getJson('/v1/plans/budget-1/transactions')
+
+        then:
+        waits == [Duration.ofHours(1)]
+        infos == [
+            "YNAB GET transactions for budget 'Fiores' rate limited on token 1 of 2; API calls in last hour by token: token 1=1, token 2=0; retry after 1H; headers=Retry-After",
+            "YNAB GET transactions for budget 'Fiores' rate limited on token 2 of 2; API calls in last hour by token: token 1=1, token 2=1; retry after 1H; headers=Retry-After",
+        ]
+        warnings == [
+            "YNAB GET transactions for budget 'Fiores' was rate limited on tokens 1, 2 of 2; " +
+                'API calls in last hour by token: token 1=1, token 2=1; retrying after 1H'
+        ]
+        !((infos + warnings).join('\n').contains('PT1H'))
+        !((infos + warnings).join('\n').contains('budget-1'))
+        !((infos + warnings).join('\n').contains('t1'))
+        !((infos + warnings).join('\n').contains('t2'))
+    }
+
+    def "hourly API call count excludes attempts older than one hour"() {
+        given:
+        server.enqueue(new MockResponse().setResponseCode(200).setBody('{"data":{}}'))
+        server.enqueue(new MockResponse().setResponseCode(429))
+        server.enqueue(new MockResponse().setResponseCode(200).setBody('{"data":{}}'))
+        Instant now = Instant.EPOCH
+        List<String> infos = []
+        def client = new YnabHttpClient(server.url('/').toString(), 't1,t2',
+            HttpClient.newHttpClient(), Duration.ofSeconds(7), null,
+            { Duration ignored -> }, { now }, null, { String msg -> infos << msg })
+        client.registerBudgetName('budget-1', 'Fiores')
+        client.getJson('/v1/plans/budget-1/transactions')
+
+        when:
+        now = now.plusSeconds(3601)
+        client.getJson('/v1/plans/budget-1/transactions')
+
+        then:
+        infos.size() == 1
+        infos[0].contains('API calls in last hour by token: token 1=1, token 2=0')
     }
 
     def "second token succeeds without sleep and stays sticky"() {

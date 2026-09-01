@@ -26,13 +26,17 @@ class YnabBudgetRepository {
         def response = ynabClient.getJson('/v1/plans')
         List budgets = (response?.data?.plans ?: []) as List
         log.debug('Fetched {} budgets from YNAB /v1/plans', budgets.size())
-        budgets.collect { budget ->
+        List<BudgetSummary> summaries = budgets.collect { budget ->
             new BudgetSummary(
                 budget.id as String,
                 budget.name as String,
                 budgetTimestampFormat.parse(budget.last_modified_on as String)
             )
         }
+        summaries.each { BudgetSummary budget ->
+            ynabClient.registerBudgetName(budget.id, budget.name)
+        }
+        summaries
     }
 
     String getLatestBudgetId(String budgetName) {

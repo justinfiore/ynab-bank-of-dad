@@ -59,7 +59,10 @@ class YnabHttpClient {
     final Closure clock
     final Path writeAttemptTelemetryPath
     final Closure infoLogger
+    final Closure warningLogger
     private int tokenIndex = 0
+    private final Map<String, String> budgetNamesById = [:]
+    private final List<Deque<Instant>> apiCallTimesByToken
 
     YnabHttpClient(String baseUrl, String accessToken) {
         this(baseUrl, accessToken, HttpClient.newBuilder()
@@ -98,6 +101,13 @@ class YnabHttpClient {
     YnabHttpClient(String baseUrl, String accessToken, HttpClient httpClient, Duration requestTimeout,
                    Integer maxRateLimitRetries, Closure sleeper, Closure clock,
                    Path writeAttemptTelemetryPath, Closure infoLogger) {
+        this(baseUrl, accessToken, httpClient, requestTimeout, maxRateLimitRetries, sleeper, clock,
+            writeAttemptTelemetryPath, infoLogger, null)
+    }
+
+    YnabHttpClient(String baseUrl, String accessToken, HttpClient httpClient, Duration requestTimeout,
+                   Integer maxRateLimitRetries, Closure sleeper, Closure clock,
+                   Path writeAttemptTelemetryPath, Closure infoLogger, Closure warningLogger) {
         if (maxRateLimitRetries != null && maxRateLimitRetries < 0) {
             throw new IllegalArgumentException('maxRateLimitRetries must be non-negative')
         }
@@ -113,6 +123,8 @@ class YnabHttpClient {
         this.clock = clock
         this.writeAttemptTelemetryPath = writeAttemptTelemetryPath
         this.infoLogger = infoLogger
+        this.warningLogger = warningLogger
+        this.apiCallTimesByToken = (0..<this.accessTokens.size()).collect { new ArrayDeque<Instant>() }
     }
 
     static List<String> parseAccessTokens(String raw) {
@@ -127,6 +139,12 @@ class YnabHttpClient {
             }
         }
         return new ArrayList<>(unique)
+    }
+
+    void registerBudgetName(String budgetId, String budgetName) {
+        if (budgetId && budgetName) {
+            budgetNamesById[budgetId] = budgetName
+        }
     }
 
     def getJson(String path) {
@@ -193,10 +211,13 @@ class YnabHttpClient {
         HttpResponse<String> response
         int backoffCycles = 0
         String resourceClass = resourceClass(path)
+        String budgetName = budgetName(path)
         Set<Integer> triedThisCall = new LinkedHashSet<>()
         List<TokenDelay> delaysThisCycle = []
         while (true) {
             recordWriteAttempt(method, resourceClass)
+            Instant attemptTime = currentInstant()
+            recordApiCall(tokenIndex, attemptTime)
             HttpRequest request = buildRequest(method, path, jsonBody)
             try {
                 response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
@@ -210,7 +231,8 @@ class YnabHttpClient {
                 break
             }
             RateLimitObservation observation = inspectRateLimit(response, currentInstant())
-            emitInfo(rateLimitInfoMessage(method, resourceClass, observation))
+            emitInfo(rateLimitInfoMessage(method, resourceClass, budgetName, observation,
+                currentInstant()))
             triedThisCall.add(tokenIndex)
             delaysThisCycle << new TokenDelay(tokenIndex, observation.retryDelay)
             Integer nextToken = nextUnusedTokenIndex(triedThisCall)
@@ -222,7 +244,8 @@ class YnabHttpClient {
                 throw new IllegalStateException("YNAB ${method} ${resourceClass} failed with status 429")
             }
             Duration delay = backoffDelay(delaysThisCycle, backoffCycles + 1)
-            log.warn('YNAB {} {} was rate limited; retrying after {}', method, resourceClass, delay)
+            emitWarning(rateLimitWarningMessage(method, resourceClass, budgetName,
+                delaysThisCycle, delay, currentInstant()))
             try {
                 sleeper.call(delay)
             } catch (InterruptedException e) {
@@ -275,6 +298,25 @@ class YnabHttpClient {
             return parsed.min()
         }
         return cap(Duration.ofSeconds(5L * backoffNumber))
+    }
+
+    private void recordApiCall(int index, Instant now) {
+        Deque<Instant> calls = apiCallTimesByToken[index]
+        purgeOldApiCalls(calls, now)
+        calls.addLast(now)
+    }
+
+    private int apiCallsInLastHour(int index, Instant now) {
+        Deque<Instant> calls = apiCallTimesByToken[index]
+        purgeOldApiCalls(calls, now)
+        calls.size()
+    }
+
+    private static void purgeOldApiCalls(Deque<Instant> calls, Instant now) {
+        Instant cutoff = now.minus(Duration.ofHours(1))
+        while (!calls.isEmpty() && !calls.peekFirst().isAfter(cutoff)) {
+            calls.removeFirst()
+        }
     }
 
     private void recordWriteAttempt(String method, String resourceClass) {
@@ -436,16 +478,19 @@ class YnabHttpClient {
         }
     }
 
-    private String rateLimitInfoMessage(String method, String resourceClass, RateLimitObservation observation) {
+    private String rateLimitInfoMessage(String method, String resourceClass, String budgetName,
+                                        RateLimitObservation observation, Instant now) {
         int slot = tokenIndex + 1
         int total = accessTokens.size()
-        String prefix = "YNAB ${method} ${resourceClass} rate limited on token ${slot} of ${total}"
+        String budgetContext = budgetName ? " for budget '${budgetName}'" : ''
+        String prefix = "YNAB ${method} ${resourceClass}${budgetContext} rate limited on token ${slot} of ${total}"
         List<String> parts = [prefix]
+        parts << "API calls in last hour by token: ${apiCallCountsMessage(now)}"
         if (observation.remaining != null) {
             parts << "remaining=${observation.remaining}"
         }
         if (observation.retryDelay != null) {
-            parts << "retry after ${observation.retryDelay}"
+            parts << "retry after ${formatDuration(observation.retryDelay)}"
         }
         if (observation.headerNames) {
             parts << "headers=${observation.headerNames.join(',')}"
@@ -456,12 +501,48 @@ class YnabHttpClient {
         return parts.join('; ')
     }
 
+    private String rateLimitWarningMessage(String method, String resourceClass, String budgetName,
+                                           List<TokenDelay> tokenDelays, Duration delay, Instant now) {
+        List<Integer> indexes = tokenDelays.collect { it.tokenIndex }.unique()
+        String slots = indexes.collect { (it + 1).toString() }.join(', ')
+        String budgetContext = budgetName ? " for budget '${budgetName}'" : ''
+        "YNAB ${method} ${resourceClass}${budgetContext} was rate limited on tokens ${slots} of ${accessTokens.size()}; " +
+            "API calls in last hour by token: ${apiCallCountsMessage(now)}; retrying after ${formatDuration(delay)}"
+    }
+
+    private String apiCallCountsMessage(Instant now) {
+        (0..<accessTokens.size()).collect {
+            "token ${it + 1}=${apiCallsInLastHour(it, now)}"
+        }.join(', ')
+    }
+
+    private static String formatDuration(Duration duration) {
+        duration.toString().replaceFirst('^PT', '')
+    }
+
     private void emitInfo(String message) {
         if (infoLogger != null) {
             infoLogger.call(message)
         } else {
             log.info(message)
         }
+    }
+
+    private void emitWarning(String message) {
+        if (warningLogger != null) {
+            warningLogger.call(message)
+        } else {
+            log.warn(message)
+        }
+    }
+
+    private String budgetName(String path) {
+        List<String> segments = (path ?: '').split(/[?\/]/).findAll { it }
+        int plansIndex = segments.indexOf('plans')
+        if (plansIndex < 0 || plansIndex + 1 >= segments.size()) {
+            return null
+        }
+        budgetNamesById[segments[plansIndex + 1]]
     }
 
     private static String firstHeaderIgnoreCase(HttpResponse<String> response, String name) {

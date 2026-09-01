@@ -9,6 +9,10 @@ import groovy.json.JsonSlurper
 import com.github.tomakehurst.wiremock.WireMockServer
 import spock.lang.Specification
 
+import java.net.http.HttpClient
+import java.time.Duration
+import java.time.Instant
+
 import static com.github.tomakehurst.wiremock.client.WireMock.*
 
 class YnabBudgetRepositorySpec extends Specification {
@@ -74,6 +78,37 @@ class YnabBudgetRepositorySpec extends Specification {
 
         expect:
         buildRepository().getLatestBudgetId('Configured Budget') == 'budget-new'
+    }
+
+    def "budget discovery supplies the budget name used in rate limit logs"() {
+        given:
+        stubFor(get(urlEqualTo('/v1/plans'))
+            .willReturn(aResponse().withStatus(200).withHeader('Content-Type', 'application/json')
+                .withBody('{"data":{"plans":[{"id":"budget-1","name":"Fiores","last_modified_on":"2025-07-01T12:00:00Z"}]}}')))
+        stubFor(get(urlPathEqualTo('/v1/plans/budget-1/transactions'))
+            .inScenario('transaction rate limit')
+            .whenScenarioStateIs(com.github.tomakehurst.wiremock.stubbing.Scenario.STARTED)
+            .willSetStateTo('retried')
+            .willReturn(aResponse().withStatus(429)))
+        stubFor(get(urlPathEqualTo('/v1/plans/budget-1/transactions'))
+            .inScenario('transaction rate limit')
+            .whenScenarioStateIs('retried')
+            .willReturn(aResponse().withStatus(200).withHeader('Content-Type', 'application/json')
+                .withBody('{"data":{"transactions":[],"server_knowledge":1}}')))
+        List<String> infos = []
+        def client = new YnabHttpClient("http://localhost:${wireMockServer.port()}", 'token',
+            HttpClient.newHttpClient(), Duration.ofSeconds(7), null,
+            { Duration ignored -> }, { Instant.EPOCH }, null, { String message -> infos << message })
+        def repository = new YnabBudgetRepository(client)
+
+        when:
+        String budgetId = repository.getLatestBudgetId('Fiores')
+        repository.getTransactions(budgetId, 30)
+
+        then:
+        infos.size() == 1
+        infos[0].contains("for budget 'Fiores' rate limited on token 1 of 1")
+        !infos[0].contains('budget-1')
     }
 
     def "getCategoryInfoByCategoryName preserves names and defaults missing balances to zero"() {
