@@ -68,7 +68,7 @@ Before enabling live parent/child syncing, read [PARENT_TRANSACTION_RECONCILIATI
 ### Allowance CLI
 - Java JDK 25
 - `JAVA_HOME` pointing at your JDK 25 installation
-- `YNAB_ACCESS_TOKEN`
+- `YNAB_ACCESS_TOKEN` (single token, or comma-separated personal access tokens for the same YNAB account)
 - a config file in the repository format (`config.yaml.example` is the starting template)
 - network access to `https://api.ynab.com`
 
@@ -77,6 +77,7 @@ Before enabling live parent/child syncing, read [PARENT_TRANSACTION_RECONCILIATI
 - `JAVA_HOME` pointing at your JDK 25 installation
 - `YNAB_PARENT_TOKEN`
 - one token env var per configured child budget (for example `YNAB_CHILD_ONE_TOKEN`, `YNAB_CHILD_TWO_TOKEN`)
+- each token env var may be a single token or a comma-separated list; on HTTP 429 the client switches to the next token immediately and sleeps only after every token for that account is rate-limited
 - a config file containing a valid `sync:` section
 - network access to `https://api.ynab.com`
 - a writable SQLite state path such as `syncstate.db`

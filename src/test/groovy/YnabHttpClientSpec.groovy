@@ -362,6 +362,151 @@ class YnabHttpClientSpec extends Specification {
         403           | 1                | 0
     }
 
+    def "parseAccessTokens splits CSV, trims, drops empties, and de-duplicates"() {
+        expect:
+        YnabHttpClient.parseAccessTokens(raw) == expected
+
+        where:
+        raw                  | expected
+        'token'              | ['token']
+        'token-a, token-b'   | ['token-a', 'token-b']
+        't1,t1, t2,, t1'     | ['t1', 't2']
+        ', ,'                | []
+        null                 | []
+        '  '                 | []
+    }
+
+    def "blank CSV constructor fails without leaking a token value"() {
+        when:
+        new YnabHttpClient(server.url('/').toString(), ', ,')
+
+        then:
+        def ex = thrown(IllegalArgumentException)
+        ex.message == 'access tokens must not be empty'
+    }
+
+    def "documented 429 body without remaining fields logs absence then retries"() {
+        given:
+        server.enqueue(new MockResponse()
+            .setResponseCode(429)
+            .setBody('{"error":{"id":"429","name":"too_many_requests","detail":"Too many requests"}}'))
+        server.enqueue(new MockResponse().setResponseCode(200).setBody('{"data":{}}'))
+        List<Duration> waits = []
+        List<String> infos = []
+        def client = rateLimitClient('token', waits, infos)
+
+        when:
+        client.getJson('/v1/plans')
+
+        then:
+        waits == [Duration.ofSeconds(5)]
+        infos.size() == 1
+        infos[0].contains('YNAB GET plans rate limited on token 1 of 1')
+        infos[0].contains('no remaining/reset metadata')
+        !infos[0].contains('token-secret')
+        !infos[0].contains('too_many_requests')
+    }
+
+    def "INFO log includes Retry-After delay without Authorization values"() {
+        given:
+        server.enqueue(new MockResponse()
+            .setResponseCode(429)
+            .setHeader('Retry-After', '3')
+            .setHeader('Authorization', 'Bearer header-secret'))
+        server.enqueue(new MockResponse().setResponseCode(200).setBody('{"data":{}}'))
+        List<Duration> waits = []
+        List<String> infos = []
+        def client = rateLimitClient('access-token-secret', waits, infos)
+
+        when:
+        client.getJson('/v1/plans')
+
+        then:
+        waits == [Duration.ofSeconds(3)]
+        infos[0].contains('retry after PT3S')
+        infos[0].contains('headers=Retry-After')
+        !infos[0].contains('access-token-secret')
+        !infos[0].contains('header-secret')
+        !infos[0].contains('Authorization: Bearer')
+    }
+
+    def "second token succeeds without sleep and stays sticky"() {
+        given:
+        server.enqueue(new MockResponse().setResponseCode(429).setBody('{"error":{"id":"429"}}'))
+        server.enqueue(new MockResponse().setResponseCode(200).setBody('{"data":{"ok":1}}'))
+        server.enqueue(new MockResponse().setResponseCode(200).setBody('{"data":{"ok":2}}'))
+        List<Duration> waits = []
+        List<String> infos = []
+        def client = rateLimitClient('t1, t2', waits, infos)
+
+        when:
+        def first = client.getJson('/v1/plans')
+        def firstAuth = server.takeRequest().getHeader('Authorization')
+        def secondAuth = server.takeRequest().getHeader('Authorization')
+        def second = client.getJson('/v1/plans')
+        def thirdAuth = server.takeRequest().getHeader('Authorization')
+
+        then:
+        first.data.ok == 1
+        second.data.ok == 2
+        waits.isEmpty()
+        firstAuth == 'Bearer t1'
+        secondAuth == 'Bearer t2'
+        thirdAuth == 'Bearer t2'
+        infos[0].contains('token 1 of 2')
+        !infos[0].contains('t1')
+    }
+
+    def "token rotation does not count toward maxRateLimitRetries"() {
+        given:
+        server.enqueue(new MockResponse().setResponseCode(429))
+        server.enqueue(new MockResponse().setResponseCode(200).setBody('{"data":{}}'))
+        List<Duration> waits = []
+        def client = new YnabHttpClient(server.url('/').toString(), 't1,t2',
+            HttpClient.newHttpClient(), Duration.ofSeconds(7), 0,
+            { Duration delay -> waits << delay }, { Instant.EPOCH })
+
+        when:
+        client.getJson('/v1/plans')
+
+        then:
+        waits.isEmpty()
+        server.requestCount == 2
+    }
+
+    def "all tokens 429 then linear backoff retries from first token"() {
+        given:
+        server.enqueue(new MockResponse().setResponseCode(429))
+        server.enqueue(new MockResponse().setResponseCode(429))
+        server.enqueue(new MockResponse().setResponseCode(200).setBody('{"data":{}}'))
+        List<Duration> waits = []
+        def client = rateLimitClient('t1,t2', waits)
+
+        when:
+        client.postJson('/v1/plans/private-plan/transactions', [request: 'same'])
+        def auths = (1..3).collect { server.takeRequest().getHeader('Authorization') }
+
+        then:
+        waits == [Duration.ofSeconds(5)]
+        auths == ['Bearer t1', 'Bearer t2', 'Bearer t1']
+    }
+
+    def "non-429 4xx does not rotate to the next token"() {
+        given:
+        server.enqueue(new MockResponse().setResponseCode(401).setBody('{"error":{"id":"401"}}'))
+        List<Duration> waits = []
+        def client = rateLimitClient('t1,t2', waits)
+
+        when:
+        client.getJson('/v1/plans')
+
+        then:
+        def ex = thrown(IllegalStateException)
+        ex.message == 'YNAB GET plans failed with status 401'
+        waits.isEmpty()
+        server.requestCount == 1
+    }
+
     def "timeouts surface a clear error with configured duration"() {
         given:
         def timeout = Duration.ofSeconds(7)
@@ -423,6 +568,13 @@ class YnabHttpClientSpec extends Specification {
 
     private YnabHttpClient buildClient() {
         new YnabHttpClient(server.url('/').toString(), 'token')
+    }
+
+    private YnabHttpClient rateLimitClient(String tokens, List waits, List infos = null) {
+        new YnabHttpClient(server.url('/').toString(), tokens,
+            HttpClient.newHttpClient(), Duration.ofSeconds(7), null,
+            { Duration delay -> waits << delay }, { Instant.EPOCH }, null,
+            infos == null ? null : { String msg -> infos << msg })
     }
 
     private static void issueRequest(YnabHttpClient client, String method) {

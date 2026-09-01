@@ -500,6 +500,7 @@ sync:
 Guidance:
 - `budgetName` must exactly match the parent budget name in YNAB
 - `tokenEnvVarName` is the **name** of the env var, not the token value itself
+- that env var may hold a single token or a comma-separated list (`token-a, token-b`)
 - do not put raw tokens in YAML
 
 ### `sync.childBudgets`
