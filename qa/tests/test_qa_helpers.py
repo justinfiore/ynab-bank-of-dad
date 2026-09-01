@@ -22,6 +22,7 @@ from lib.ynab_qa_client import (
     QaSafetyError,
     YnabQaClient,
     cleanup_pacing_ms,
+    parse_access_tokens,
 )
 
 
@@ -197,6 +198,59 @@ class QaClientGuardTest(unittest.TestCase):
                     client._request("GET", "plans")
                 self.assertEqual(str(raised.exception), f"YNAB API returned HTTP {status}")
                 self.assertEqual(urlopen.call_count, 1)
+        self.assertEqual(waits, [])
+
+    def test_parse_access_tokens_csv(self):
+        self.assertEqual(parse_access_tokens("token"), ["token"])
+        self.assertEqual(parse_access_tokens("token-a, token-b"), ["token-a", "token-b"])
+        self.assertEqual(parse_access_tokens("t1,t1, t2,, t1"), ["t1", "t2"])
+        self.assertEqual(parse_access_tokens(", ,"), [])
+
+    def test_csv_tokens_with_spaces_are_accepted(self):
+        client = YnabQaClient("token-a, token-b", IDS)
+        self.assertEqual(client._tokens, ["token-a", "token-b"])
+
+    def test_second_token_succeeds_without_sleep(self):
+        waits = []
+        infos = []
+        client = YnabQaClient("t1, t2", IDS, sleeper=waits.append)
+        with (
+            patch("urllib.request.urlopen", side_effect=[self.rate_limited(), self.response()]) as urlopen,
+            patch("lib.ynab_qa_client.LOGGER.info", side_effect=infos.append),
+        ):
+            self.assertEqual(client._request("GET", "plans"), {"data": {}})
+        self.assertEqual(urlopen.call_count, 2)
+        self.assertEqual(waits, [])
+        auths = [
+            call.args[0].headers["Authorization"]
+            for call in urlopen.call_args_list
+        ]
+        self.assertEqual(auths, ["Bearer t1", "Bearer t2"])
+        self.assertIn("token 1 of 2", infos[0])
+        self.assertIn("no remaining/reset metadata", infos[0])
+        self.assertNotIn("t1", infos[0])
+
+    def test_all_tokens_429_then_linear_backoff(self):
+        waits = []
+        client = YnabQaClient("t1,t2", IDS, sleeper=waits.append)
+        with patch(
+            "urllib.request.urlopen",
+            side_effect=[self.rate_limited(), self.rate_limited(), self.response()],
+        ) as urlopen:
+            client._request("GET", "plans")
+        self.assertEqual(urlopen.call_count, 3)
+        self.assertEqual(waits, [5.0])
+        auths = [call.args[0].headers["Authorization"] for call in urlopen.call_args_list]
+        self.assertEqual(auths, ["Bearer t1", "Bearer t2", "Bearer t1"])
+
+    def test_rotation_does_not_count_toward_retry_limit(self):
+        waits = []
+        client = YnabQaClient("t1,t2", IDS, max_rate_limit_retries=0, sleeper=waits.append)
+        with patch(
+            "urllib.request.urlopen",
+            side_effect=[self.rate_limited(), self.response()],
+        ):
+            self.assertEqual(client._request("GET", "plans"), {"data": {}})
         self.assertEqual(waits, [])
 
     def test_cleanup_pacing_env_defaults_disables_and_rejects_invalid_values(self):

@@ -15,8 +15,8 @@ Before enabling live parent/child syncing, read [PARENT_TRANSACTION_RECONCILIATI
 1. Install Java JDK 25.
 2. Set `JAVA_HOME` to that JDK.
 3. Decide which workflow you are preparing:
-   - allowance CLI: export `YNAB_ACCESS_TOKEN`
-   - parent/child syncer: export `YNAB_PARENT_TOKEN` plus one child token variable per configured child budget
+   - allowance CLI: export `YNAB_ACCESS_TOKEN` (single token or comma-separated list)
+   - parent/child syncer: export `YNAB_PARENT_TOKEN` plus one child token variable per configured child budget (each may be a CSV of tokens)
 
 Linux/macOS example for the allowance CLI:
 

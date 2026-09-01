@@ -44,7 +44,7 @@ class RecordAllowance {
 
     static final void main(String[] args) {
         String accessToken = System.getenv('YNAB_ACCESS_TOKEN')
-        if (StringUtils.isBlank(accessToken)) {
+        if (YnabHttpClient.parseAccessTokens(accessToken).isEmpty()) {
             throw new IllegalArgumentException('environment variable YNAB_ACCESS_TOKEN must be set')
         }
 

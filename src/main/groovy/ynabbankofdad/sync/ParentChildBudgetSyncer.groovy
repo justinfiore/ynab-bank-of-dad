@@ -619,11 +619,11 @@ class ParentChildBudgetSyncer {
         if (!envVarName?.trim()) {
             throw new IllegalArgumentException("${configKey} must not be blank")
         }
-        String token = environment[envVarName]
-        if (!token?.trim()) {
+        List<String> tokens = YnabHttpClient.parseAccessTokens(environment[envVarName])
+        if (!tokens) {
             throw new IllegalArgumentException("Environment variable '${envVarName}' referenced by ${configKey} must be set")
         }
-        token
+        tokens.join(',')
     }
 }
 

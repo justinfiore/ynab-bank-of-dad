@@ -37,7 +37,7 @@ You can create missing categories with `qa/provision_categories.py` after the lo
 
 Local laptop:
 
-1. Export the four token env vars, or copy `qa/config/tokens.txt.example` to gitignored `tokens.txt` (`chmod 0600`). Env vars win. Never commit tokens. The suite will not write `tokens.txt`.
+1. Export the four token env vars, or copy `qa/config/tokens.txt.example` to gitignored `tokens.txt` (`chmod 0600`). Env vars win. Each value may be a single token or a comma-separated list. Never commit tokens. The suite will not write `tokens.txt`.
 2. Copy `qa/config/qa-sync.yaml.example` to `qa/config/qa-sync.yaml`.
 3. Either put complete plan UUIDs in `fullId`, or keep `${QA_*_PLAN_ID}` and export those env vars. Suffixes are rejected.
 

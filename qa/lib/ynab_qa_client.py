@@ -9,6 +9,7 @@ generic mutation method.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 import urllib.error
@@ -25,12 +26,35 @@ LINEAR_STEP_SECONDS = 5
 MAX_RATE_LIMIT_WAIT_SECONDS = 3600
 DEFAULT_CLEANUP_PACING_MS = 500
 RESET_HEADERS = ("ratelimit-reset", "x-ratelimit-reset", "x-rate-limit-reset")
+REMAINING_HEADERS = ("ratelimit-remaining", "x-ratelimit-remaining", "x-rate-limit-remaining")
+RATE_LIMIT_HEADER_NAMES = (
+    "retry-after",
+    *RESET_HEADERS,
+    *REMAINING_HEADERS,
+    "ratelimit-limit",
+    "x-ratelimit-limit",
+    "x-rate-limit",
+)
 KNOWN_NAMES = {
     "Jorsten's Plan",
     "Jorsten Jr's Plan",
     "Borsten's Plan",
     "Thorsten's Plan",
 }
+
+LOGGER = logging.getLogger(__name__)
+
+
+def parse_access_tokens(raw: str | None) -> list[str]:
+    """Split a single token or CSV of tokens, trim, drop empties, de-dupe."""
+    if raw is None:
+        return []
+    tokens: list[str] = []
+    for part in str(raw).split(","):
+        token = part.strip()
+        if token and token not in tokens:
+            tokens.append(token)
+    return tokens
 
 
 class QaSafetyError(RuntimeError):
@@ -55,7 +79,8 @@ class YnabQaClient:
         clock: Callable[[], float] = time.time,
         request_pacing_ms: int = 0,
     ):
-        if not token or any(ch.isspace() for ch in token):
+        tokens = parse_access_tokens(token)
+        if not tokens or any(any(ch.isspace() for ch in item) for item in tokens):
             raise QaSafetyError("A non-empty test token is required")
         if set(allowlist) != KNOWN_NAMES or len(set(allowlist.values())) != 4:
             raise QaSafetyError("Allowlist must contain exactly the four QA name/ID pairs")
@@ -67,7 +92,8 @@ class YnabQaClient:
             or max_rate_limit_retries < 0
         ):
             raise QaSafetyError("Rate-limit retry count must be a non-negative integer or None")
-        self._token = token
+        self._tokens = tokens
+        self._token_index = 0
         self._allowlist = dict(allowlist)
         self._timeout = timeout
         self._max_rate_limit_retries = max_rate_limit_retries
@@ -325,18 +351,20 @@ class YnabQaClient:
     def _request(self, method: str, path: str, payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
         resource_class = self._logical_resource_class(path)
         data = None if payload is None else json.dumps(payload).encode("utf-8")
-        request = urllib.request.Request(
-            f"{API_ROOT}/{path}",
-            data=data,
-            method=method,
-            headers={
-                "Authorization": f"Bearer {self._token}",
-                "Accept": "application/json",
-                "Content-Type": "application/json",
-            },
-        )
-        attempts = 0
+        backoff_cycles = 0
+        tried: set[int] = set()
+        delays: list[tuple[int, float | None]] = []
         while True:
+            request = urllib.request.Request(
+                f"{API_ROOT}/{path}",
+                data=data,
+                method=method,
+                headers={
+                    "Authorization": f"Bearer {self._tokens[self._token_index]}",
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                },
+            )
             if self._request_pacing_ms:
                 self._sleeper(self._request_pacing_ms / 1000.0)
             try:
@@ -345,19 +373,40 @@ class YnabQaClient:
                     self._record_request(method, resource_class, self._status_class(status or 200))
                     return json.load(response)
             except urllib.error.HTTPError as error:
-                if error.code == 429 and (
-                    self._max_rate_limit_retries is None
-                    or attempts < self._max_rate_limit_retries
-                ):
-                    self._record_request(
-                        method, resource_class, self._status_class(error.code), retried=True,
-                    )
-                    self._sleeper(self._retry_delay(error, attempts))
-                    attempts += 1
+                if error.code != 429:
+                    self._record_request(method, resource_class, self._status_class(error.code))
+                    raise RuntimeError(f"YNAB API returned HTTP {error.code}") from None
+                parsed_delay = self._parse_retry_delay(error)
+                remaining = self._parse_remaining(error)
+                present = self._present_rate_limit_headers(error)
+                self._log_rate_limit(method, resource_class, remaining, parsed_delay, present)
+                self._record_request(
+                    method, resource_class, self._status_class(error.code), retried=True,
+                )
+                tried.add(self._token_index)
+                delays.append((self._token_index, parsed_delay))
+                next_token = self._next_unused_token(tried)
+                if next_token is not None:
+                    self._token_index = next_token
                     continue
-                self._record_request(method, resource_class, self._status_class(error.code))
-                # Never include headers, token, or a response URL in evidence/logs.
-                raise RuntimeError(f"YNAB API returned HTTP {error.code}") from None
+                if (
+                    self._max_rate_limit_retries is not None
+                    and backoff_cycles >= self._max_rate_limit_retries
+                ):
+                    raise RuntimeError(f"YNAB API returned HTTP {error.code}") from None
+                usable = [delay for _, delay in delays if delay is not None]
+                wait = min(usable) if usable else LINEAR_STEP_SECONDS * (backoff_cycles + 1)
+                wait = float(min(wait, MAX_RATE_LIMIT_WAIT_SECONDS))
+                self._sleeper(wait)
+                backoff_cycles += 1
+                soonest = min(
+                    ((idx, delay) for idx, delay in delays if delay is not None),
+                    default=None,
+                    key=lambda item: item[1],
+                )
+                self._token_index = soonest[0] if soonest is not None else 0
+                tried.clear()
+                delays.clear()
             except urllib.error.URLError:
                 self._record_request(method, resource_class, "transport_error")
                 raise RuntimeError("YNAB API request failed") from None
@@ -387,6 +436,11 @@ class YnabQaClient:
 
     def _retry_delay(self, error: urllib.error.HTTPError, attempt: int) -> float:
         """Return a bounded resume delay without retaining or exposing raw headers."""
+        parsed = self._parse_retry_delay(error)
+        wait = parsed if parsed is not None else LINEAR_STEP_SECONDS * (attempt + 1)
+        return float(min(wait, MAX_RATE_LIMIT_WAIT_SECONDS))
+
+    def _parse_retry_delay(self, error: urllib.error.HTTPError) -> float | None:
         def header_value(target: str) -> Any:
             for name, value in error.headers.items() if error.headers else ():
                 if str(name).lower() == target:
@@ -418,8 +472,69 @@ class YnabQaClient:
                     waits.append(seconds)
             except (TypeError, ValueError, OverflowError):
                 pass
-        wait = max(waits) if waits else LINEAR_STEP_SECONDS * (attempt + 1)
-        return float(min(wait, MAX_RATE_LIMIT_WAIT_SECONDS))
+        if not waits:
+            return None
+        return float(min(max(waits), MAX_RATE_LIMIT_WAIT_SECONDS))
+
+    def _parse_remaining(self, error: urllib.error.HTTPError) -> int | None:
+        headers = error.headers
+        if not headers:
+            return None
+        for target in REMAINING_HEADERS:
+            for name, value in headers.items():
+                if str(name).lower() == target:
+                    try:
+                        return int(str(value).strip())
+                    except (TypeError, ValueError):
+                        continue
+        for name, value in headers.items():
+            if str(name).lower() == "x-rate-limit" and "/" in str(value):
+                used_raw, limit_raw = str(value).split("/", 1)
+                try:
+                    return int(limit_raw.strip()) - int(used_raw.strip())
+                except ValueError:
+                    return None
+        return None
+
+    def _present_rate_limit_headers(self, error: urllib.error.HTTPError) -> list[str]:
+        present: list[str] = []
+        if not error.headers:
+            return present
+        seen = {str(name).lower() for name, value in error.headers.items() if value is not None}
+        for name in RATE_LIMIT_HEADER_NAMES:
+            if name in seen:
+                present.append(name)
+        return present
+
+    def _next_unused_token(self, tried: set[int]) -> int | None:
+        if len(tried) >= len(self._tokens):
+            return None
+        for step in range(1, len(self._tokens) + 1):
+            candidate = (self._token_index + step) % len(self._tokens)
+            if candidate not in tried:
+                return candidate
+        return None
+
+    def _log_rate_limit(
+        self,
+        method: str,
+        resource_class: str,
+        remaining: int | None,
+        retry_delay: float | None,
+        header_names: list[str],
+    ) -> None:
+        slot = self._token_index + 1
+        total = len(self._tokens)
+        parts = [f"YNAB {method} {resource_class} rate limited on token {slot} of {total}"]
+        if remaining is not None:
+            parts.append(f"remaining={remaining}")
+        if retry_delay is not None:
+            parts.append(f"retry after {retry_delay}s")
+        if header_names:
+            parts.append("headers=" + ",".join(header_names))
+        if remaining is None and retry_delay is None:
+            parts.append("no remaining/reset metadata")
+        LOGGER.info("; ".join(parts))
 
 
 def cleanup_pacing_ms(environ: Mapping[str, str] | None = None) -> int:

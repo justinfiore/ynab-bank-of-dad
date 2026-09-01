@@ -9,7 +9,7 @@ from pathlib import Path
 
 import yaml
 
-from .ynab_qa_client import PlanIdentity
+from .ynab_qa_client import PlanIdentity, parse_access_tokens
 
 TOKEN_NAMES = (
     "PARENT_ACCESS_TOKEN",
@@ -42,9 +42,9 @@ def load_tokens(
             if not line or line.startswith("#") or "=" not in line:
                 continue
             name, value = line.split("=", 1)
-            if name in TOKEN_NAMES and value.strip() and not str(env.get(name) or "").strip():
+            if name in TOKEN_NAMES and parse_access_tokens(value) and not parse_access_tokens(env.get(name)):
                 env[name] = value.strip()
-    missing = [name for name in TOKEN_NAMES if not str(env.get(name) or "").strip()]
+    missing = [name for name in TOKEN_NAMES if not parse_access_tokens(env.get(name))]
     if missing:
         raise QaConfigBlocked("required QA token environment values are missing")
     return {name: str(env[name]) for name in TOKEN_NAMES}

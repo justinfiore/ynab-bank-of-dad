@@ -3,6 +3,7 @@
 #
 # Create four personal YNAB developer tokens from the four disposable QA plans
 # (or one parent token that can see all four plans plus three child tokens).
+# Each value may be a single token or a comma-separated list for the same account.
 PARENT_ACCESS_TOKEN=replace-with-parent-qa-token
 JORSTEN_JR_ACCESS_TOKEN=replace-with-jorsten-jr-qa-token
 BORSTEN_ACCESS_TOKEN=replace-with-borsten-qa-token
