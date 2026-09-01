@@ -6,8 +6,13 @@ import ynabbankofdad.sync.*
 import ynabbankofdad.sync.model.*
 import ynabbankofdad.sync.state.*
 import groovy.json.JsonSlurper
+import ch.qos.logback.classic.Level
+import ch.qos.logback.classic.Logger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import org.slf4j.LoggerFactory
 import spock.lang.Specification
 
 import java.net.URI
@@ -405,6 +410,46 @@ class YnabHttpClientSpec extends Specification {
         infos[0].contains('no remaining/reset metadata')
         !infos[0].contains('token-secret')
         !infos[0].contains('too_many_requests')
+    }
+
+    def "DEBUG log includes complete 429 response headers and body"() {
+        given:
+        String responseBody = '{"error":{"id":"429","detail":"first line\\nsecond line","extra":{"value":42}}}'
+        server.enqueue(new MockResponse()
+            .setResponseCode(429)
+            .addHeader('X-Debug-One', 'value-a')
+            .addHeader('X-Debug-Two', 'value-b-1')
+            .addHeader('X-Debug-Two', 'value-b-2')
+            .setBody(responseBody))
+        server.enqueue(new MockResponse().setResponseCode(200).setBody('{"data":{}}'))
+        Logger logger = LoggerFactory.getLogger(YnabHttpClient) as Logger
+        Level previousLevel = logger.level
+        def appender = new ListAppender<ILoggingEvent>()
+        appender.start()
+        logger.level = Level.DEBUG
+        logger.addAppender(appender)
+        def client = rateLimitClient('access-token-secret', [])
+        client.registerBudgetName('budget-1', 'Fiores')
+
+        when:
+        client.getJson('/v1/plans/budget-1/transactions')
+
+        then:
+        List<ILoggingEvent> debugEvents = appender.list.findAll { it.level == Level.DEBUG }
+        debugEvents.size() == 1
+        String message = debugEvents[0].formattedMessage
+        message.startsWith("YNAB GET transactions for budget 'Fiores' received 429 response; headers=")
+        String lowerMessage = message.toLowerCase()
+        lowerMessage.contains('x-debug-one:[value-a]')
+        lowerMessage.contains('x-debug-two:[value-b-1, value-b-2]')
+        message.contains("; body=${responseBody}")
+        !message.contains('access-token-secret')
+        !message.contains('budget-1')
+
+        cleanup:
+        logger.detachAppender(appender)
+        logger.level = previousLevel
+        appender.stop()
     }
 
     def "INFO log includes Retry-After delay without Authorization values"() {

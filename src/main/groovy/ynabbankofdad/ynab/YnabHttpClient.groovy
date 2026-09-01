@@ -230,6 +230,9 @@ class YnabHttpClient {
             if (response.statusCode() != 429) {
                 break
             }
+            if (log.debugEnabled) {
+                log.debug(rateLimitDebugMessage(method, resourceClass, budgetName, response))
+            }
             RateLimitObservation observation = inspectRateLimit(response, currentInstant())
             emitInfo(rateLimitInfoMessage(method, resourceClass, budgetName, observation,
                 currentInstant()))
@@ -499,6 +502,13 @@ class YnabHttpClient {
             parts << 'no remaining/reset metadata'
         }
         return parts.join('; ')
+    }
+
+    private static String rateLimitDebugMessage(String method, String resourceClass, String budgetName,
+                                                HttpResponse<String> response) {
+        String budgetContext = budgetName ? " for budget '${budgetName}'" : ''
+        "YNAB ${method} ${resourceClass}${budgetContext} received 429 response; " +
+            "headers=${response.headers().map()}; body=${response.body()}"
     }
 
     private String rateLimitWarningMessage(String method, String resourceClass, String budgetName,
