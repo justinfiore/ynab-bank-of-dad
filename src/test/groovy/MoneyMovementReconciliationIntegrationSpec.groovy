@@ -116,7 +116,8 @@ class MoneyMovementReconciliationIntegrationSpec extends Specification {
 
     private static ChildSyncContext context(String key, String budgetId, String accountId, String... names) {
         def mapping = new ChildAccountMapping('mapping', names.collect { new ParentCategoryNameMatcher(it, false) }, 'Checking')
-        def target = new ChildBudgetSyncTarget(key, key, 'TOKEN', [mapping], '', '')
+        def target = new ChildBudgetSyncTarget(childKey: key, budgetName: key, tokenEnvVarName: 'TOKEN',
+            accountMappings: [mapping], memoPrefix: '', memoSuffix: '')
         def context = new ChildSyncContext(target, null, budgetId, null)
         context.cacheAccountId('Checking', accountId)
         context

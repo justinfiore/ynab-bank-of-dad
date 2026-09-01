@@ -128,7 +128,10 @@ class RuntimeConfig {
                 tokenEnvVarName: requireString(item, 'tokenEnvVarName', itemKey),
                 accountMappings: requireAccountMappings(item, 'accountMappings', itemKey),
                 memoPrefix: item.containsKey('memoPrefix') ? requireStringAllowEmpty(item, 'memoPrefix', itemKey) : "YBOD: ",
-                memoSuffix: item.containsKey('memoSuffix') ? requireStringAllowEmpty(item, 'memoSuffix', itemKey) : ""
+                memoSuffix: item.containsKey('memoSuffix') ? requireStringAllowEmpty(item, 'memoSuffix', itemKey) : "",
+                autoCreateAccounts: optionalBoolean(item, 'autoCreateAccounts', itemKey, false),
+                createdAccountOnBudget: optionalBoolean(item, 'createdAccountOnBudget', itemKey, true),
+                accountCreationNameStripRegex: optionalAccountCreationNameStripRegex(item, 'accountCreationNameStripRegex', itemKey)
             )
         }
     }
@@ -217,6 +220,34 @@ class RuntimeConfig {
         def value = raw[key]
         if (!(value instanceof String)) {
             throw new IllegalArgumentException("Config key '${formatKey(parentKey, key)}' must be a string")
+        }
+        value
+    }
+
+    private static Boolean optionalBoolean(Map raw, String key, String parentKey, Boolean defaultValue) {
+        if (!raw.containsKey(key) || raw[key] == null) {
+            return defaultValue
+        }
+        def value = raw[key]
+        if (!(value instanceof Boolean)) {
+            throw new IllegalArgumentException("Config key '${formatKey(parentKey, key)}' must be boolean")
+        }
+        value as Boolean
+    }
+
+    private static String optionalAccountCreationNameStripRegex(Map raw, String key, String parentKey) {
+        if (!raw.containsKey(key) || raw[key] == null) {
+            return null
+        }
+        def value = raw[key]
+        if (!(value instanceof String) || value.isEmpty()) {
+            throw new IllegalArgumentException("Config key '${formatKey(parentKey, key)}' must be a non-empty string")
+        }
+        try {
+            Pattern.compile(value)
+        } catch (PatternSyntaxException ex) {
+            throw new IllegalArgumentException(
+                "Config key '${formatKey(parentKey, key)}' has invalid regex pattern '${value}': ${ex.message}")
         }
         value
     }
@@ -345,6 +376,17 @@ class ChildBudgetSyncTarget {
     List<ChildAccountMapping> accountMappings
     String memoPrefix = "YBOD: "
     String memoSuffix = ""
+    Boolean autoCreateAccounts = false
+    Boolean createdAccountOnBudget = true
+    String accountCreationNameStripRegex
+
+    String derivedAccountName(String parentCategoryName) {
+        String name = parentCategoryName ?: ''
+        if (accountCreationNameStripRegex) {
+            name = name.replaceAll(accountCreationNameStripRegex, '')
+        }
+        name.trim()
+    }
 
     void validate(String childConfigPath) {
         if (accountMappings == null || accountMappings.isEmpty()) {
@@ -383,6 +425,12 @@ class ChildAccountMapping {
                     throw new IllegalArgumentException("Config key '${mappingConfigPath}.parentCategoryNames[${index}].name' has invalid regex pattern '${matcher.name}': ${ex.message}")
                 }
             }
+        }
+    }
+
+    boolean matches(String categoryName) {
+        parentCategoryNames.any { ParentCategoryNameMatcher matcher ->
+            matcher.regex ? categoryName ==~ matcher.name : categoryName == matcher.name
         }
     }
 }

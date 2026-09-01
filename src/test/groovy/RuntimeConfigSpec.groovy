@@ -151,6 +151,53 @@ sync:
         then:
         config.sync.childBudgets[0].memoPrefix == 'YBOD: '
         config.sync.childBudgets[0].memoSuffix == ''
+        config.sync.childBudgets[0].autoCreateAccounts == false
+        config.sync.childBudgets[0].createdAccountOnBudget == true
+        config.sync.childBudgets[0].accountCreationNameStripRegex == null
+    }
+
+    def "sync childBudgets parse auto-create account settings"() {
+        given:
+        def raw = validConfigMap()
+        raw.sync.childBudgets[0].autoCreateAccounts = true
+        raw.sync.childBudgets[0].createdAccountOnBudget = false
+        raw.sync.childBudgets[0].accountCreationNameStripRegex = ' Bank$'
+
+        when:
+        def config = RuntimeConfig.fromMap(raw)
+
+        then:
+        config.sync.childBudgets[0].autoCreateAccounts
+        config.sync.childBudgets[0].createdAccountOnBudget == false
+        config.sync.childBudgets[0].accountCreationNameStripRegex == ' Bank$'
+        config.sync.childBudgets[0].derivedAccountName('Child One Spend Bank') == 'Child One Spend'
+    }
+
+    def "sync childBudgets reject invalid auto-create settings with full config paths"() {
+        given:
+        def raw = validConfigMap()
+        mutation(raw)
+
+        when:
+        RuntimeConfig.fromMap(raw)
+
+        then:
+        def ex = thrown(IllegalArgumentException)
+        ex.message.contains(expected)
+
+        where:
+        mutation << [
+            { Map cfg -> cfg.sync.childBudgets[0].autoCreateAccounts = 'yes' },
+            { Map cfg -> cfg.sync.childBudgets[0].createdAccountOnBudget = 'tracking' },
+            { Map cfg -> cfg.sync.childBudgets[0].accountCreationNameStripRegex = '' },
+            { Map cfg -> cfg.sync.childBudgets[0].accountCreationNameStripRegex = '[' }
+        ]
+        expected << [
+            'sync.childBudgets[0].autoCreateAccounts',
+            'sync.childBudgets[0].createdAccountOnBudget',
+            'sync.childBudgets[0].accountCreationNameStripRegex',
+            'sync.childBudgets[0].accountCreationNameStripRegex'
+        ]
     }
 
     def "sync childBudgets reject non-string memo decoration with full config paths"() {

@@ -54,14 +54,47 @@ class YnabBudgetRepository {
     }
 
     String getAccountId(String budgetId, String accountName) {
+        String accountId = findAccountId(budgetId, accountName)
+        if (accountId == null) {
+            throw new IllegalStateException("Could not find account named '${accountName}' in budget '${budgetId}'")
+        }
+        accountId
+    }
+
+    String findAccountId(String budgetId, String accountName) {
+        accountIdByName(budgetId)[accountName]
+    }
+
+    Map<String, String> accountIdByName(String budgetId) {
         def response = ynabClient.getJson("/v1/plans/${budgetId}/accounts")
         List accounts = (response?.data?.accounts ?: []) as List
         log.debug("Fetched {} accounts from YNAB for budget '{}'", accounts.size(), budgetId)
-        def account = accounts.find { it.name == accountName }
-        if (account == null) {
-            throw new IllegalStateException("Could not find account named '${accountName}' in budget '${budgetId}'")
+        Map<String, String> idsByName = [:]
+        accounts.each { account ->
+            if (account?.name && account.deleted != true && !idsByName.containsKey(account.name as String)) {
+                idsByName[account.name as String] = account.id as String
+            }
         }
-        account.id
+        idsByName
+    }
+
+    Map createAccount(String budgetId, String name) {
+        YnabHttpResponse response = ynabClient.postJsonWithMetadata("/v1/plans/${budgetId}/accounts", [
+            account: [name: name, type: 'savings', balance: 0]
+        ])
+        log.debug(
+            "Created account '{}' in budget '{}' and received status {} with body {}",
+            name,
+            budgetId,
+            response.statusCode,
+            response.bodyText == null ? 'null' : JsonOutput.prettyPrint(JsonOutput.toJson(YnabLogFormatter.formatAmounts(response.body)))
+        )
+        Map data = requireData(response.body, 'create account')
+        if (!(data.account instanceof Map) || !data.account.id) {
+            throw new IllegalStateException(
+                "YNAB create account response for budget '${budgetId}', name '${name}' is missing account.id")
+        }
+        data.account as Map
     }
 
     Map<String, CategorySnapshot> getCategoryInfoByCategoryName(String budgetId) {

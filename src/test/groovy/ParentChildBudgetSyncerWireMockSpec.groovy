@@ -212,10 +212,10 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         childFourPosts.find { it.memo == 'YBOD: From Child Three Gold CD 07/31/26 to Child Four Give Bank' && it.account_id == 'child-four-give-account-id' && it.amount == 350 && it.payee_name == 'From Child Three Gold CD 07/31/26' && it.category_id == null && it.cleared == 'cleared' }
 
         and:
-        verify(2, getRequestedFor(urlEqualTo('/v1/plans/child-one-budget-id/accounts')))
-        verify(3, getRequestedFor(urlEqualTo('/v1/plans/child-two-budget-id/accounts')))
-        verify(3, getRequestedFor(urlEqualTo('/v1/plans/child-three-budget-id/accounts')))
-        verify(3, getRequestedFor(urlEqualTo('/v1/plans/child-four-budget-id/accounts')))
+        verify(getRequestedFor(urlEqualTo('/v1/plans/child-one-budget-id/accounts')))
+        verify(getRequestedFor(urlEqualTo('/v1/plans/child-two-budget-id/accounts')))
+        verify(getRequestedFor(urlEqualTo('/v1/plans/child-three-budget-id/accounts')))
+        verify(getRequestedFor(urlEqualTo('/v1/plans/child-four-budget-id/accounts')))
         tableCount('sync_runs') == 1
         tableCount('sync_operations') == 13
         tableCount('operation_attempts') == 13
@@ -417,6 +417,121 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         postedTransactions('child-two-budget-id').size() == 1
         runRows()[0].error_summary.contains("Could not find account named 'Child One Checking'")
         cursorValue('transactions.last_server_knowledge') == null
+    }
+
+    def "live cycle auto-creates a missing child savings account then mirrors the parent transaction"() {
+        given:
+        stubCommonBudgetDiscovery()
+        stubParentCategories()
+        stubParentTransactions([
+            [id: 'txn-auto-create', date: '2026-07-01', amount: -1200, memo: 'Shoes', approved: true,
+             category_id: 'cat-child-one-spend', category_name: 'Child One Spend Bank', subtransactions: []],
+            [id: 'txn-unmapped-auto-create', date: '2026-07-01', amount: -1400, memo: 'Parent only', approved: true,
+             category_id: 'cat-parent-only', category_name: 'Parent Only', subtransactions: []]
+        ], 401)
+        stubMoneyMovements([])
+        stubChildAccounts('child-one-budget-id', [])
+        stubCreateAccount('child-one-budget-id', 'Child One Spend', 'created-spend-account-id')
+        stubChildPost('child-one-budget-id', ['child-one-created-auto'])
+        def syncer = syncer(false, autoCreateSyncConfig())
+
+        when:
+        syncer.runOnce(1)
+
+        then:
+        List creates = wireMockServer.findAll(postRequestedFor(urlEqualTo('/v1/plans/child-one-budget-id/accounts')))
+        creates.size() == 1
+        new JsonSlurper().parseText(creates[0].bodyAsString) == [
+            account: [name: 'Child One Spend', type: 'savings', balance: 0]
+        ]
+        postedTransactions('child-one-budget-id') == [[
+            account_id: 'created-spend-account-id',
+            date: '2026-07-01',
+            amount: -1200,
+            payee_id: null,
+            payee_name: null,
+            category_id: null,
+            memo: 'YBOD: Shoes',
+            cleared: 'cleared',
+            approved: false,
+            import_id: postedTransactions('child-one-budget-id')[0].import_id
+        ]]
+        tableCount('child_mirrors') == 1
+        cursorValue('transactions.last_server_knowledge') == 401
+    }
+
+    def "dry-run auto-create logs a planned savings account and does not POST create or child transactions"() {
+        given:
+        stubCommonBudgetDiscovery()
+        stubParentCategories()
+        stubParentTransactions([
+            [id: 'txn-auto-create-dry', date: '2026-07-01', amount: -1200, memo: 'Shoes', approved: true,
+             category_id: 'cat-child-one-spend', category_name: 'Child One Spend Bank', subtransactions: []]
+        ], 402)
+        stubMoneyMovements([])
+        stubChildAccounts('child-one-budget-id', [])
+        Logger logger = (Logger) LoggerFactory.getLogger(ParentChildBudgetSyncer)
+        def appender = new ListAppender<ILoggingEvent>()
+        appender.start()
+        logger.addAppender(appender)
+        def syncer = syncer(true, autoCreateSyncConfig())
+
+        when:
+        syncer.runOnce(1)
+
+        then:
+        verify(0, postRequestedFor(urlEqualTo('/v1/plans/child-one-budget-id/accounts')))
+        verify(0, postRequestedFor(urlEqualTo('/v1/plans/child-one-budget-id/transactions/bulk')))
+        appender.list*.formattedMessage.any {
+            it.contains("Would create savings account 'Child One Spend'") &&
+                it.contains('createdAccountOnBudget=true') &&
+                it.contains('child-one')
+        }
+        tableCount('sync_runs') == 0
+
+        cleanup:
+        logger.detachAppender(appender)
+    }
+
+    def "auto-create reuses an existing derived-name account without a second create POST"() {
+        given:
+        stubCommonBudgetDiscovery()
+        stubParentCategories()
+        stubParentTransactions([
+            [id: 'txn-reuse-derived', date: '2026-07-01', amount: -1200, memo: 'Shoes', approved: true,
+             category_id: 'cat-child-one-spend', category_name: 'Child One Spend Bank', subtransactions: []]
+        ], 403)
+        stubMoneyMovements([])
+        stubChildAccounts('child-one-budget-id', 'existing-derived-id', 'Child One Spend')
+        stubChildPost('child-one-budget-id', ['child-one-reused'])
+        def syncer = syncer(false, autoCreateSyncConfig())
+
+        when:
+        syncer.runOnce(1)
+
+        then:
+        verify(0, postRequestedFor(urlEqualTo('/v1/plans/child-one-budget-id/accounts')))
+        postedTransactions('child-one-budget-id')[0].account_id == 'existing-derived-id'
+    }
+
+    def "autoCreateAccounts false still fails missing mapped accounts without creating"() {
+        given:
+        stubCommonBudgetDiscovery()
+        stubParentCategories()
+        stubParentTransactions([
+            [id: 'txn-no-auto-create', date: '2026-07-01', amount: -1200, memo: 'Shoes', approved: true,
+             category_id: 'cat-child-one-spend', category_name: 'Child One Spend Bank', subtransactions: []]
+        ], 404)
+        stubMoneyMovements([])
+        stubChildAccounts('child-one-budget-id', [])
+        def syncer = syncer(false, autoCreateSyncConfig(false))
+
+        when:
+        syncer.runOnce(1)
+
+        then:
+        verify(0, postRequestedFor(urlEqualTo('/v1/plans/child-one-budget-id/accounts')))
+        runRows()[0].error_summary.contains("Could not find account named 'Child One Checking'")
     }
 
     def "failed child transaction post is retried on a later run"() {
@@ -1025,8 +1140,13 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
             originalMapping.parentCategoryNames + new ParentCategoryNameMatcher('Child One Spend Bank', false),
             originalMapping.childAccountName)
         ChildBudgetSyncTarget expandedChildTwo = new ChildBudgetSyncTarget(
-            childTwo.childKey, childTwo.budgetName, childTwo.tokenEnvVarName, [expandedMapping],
-            childTwo.memoPrefix, childTwo.memoSuffix)
+            childKey: childTwo.childKey,
+            budgetName: childTwo.budgetName,
+            tokenEnvVarName: childTwo.tokenEnvVarName,
+            accountMappings: [expandedMapping],
+            memoPrefix: childTwo.memoPrefix,
+            memoSuffix: childTwo.memoSuffix
+        )
         config = new SyncConfig(config.parentBudget, [config.childBudgets[0], expandedChildTwo],
             config.pollingIntervalSeconds, config.logging, config.state)
         def syncer = syncer(false, config)
@@ -1104,6 +1224,45 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
             memoPrefix: memoPrefix,
             memoSuffix: memoSuffix
         )
+    }
+
+    private SyncConfig autoCreateSyncConfig(boolean autoCreate = true, Boolean onBudget = true,
+                                            String stripRegex = ' Bank$') {
+        String dbPath = tempDir.resolve('syncstate-wiremock.db').toString()
+        new SyncConfig(
+            new BudgetRef('Parent Budget', 'YNAB_PARENT_TOKEN'),
+            [
+                new ChildBudgetSyncTarget(
+                    childKey: 'child-one',
+                    budgetName: 'Child One Budget',
+                    tokenEnvVarName: 'YNAB_CHILD_ONE_TOKEN',
+                    accountMappings: [
+                        new ChildAccountMapping('spend-save',
+                            [new ParentCategoryNameMatcher('Child One Spend Bank', false),
+                             new ParentCategoryNameMatcher('Child One Save Bank', false)],
+                            'Child One Checking')
+                    ],
+                    memoPrefix: 'YBOD: ',
+                    memoSuffix: '',
+                    autoCreateAccounts: autoCreate,
+                    createdAccountOnBudget: onBudget,
+                    accountCreationNameStripRegex: stripRegex
+                )
+            ],
+            300,
+            new SyncLoggingConfig(tempDir.resolve('parent-child-sync.log').toString(), 'INFO', 7, 10),
+            new SyncStateConfig(dbPath, 45, 45)
+        )
+    }
+
+    private void stubCreateAccount(String budgetId, String name, String accountId) {
+        stubFor(post(urlEqualTo("/v1/plans/${budgetId}/accounts"))
+            .willReturn(aResponse()
+                .withStatus(201)
+                .withHeader('Content-Type', 'application/json')
+                .withBody(JsonOutput.toJson([data: [account: [
+                    id: accountId, name: name, type: 'savings', on_budget: true, balance: 0
+                ]]]))))
     }
 
     private SyncConfig fourChildSyncConfig() {

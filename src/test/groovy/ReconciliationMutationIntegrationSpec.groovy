@@ -172,7 +172,8 @@ class ReconciliationMutationIntegrationSpec extends Specification {
     }
 
     private ChildSyncContext context(String budgetId) {
-        def target = new ChildBudgetSyncTarget(budgetId, budgetId, 'TOKEN', [], '', '')
+        def target = new ChildBudgetSyncTarget(childKey: budgetId, budgetName: budgetId, tokenEnvVarName: 'TOKEN',
+            accountMappings: [], memoPrefix: '', memoSuffix: '')
         new ChildSyncContext(target, child, budgetId)
     }
 
