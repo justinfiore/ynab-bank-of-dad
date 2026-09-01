@@ -18,7 +18,7 @@ from lib.campaign_matrix import AUTOMATED_SCENARIO_IDS, MANUAL_SCENARIO_IDS
 from lib.ci_evidence import write_current_campaign_pointer
 from lib.junit_writer import write_automated_junit
 from lib.qa_config import QaConfigBlocked, load_tokens as load_token_env
-from run_live_campaign import Campaign, PARENT, CHILDREN, write_json
+from run_live_campaign import Campaign, PARENT, CHILDREN, emit_progress, write_json
 
 
 TOKEN_FILE = REPO_ROOT / "tokens.txt"
@@ -88,6 +88,10 @@ def run_automated() -> int:
     try:
         load_tokens()
         campaign = new_campaign("automated", AUTOMATED_SCENARIO_IDS)
+        emit_progress(
+            f"CAMPAIGN START {campaign.campaign_id} suite=automated "
+            f"scenarios={len(AUTOMATED_SCENARIO_IDS)}"
+        )
         try:
             campaign.run_automated_matrix()
             for scenario_id in MANUAL_SCENARIO_IDS:
@@ -97,9 +101,16 @@ def run_automated() -> int:
                         "Manual UI suite. Run ./gradlew qaManual.",
                     )
         finally:
+            emit_progress(f"CAMPAIGN CLEANUP START {campaign.campaign_id}")
             try:
                 campaign.cleanup()
+                emit_progress(f"CAMPAIGN CLEANUP FINISH {campaign.campaign_id} status=PASS")
             except Exception as cleanup_error:
+                emit_progress(
+                    f"CAMPAIGN CLEANUP FINISH {campaign.campaign_id} status=FAIL "
+                    f"{cleanup_error.__class__.__name__}: "
+                    f"{campaign._redacted_executor_cause(cleanup_error)}"
+                )
                 campaign._record_cleanup_failure("D4-controlled-continuous", cleanup_error)
             campaign._final_metadata()
             junit_receipts = list(campaign.receipts.values())
@@ -107,8 +118,17 @@ def run_automated() -> int:
         failures = _write_automated_junit(
             junit_receipts, scenario_ids=AUTOMATED_SCENARIO_IDS, suite_name="qaAutomated",
         )
-    print(f"Automated QA complete: {campaign.campaign_id}")
-    print(f"Covered scenarios: {', '.join(AUTOMATED_SCENARIO_IDS)}")
+    passed = sum(
+        campaign.receipts.get(item, {}).get("status") == "PASS"
+        for item in AUTOMATED_SCENARIO_IDS
+    )
+    failed = len(AUTOMATED_SCENARIO_IDS) - passed
+    emit_progress(
+        f"CAMPAIGN FINISH {campaign.campaign_id} passed={passed} failed={failed} "
+        f"junit_failures={failures}"
+    )
+    print(f"Automated QA complete: {campaign.campaign_id}", flush=True)
+    print(f"Covered scenarios: {', '.join(AUTOMATED_SCENARIO_IDS)}", flush=True)
     return 1 if failures else 0
 
 

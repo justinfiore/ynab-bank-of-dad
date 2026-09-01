@@ -1,8 +1,10 @@
+import io
 import json
 import sqlite3
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 
 QA_ROOT = Path(__file__).resolve().parents[1]
@@ -19,7 +21,7 @@ from lib.live_campaign import (
     successful_operation_attempts,
 )
 from lib.ynab_qa_client import PlanIdentity, QaSafetyError
-from run_live_campaign import Campaign
+from run_live_campaign import Campaign, emit_failure_output
 
 
 IDS = {
@@ -300,6 +302,126 @@ class FreshMutationGateTest(unittest.TestCase):
 
             self.assertEqual(later_actions, ["C2-child-memo-owned"])
             self.assertEqual(len(campaign.cleanup_failures), 1)
+
+
+class CampaignProgressLoggingTest(unittest.TestCase):
+    def campaign(self, root: Path) -> Campaign:
+        campaign = Campaign.__new__(Campaign)
+        campaign.campaign_id = "QA-test"
+        campaign.artifacts = root
+        campaign.secrets = ["secret-token"]
+        campaign.receipts = {}
+        campaign.cleanup_failures = []
+        campaign.cleanup = lambda: None
+
+        def receipt(scenario, status, reason, **outcome):
+            campaign.receipts[scenario] = {
+                "scenario_id": scenario, "status": status, "reason": reason, **outcome,
+            }
+
+        campaign.receipt = receipt
+        return campaign
+
+    def test_run_scenario_prints_start_cleanup_and_finish_progress(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            campaign = self.campaign(Path(temporary))
+            output = io.StringIO()
+
+            with redirect_stdout(output):
+                campaign.run_scenario(
+                    "A1-baseline",
+                    lambda: campaign.receipt("A1-baseline", "PASS", "baseline passed"),
+                )
+
+            log = output.getvalue()
+            self.assertIn("[QA] START 1/23 A1-baseline", log)
+            self.assertIn("[QA] CLEANUP START A1-baseline", log)
+            self.assertIn("[QA] CLEANUP FINISH A1-baseline status=PASS", log)
+            self.assertIn("[QA] FINISH 1/23 A1-baseline status=PASS", log)
+            self.assertIn("duration_seconds=", log)
+
+    def test_run_scenario_prints_redacted_executor_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            campaign = self.campaign(Path(temporary))
+            output = io.StringIO()
+
+            def fail():
+                raise RuntimeError(
+                    "secret-token failed for 10000000-0000-0000-0000-000000000001"
+                )
+
+            with redirect_stdout(output):
+                campaign.run_scenario("C1-financial-update", fail)
+
+            log = output.getvalue()
+            self.assertIn("[QA] ERROR C1-financial-update RuntimeError:", log)
+            self.assertIn("[REDACTED]", log)
+            self.assertIn("[REDACTED-UUID]", log)
+            self.assertNotIn("secret-token", log)
+            self.assertNotIn("10000000-0000-0000-0000-000000000001", log)
+            self.assertIn("status=FAIL", log)
+
+    def test_run_scenario_reports_every_receipt_created_by_combined_step(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            campaign = self.campaign(Path(temporary))
+            for scenario in ("A1-baseline", "A2-guard-rejection", "A3-config-smoke"):
+                campaign.receipt(scenario, "PASS", "prerequisite passed")
+            output = io.StringIO()
+
+            def run_combined_step():
+                campaign.receipt("A4-dry-create", "PASS", "create passed")
+                campaign.receipt("A5-dry-state-rerun", "PASS", "rerun passed")
+
+            with redirect_stdout(output):
+                campaign.run_scenario("A4-dry-create", run_combined_step)
+
+            log = output.getvalue()
+            self.assertIn("[QA] START 4/23 A4-dry-create", log)
+            self.assertIn("[QA] FINISH 5/23 A4-dry-create status=PASS", log)
+            self.assertIn("A4-dry-create=PASS,A5-dry-state-rerun=PASS", log)
+
+    def test_failure_output_is_bounded_and_cannot_emit_github_log_commands(self):
+        output = io.StringIO()
+        oversized = "x" * 13000 + "\n::error::untrusted child output"
+
+        with redirect_stdout(output):
+            emit_failure_output("sync", oversized)
+
+        log = output.getvalue()
+        self.assertLess(len(log), 12500)
+        self.assertNotIn("\n::error::", log)
+        self.assertIn("[QA] | ::error::untrusted child output", log)
+        self.assertIn("[QA] FAILURE OUTPUT START sync", log)
+        self.assertIn("[QA] FAILURE OUTPUT END sync", log)
+
+    def test_failed_receipt_prints_reason_assertions_and_artifact_links(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            campaign = self.campaign(Path(temporary))
+            output = io.StringIO()
+
+            def fail_verification():
+                campaign.receipts["B4-live-split"] = {
+                    "scenario_id": "B4-live-split",
+                    "status": "FAIL",
+                    "reason": "Expected two mirrors but observed one.",
+                    "assertions": [
+                        {"name": "Mirror count", "status": "FAIL"},
+                        {"name": "Dry run completed", "status": "PASS"},
+                    ],
+                    "artifact_links": ["live-run.log", "api-after.json"],
+                }
+
+            with redirect_stdout(output):
+                campaign.run_scenario("B4-live-split", fail_verification)
+
+            log = output.getvalue()
+            self.assertIn(
+                "[QA] RESULT B4-live-split status=FAIL "
+                "reason=Expected two mirrors but observed one.",
+                log,
+            )
+            self.assertIn("failed_assertions=Mirror count", log)
+            self.assertIn("artifacts=live-run.log,api-after.json", log)
 
 
 class CampaignD3Test(unittest.TestCase):

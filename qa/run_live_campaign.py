@@ -18,6 +18,7 @@ import subprocess
 import sys
 import fcntl
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -27,7 +28,7 @@ QA_ROOT = Path(__file__).resolve().parent
 REPO_ROOT = QA_ROOT.parent
 sys.path.insert(0, str(QA_ROOT))
 
-from lib.campaign_matrix import SCENARIOS
+from lib.campaign_matrix import AUTOMATED_SCENARIO_IDS, SCENARIOS
 from lib.evidence_bundle import FULL_UUID
 from lib.qa_config import load_budget_identities
 from lib.live_campaign import (
@@ -66,6 +67,26 @@ def write_json(path: Path, value: Any) -> None:
 
 def safe_text(value: str, secrets: list[str]) -> str:
     return FULL_UUID.sub("[REDACTED-UUID]", redact(value, secrets))
+
+
+def safe_log_value(value: Any, secrets: list[str], *, limit: int = 1000) -> str:
+    """Redact sensitive values and keep one untrusted value on one log line."""
+    text = safe_text(str(value), secrets)
+    text = re.sub(r"https?://\S+", "[REDACTED-URL]", text)
+    return text.replace("\r", " ").replace("\n", " ")[:limit]
+
+
+def emit_progress(message: str) -> None:
+    """Write immediately visible, grep-friendly progress to CI logs."""
+    print(f"[QA] {message}", flush=True)
+
+
+def emit_failure_output(label: str, output: str) -> None:
+    """Expose a bounded diagnostic tail without allowing log-command injection."""
+    emit_progress(f"FAILURE OUTPUT START {label}")
+    for line in output[-12000:].splitlines():
+        print(f"[QA] | {line}", flush=True)
+    emit_progress(f"FAILURE OUTPUT END {label}")
 
 
 def extract_object(response: dict[str, Any], singular: str) -> dict[str, Any]:
@@ -364,6 +385,9 @@ class Campaign:
             "--config", str(self.runtime_config), "--sync-state-db-path", str(state_db),
             *( ["--dry-run"] if dry else [] ), "--max-cycles", str(max_cycles),
         ])]
+        mode = "dry-run" if dry else "live"
+        started = time.monotonic()
+        emit_progress(f"SYNC START {scenario} mode={mode} max_cycles={max_cycles}")
         environment = dict(os.environ)
         for name, value in (env_override or {}).items():
             if value is None:
@@ -376,6 +400,12 @@ class Campaign:
         path = self.artifacts / "scenarios" / scenario / ("dry-run.log" if dry else "live-run.log")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(output, encoding="utf-8")
+        emit_progress(
+            f"SYNC FINISH {scenario} mode={mode} exit_code={completed.returncode} "
+            f"duration_seconds={time.monotonic() - started:.1f} log={path.relative_to(REPO_ROOT)}"
+        )
+        if completed.returncode != 0:
+            emit_failure_output(f"{scenario} mode={mode}", output)
         return completed.returncode, output
 
     def receipt(self, scenario: str, status: str, reason: str, *, expected=None, observed=None,
@@ -458,6 +488,12 @@ class Campaign:
             if source.exists():
                 shutil.copytree(source, reports / name, dirs_exist_ok=True)
         passed = py.returncode == 0 and gradle_ok
+        if py.returncode != 0:
+            emit_failure_output(
+                "python-qa-tests", safe_text(py.stdout + py.stderr, self.secrets)
+            )
+        if not gradle_ok:
+            emit_failure_output("gradle-testAll", safe_text(gradle_output, self.secrets))
         self.receipt(scenario, "PASS" if passed else "FAIL", "Fresh Python and Gradle baselines passed." if passed
                      else "One or more fresh automated baselines failed.", dry="PASS" if passed else "FAIL",
                      live="N/A", api="N/A", sqlite="N/A",
@@ -660,8 +696,7 @@ class Campaign:
         return "PASS"
 
     def _redacted_executor_cause(self, error: Exception) -> str:
-        cause = safe_text(str(error), self.secrets)
-        cause = re.sub(r"https?://\S+", "[REDACTED-URL]", cause)
+        cause = safe_log_value(error, self.secrets)
         return cause[:1000] or error.__class__.__name__
 
     def _record_cleanup_failure(self, scenario: str, error: Exception) -> None:
@@ -688,11 +723,22 @@ class Campaign:
 
     def run_scenario(self, scenario: str, action, *, cleanup_after: bool = True):
         """Run one independent scenario without aborting later scenarios."""
+        receipts_before = set(self.receipts)
+        completed_before = sum(item in self.receipts for item in AUTOMATED_SCENARIO_IDS)
+        position = min(completed_before + 1, len(AUTOMATED_SCENARIO_IDS))
+        requirement = next(
+            (item[1] for item in SCENARIOS if item[0] == scenario), "QA scenario"
+        )
+        started = time.monotonic()
+        emit_progress(
+            f"START {position}/{len(AUTOMATED_SCENARIO_IDS)} {scenario}: {requirement}"
+        )
         result = None
         try:
             result = action()
         except Exception as error:
             cause = self._redacted_executor_cause(error)
+            emit_progress(f"ERROR {scenario} {error.__class__.__name__}: {cause}")
             if scenario not in self.receipts:
                 self.receipt(
                     scenario, "FAIL", "Scenario executor failed before verification completed.",
@@ -701,10 +747,48 @@ class Campaign:
                 )
         finally:
             if cleanup_after:
+                emit_progress(f"CLEANUP START {scenario}")
                 try:
                     self.cleanup()
+                    emit_progress(f"CLEANUP FINISH {scenario} status=PASS")
                 except Exception as cleanup_error:
+                    cleanup_cause = self._redacted_executor_cause(cleanup_error)
+                    emit_progress(
+                        f"CLEANUP FINISH {scenario} status=FAIL "
+                        f"{cleanup_error.__class__.__name__}: {cleanup_cause}"
+                    )
                     self._record_cleanup_failure(scenario, cleanup_error)
+        completed_after = sum(item in self.receipts for item in AUTOMATED_SCENARIO_IDS)
+        covered = [
+            item for item in AUTOMATED_SCENARIO_IDS
+            if item in self.receipts and item not in receipts_before
+        ]
+        statuses = ",".join(
+            f"{item}={self.receipts[item].get('status', 'UNKNOWN')}" for item in covered
+        ) or f"{scenario}=NOT_RECORDED"
+        finish_position = max(position, completed_after)
+        emit_progress(
+            f"FINISH {finish_position}/{len(AUTOMATED_SCENARIO_IDS)} {scenario} "
+            f"status={self.receipts.get(scenario, {}).get('status', 'NOT_RECORDED')} "
+            f"receipts={statuses} duration_seconds={time.monotonic() - started:.1f}"
+        )
+        for item in covered:
+            receipt = self.receipts[item]
+            if receipt.get("status") == "PASS":
+                continue
+            failed_assertions = ",".join(
+                safe_log_value(assertion.get("name", "unnamed"), self.secrets)
+                for assertion in receipt.get("assertions", [])
+                if assertion.get("status") != "PASS"
+            ) or "none-recorded"
+            artifacts = ",".join(
+                safe_log_value(link, self.secrets) for link in receipt.get("artifact_links", [])
+            ) or "none-recorded"
+            emit_progress(
+                f"RESULT {item} status={receipt.get('status', 'UNKNOWN')} "
+                f"reason={safe_log_value(receipt.get('reason', ''), self.secrets)} "
+                f"failed_assertions={failed_assertions} artifacts={artifacts}"
+            )
         return result
 
     def run_automated_matrix(self) -> None:
@@ -730,6 +814,10 @@ class Campaign:
                 "B2 was skipped because B1 did not establish a verified replay baseline.",
                 dry="NOT_RUN", live="NOT_RUN", api="NOT_RUN", sqlite="NOT_RUN",
                 dependency_blocked=True, dependency="B1-live-create",
+            )
+            emit_progress(
+                f"SKIP 9/{len(AUTOMATED_SCENARIO_IDS)} B2-live-replay "
+                "status=NOT_RUN dependency=B1-live-create"
             )
         try:
             self.cleanup()
