@@ -1,17 +1,18 @@
-# Offline QA evidence configuration. Copy this file to qa/config/qa-sync.yaml
-# and replace every fullId value with the complete immutable plan UUID copied
-# manually from YNAB. A UUID suffix is never sufficient.
+# Offline QA evidence configuration. Copy this file to qa/config/qa-sync.yaml.
+# Local laptop: replace every fullId with the complete immutable plan UUID.
+# CI / env-only: keep these placeholders and export QA_*_PLAN_ID. Expansion is
+# in memory only. A UUID suffix is never sufficient.
 budgets:
   parent:
     displayName: "Jorsten's Plan"
-    fullId: REPLACE_WITH_FULL_IMMUTABLE_PLAN_UUID
+    fullId: ${QA_PARENT_PLAN_ID}
   children:
     - displayName: "Jorsten Jr's Plan"
-      fullId: REPLACE_WITH_FULL_IMMUTABLE_PLAN_UUID
+      fullId: ${QA_JORSTEN_JR_PLAN_ID}
     - displayName: "Borsten's Plan"
-      fullId: REPLACE_WITH_FULL_IMMUTABLE_PLAN_UUID
+      fullId: ${QA_BORSTEN_PLAN_ID}
     - displayName: "Thorsten's Plan"
-      fullId: REPLACE_WITH_FULL_IMMUTABLE_PLAN_UUID
+      fullId: ${QA_THORSTEN_PLAN_ID}
 
 provisioning:
   # The category-only provisioning CLI uses this one dedicated parent group.

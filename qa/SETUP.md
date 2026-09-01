@@ -33,13 +33,19 @@ Required names, in a dedicated group such as `BOD Reconciliation QA`:
 
 You can create missing categories with `qa/provision_categories.py` after the local config exists. Do not create them in a family plan.
 
-## 4. Tokens
+## 4. Tokens and plan IDs
 
-1. Copy `qa/config/tokens.txt.example` to `tokens.txt` at the repo root.
-2. `chmod 0600 tokens.txt`
-3. Put one developer token per QA plan. Do not commit the file. It is gitignored.
-4. Copy `qa/config/qa-sync.yaml.example` to `qa/config/qa-sync.yaml`.
-5. Replace every `fullId` with the **complete** immutable plan UUID from YNAB. Suffixes are rejected.
+Local laptop:
+
+1. Export the four token env vars, or copy `qa/config/tokens.txt.example` to gitignored `tokens.txt` (`chmod 0600`). Env vars win. Never commit tokens. The suite will not write `tokens.txt`.
+2. Copy `qa/config/qa-sync.yaml.example` to `qa/config/qa-sync.yaml`.
+3. Either put complete plan UUIDs in `fullId`, or keep `${QA_*_PLAN_ID}` and export those env vars. Suffixes are rejected.
+
+GitHub Actions (opt-in):
+
+- Repository secrets: `PARENT_ACCESS_TOKEN`, `JORSTEN_JR_ACCESS_TOKEN`, `BORSTEN_ACCESS_TOKEN`, `THORSTEN_ACCESS_TOKEN`, `QA_PARENT_PLAN_ID`, `QA_JORSTEN_JR_PLAN_ID`, `QA_BORSTEN_PLAN_ID`, `QA_THORSTEN_PLAN_ID`.
+- Label a PR `end-to-end-qa` only if you are `justinfiore` or `jhorgenson`. Forks never run.
+- The workflow copies the example yaml (placeholders only) and expands IDs in memory. It does not write tokens to disk.
 
 ## 5. Live confirmation
 

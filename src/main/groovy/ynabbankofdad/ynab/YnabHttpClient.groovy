@@ -9,7 +9,16 @@ import java.net.http.HttpTimeoutException
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.StandardOpenOption
+import java.time.DateTimeException
 import java.time.Duration
+import java.time.Instant
+import java.time.ZonedDateTime
+import java.time.format.DateTimeFormatter
+import java.time.format.DateTimeParseException
 import java.util.concurrent.TimeoutException
 
 /**
@@ -25,13 +34,17 @@ import java.util.concurrent.TimeoutException
  */
 @Slf4j
 class YnabHttpClient {
+    static final String WRITE_ATTEMPT_TELEMETRY_ENV = 'YNAB_WRITE_ATTEMPT_TELEMETRY_FILE'
     final String baseUrl
     final String accessToken
     final HttpClient httpClient
     final JsonSlurper jsonSlurper = new JsonSlurper()
     final Duration requestTimeout
-    final int maxGetRateLimitRetries
+    /** Null means retry 429 responses until a non-429 response is received. */
+    final Integer maxRateLimitRetries
     final Closure sleeper
+    final Closure clock
+    final Path writeAttemptTelemetryPath
 
     YnabHttpClient(String baseUrl, String accessToken) {
         this(baseUrl, accessToken, HttpClient.newBuilder()
@@ -44,20 +57,36 @@ class YnabHttpClient {
     }
 
     YnabHttpClient(String baseUrl, String accessToken, HttpClient httpClient, Duration requestTimeout) {
-        this(baseUrl, accessToken, httpClient, requestTimeout, 1, { Duration delay -> Thread.sleep(delay.toMillis()) })
+        this(baseUrl, accessToken, httpClient, requestTimeout, null,
+            { Duration delay -> Thread.sleep(delay.toMillis()) }, { Instant.now() })
     }
 
     YnabHttpClient(String baseUrl, String accessToken, HttpClient httpClient, Duration requestTimeout,
-                   int maxGetRateLimitRetries, Closure sleeper) {
-        if (maxGetRateLimitRetries < 0) {
-            throw new IllegalArgumentException('maxGetRateLimitRetries must be non-negative')
+                   Integer maxRateLimitRetries, Closure sleeper) {
+        this(baseUrl, accessToken, httpClient, requestTimeout, maxRateLimitRetries, sleeper,
+            { Instant.now() })
+    }
+
+    YnabHttpClient(String baseUrl, String accessToken, HttpClient httpClient, Duration requestTimeout,
+                   Integer maxRateLimitRetries, Closure sleeper, Closure clock) {
+        this(baseUrl, accessToken, httpClient, requestTimeout, maxRateLimitRetries, sleeper, clock,
+            writeAttemptTelemetryPathFromEnvironment())
+    }
+
+    YnabHttpClient(String baseUrl, String accessToken, HttpClient httpClient, Duration requestTimeout,
+                   Integer maxRateLimitRetries, Closure sleeper, Closure clock,
+                   Path writeAttemptTelemetryPath) {
+        if (maxRateLimitRetries != null && maxRateLimitRetries < 0) {
+            throw new IllegalArgumentException('maxRateLimitRetries must be non-negative')
         }
         this.baseUrl = baseUrl.endsWith('/') ? baseUrl[0..-2] : baseUrl
         this.accessToken = accessToken
         this.httpClient = httpClient
         this.requestTimeout = requestTimeout
-        this.maxGetRateLimitRetries = maxGetRateLimitRetries
+        this.maxRateLimitRetries = maxRateLimitRetries
         this.sleeper = sleeper
+        this.clock = clock
+        this.writeAttemptTelemetryPath = writeAttemptTelemetryPath
     }
 
     def getJson(String path) {
@@ -132,54 +161,121 @@ class YnabHttpClient {
     private YnabHttpResponse sendJson(HttpRequest request, String method, String path, Set<Integer> acceptedStatuses) {
         HttpResponse<String> response
         int rateLimitRetries = 0
+        String resourceClass = resourceClass(path)
         while (true) {
+            recordWriteAttempt(method, resourceClass)
             try {
                 response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt()
-                throw new IllegalStateException("YNAB ${method} ${path} interrupted", e)
+                throw new IllegalStateException("YNAB ${method} ${resourceClass} interrupted", e)
             } catch (HttpTimeoutException | TimeoutException e) {
-                throw new IllegalStateException("YNAB ${method} ${path} timed out after ${requestTimeout}", e)
+                throw new IllegalStateException("YNAB ${method} ${resourceClass} timed out", e)
             }
-            if (response.statusCode() != 429 || method != 'GET' || rateLimitRetries >= maxGetRateLimitRetries) {
+            if (response.statusCode() != 429) {
                 break
             }
-            Duration delay = boundedRetryDelay(response)
-            log.warn('YNAB GET {} was rate limited; retrying once after {}', path, delay)
+            if (maxRateLimitRetries != null && rateLimitRetries >= maxRateLimitRetries) {
+                throw new IllegalStateException("YNAB ${method} ${resourceClass} failed with status 429")
+            }
+            Duration delay = boundedRetryDelay(response, rateLimitRetries + 1, currentInstant())
+            log.warn('YNAB {} {} was rate limited; retrying after {}', method, resourceClass, delay)
             try {
                 sleeper.call(delay)
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt()
-                throw new IllegalStateException("YNAB ${method} ${path} interrupted while waiting to retry", e)
+                throw new IllegalStateException("YNAB ${method} ${resourceClass} interrupted while waiting to retry", e)
             }
             rateLimitRetries++
         }
         String bodyText = response.body()
 
         if ((response.statusCode() < 200 || response.statusCode() >= 300) && !acceptedStatuses.contains(response.statusCode())) {
-            throw new IllegalStateException("YNAB ${method} ${path} failed with status ${response.statusCode()}: ${bodyText}")
+            throw new IllegalStateException("YNAB ${method} ${resourceClass} failed with status ${response.statusCode()}")
         }
 
         def parsedBody
         try {
             parsedBody = (bodyText == null || bodyText.isBlank()) ? null : jsonSlurper.parseText(bodyText)
         } catch (RuntimeException e) {
-            throw new IllegalStateException("YNAB ${method} ${path} returned invalid JSON", e)
+            throw new IllegalStateException("YNAB ${method} ${resourceClass} returned invalid JSON", e)
         }
         return new YnabHttpResponse(response.statusCode(), bodyText, parsedBody)
     }
 
-    private static Duration boundedRetryDelay(HttpResponse<String> response) {
-        String header = response.headers().firstValue('Retry-After').orElse('')
+    private void recordWriteAttempt(String method, String resourceClass) {
+        if (method == 'GET' || writeAttemptTelemetryPath == null) {
+            return
+        }
+        String record = JsonOutput.toJson([method: method, resource_class: resourceClass]) + '\n'
+        try {
+            Files.writeString(writeAttemptTelemetryPath, record, StandardCharsets.UTF_8,
+                StandardOpenOption.CREATE, StandardOpenOption.APPEND)
+        } catch (IOException | RuntimeException ignored) {
+            throw new IllegalStateException(
+                "YNAB ${method} ${resourceClass} could not record write attempt")
+        }
+    }
+
+    private static Path writeAttemptTelemetryPathFromEnvironment() {
+        String configured = System.getenv(WRITE_ATTEMPT_TELEMETRY_ENV)
+        configured == null || configured.isBlank() ? null : Path.of(configured)
+    }
+
+    private Instant currentInstant() {
+        def value = clock.call()
+        if (!(value instanceof Instant)) {
+            throw new IllegalStateException('YNAB retry clock did not return an Instant')
+        }
+        (Instant) value
+    }
+
+    private static Duration boundedRetryDelay(HttpResponse<String> response, int retryNumber, Instant now) {
+        String header = firstHeaderIgnoreCase(response, 'Retry-After')
         try {
             long seconds = Long.parseLong(header)
             if (seconds > 0) {
-                return Duration.ofSeconds(Math.min(seconds, 30L))
+                return cap(Duration.ofSeconds(seconds))
             }
         } catch (NumberFormatException ignored) {
-            // YNAB may omit or use a non-numeric Retry-After value; use a conservative fallback.
+            try {
+                Instant resume = ZonedDateTime.parse(header, DateTimeFormatter.RFC_1123_DATE_TIME).toInstant()
+                if (resume.isAfter(now)) {
+                    return cap(Duration.between(now, resume))
+                }
+            } catch (DateTimeParseException ignoredDate) {
+                // Try reset-epoch headers next.
+            }
         }
-        return Duration.ofSeconds(5)
+        for (String name : ['RateLimit-Reset', 'X-RateLimit-Reset', 'X-Rate-Limit-Reset']) {
+            String reset = firstHeaderIgnoreCase(response, name)
+            try {
+                Instant resume = Instant.ofEpochSecond(Long.parseLong(reset))
+                if (resume.isAfter(now)) {
+                    return cap(Duration.between(now, resume))
+                }
+            } catch (NumberFormatException | DateTimeException ignored) {
+                // Continue to the next common reset header.
+            }
+        }
+        return cap(Duration.ofSeconds(5L * retryNumber))
+    }
+
+    private static String firstHeaderIgnoreCase(HttpResponse<String> response, String name) {
+        def entry = response.headers().map().find { key, ignored -> key.equalsIgnoreCase(name) }
+        entry?.value?.find { it != null } ?: ''
+    }
+
+    private static Duration cap(Duration delay) {
+        Duration maximum = Duration.ofSeconds(3600)
+        delay.compareTo(maximum) > 0 ? maximum : delay
+    }
+
+    private static String resourceClass(String path) {
+        List<String> known = ['transactions', 'plans', 'categories', 'accounts', 'months',
+                              'payees', 'scheduled_transactions']
+        List<String> segments = (path ?: '').split(/[?\/]/).findAll { it }
+        segments.reverse().find { known.contains(it) } ?: 'resource'
     }
 }
 

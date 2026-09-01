@@ -14,11 +14,17 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from datetime import timezone
+from email.utils import parsedate_to_datetime
 from threading import Lock
 from typing import Any, Callable, Mapping
 
 
 API_ROOT = "https://api.ynab.com/v1"
+LINEAR_STEP_SECONDS = 5
+MAX_RATE_LIMIT_WAIT_SECONDS = 3600
+DEFAULT_CLEANUP_PACING_MS = 500
+RESET_HEADERS = ("ratelimit-reset", "x-ratelimit-reset", "x-rate-limit-reset")
 KNOWN_NAMES = {
     "Jorsten's Plan",
     "Jorsten Jr's Plan",
@@ -44,8 +50,10 @@ class YnabQaClient:
         allowlist: Mapping[str, str],
         timeout: int = 30,
         *,
-        max_get_rate_limit_retries: int = 3,
+        max_rate_limit_retries: int | None = None,
         sleeper: Callable[[float], None] = time.sleep,
+        clock: Callable[[], float] = time.time,
+        request_pacing_ms: int = 0,
     ):
         if not token or any(ch.isspace() for ch in token):
             raise QaSafetyError("A non-empty test token is required")
@@ -53,16 +61,30 @@ class YnabQaClient:
             raise QaSafetyError("Allowlist must contain exactly the four QA name/ID pairs")
         if any(not self._looks_like_uuid(value) for value in allowlist.values()):
             raise QaSafetyError("Every allowlisted plan ID must be a full UUID")
-        if max_get_rate_limit_retries < 0:
-            raise QaSafetyError("Rate-limit retry count must be non-negative")
+        if max_rate_limit_retries is not None and (
+            isinstance(max_rate_limit_retries, bool)
+            or not isinstance(max_rate_limit_retries, int)
+            or max_rate_limit_retries < 0
+        ):
+            raise QaSafetyError("Rate-limit retry count must be a non-negative integer or None")
         self._token = token
         self._allowlist = dict(allowlist)
         self._timeout = timeout
-        self._max_get_rate_limit_retries = max_get_rate_limit_retries
+        self._max_rate_limit_retries = max_rate_limit_retries
         self._sleeper = sleeper
+        self._clock = clock
+        self._request_pacing_ms = 0
+        self.set_request_pacing_ms(request_pacing_ms)
         self._consumed_manifest_authorizations: set[str] = set()
         self._manifest_authorization_lock = Lock()
         self._consumed_provisioning_authorizations: set[str] = set()
+        self._request_telemetry: dict[tuple[str, str, str], dict[str, int]] = {}
+        self._request_telemetry_lock = Lock()
+
+    def set_request_pacing_ms(self, pacing_ms: int) -> None:
+        if isinstance(pacing_ms, bool) or not isinstance(pacing_ms, int) or pacing_ms < 0:
+            raise QaSafetyError("Request pacing must be a non-negative integer number of milliseconds")
+        self._request_pacing_ms = pacing_ms
 
     @staticmethod
     def _looks_like_uuid(value: str) -> bool:
@@ -86,6 +108,28 @@ class YnabQaClient:
 
     def discover_plans(self) -> dict[str, Any]:
         return self._request("GET", "plans")
+
+    def request_telemetry(self) -> list[dict[str, Any]]:
+        """Return aggregate request evidence containing only an intentionally safe schema."""
+        with self._request_telemetry_lock:
+            rows = [
+                {
+                    "method": method,
+                    "resource_class": resource_class,
+                    "status_class": status_class,
+                    "count": totals["count"],
+                    "retry_count": totals["retry_count"],
+                }
+                for (method, resource_class, status_class), totals
+                in self._request_telemetry.items()
+            ]
+        return sorted(
+            rows,
+            key=lambda item: (
+                item["method"], item["resource_class"],
+                item["status_class"],
+            ),
+        )
 
     def create_category_group(
         self,
@@ -279,6 +323,7 @@ class YnabQaClient:
         return self._request(method, f"plans/{identity.plan_id}/transactions{suffix}", payload)
 
     def _request(self, method: str, path: str, payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        resource_class = self._logical_resource_class(path)
         data = None if payload is None else json.dumps(payload).encode("utf-8")
         request = urllib.request.Request(
             f"{API_ROOT}/{path}",
@@ -292,30 +337,120 @@ class YnabQaClient:
         )
         attempts = 0
         while True:
+            if self._request_pacing_ms:
+                self._sleeper(self._request_pacing_ms / 1000.0)
             try:
                 with urllib.request.urlopen(request, timeout=self._timeout) as response:
+                    status = getattr(response, "status", None)
+                    self._record_request(method, resource_class, self._status_class(status or 200))
                     return json.load(response)
             except urllib.error.HTTPError as error:
-                if (
-                    method == "GET"
-                    and error.code == 429
-                    and attempts < self._max_get_rate_limit_retries
+                if error.code == 429 and (
+                    self._max_rate_limit_retries is None
+                    or attempts < self._max_rate_limit_retries
                 ):
-                    self._sleeper(self._retry_delay(error))
+                    self._record_request(
+                        method, resource_class, self._status_class(error.code), retried=True,
+                    )
+                    self._sleeper(self._retry_delay(error, attempts))
                     attempts += 1
                     continue
+                self._record_request(method, resource_class, self._status_class(error.code))
                 # Never include headers, token, or a response URL in evidence/logs.
                 raise RuntimeError(f"YNAB API returned HTTP {error.code}") from None
-            except urllib.error.URLError as error:
-                raise RuntimeError(f"YNAB API request failed: {error.reason}") from None
+            except urllib.error.URLError:
+                self._record_request(method, resource_class, "transport_error")
+                raise RuntimeError("YNAB API request failed") from None
 
     @staticmethod
-    def _retry_delay(error: urllib.error.HTTPError) -> float:
-        """Use a bounded numeric Retry-After, or a conservative 30-second fallback."""
-        try:
-            seconds = int(error.headers.get("Retry-After", ""))
-            if seconds > 0:
-                return float(min(seconds, 30))
-        except (TypeError, ValueError):
-            pass
-        return 30.0
+    def _logical_resource_class(path: str) -> str:
+        parts = path.strip("/").split("/")
+        if parts == ["plans"]:
+            return "plans"
+        resource = parts[2] if len(parts) >= 3 and parts[0] == "plans" else "unknown"
+        return resource if resource in {
+            "accounts", "categories", "category_groups", "transactions", "money_movements",
+        } else "unknown"
+
+    @staticmethod
+    def _status_class(status: int) -> str:
+        return f"{status // 100}xx" if 100 <= status <= 599 else "unknown"
+
+    def _record_request(
+        self, method: str, resource_class: str, status_class: str, *, retried: bool = False,
+    ) -> None:
+        key = (method, resource_class, status_class)
+        with self._request_telemetry_lock:
+            totals = self._request_telemetry.setdefault(key, {"count": 0, "retry_count": 0})
+            totals["count"] += 1
+            totals["retry_count"] += int(retried)
+
+    def _retry_delay(self, error: urllib.error.HTTPError, attempt: int) -> float:
+        """Return a bounded resume delay without retaining or exposing raw headers."""
+        def header_value(target: str) -> Any:
+            for name, value in error.headers.items() if error.headers else ():
+                if str(name).lower() == target:
+                    return value
+            return None
+
+        waits: list[float] = []
+        retry_after = header_value("retry-after")
+        if retry_after is not None:
+            value = str(retry_after).strip()
+            try:
+                seconds = int(value)
+                if seconds > 0:
+                    waits.append(float(seconds))
+            except ValueError:
+                try:
+                    resume_at = parsedate_to_datetime(value)
+                    if resume_at.tzinfo is None:
+                        resume_at = resume_at.replace(tzinfo=timezone.utc)
+                    seconds = resume_at.timestamp() - self._clock()
+                    if seconds > 0:
+                        waits.append(seconds)
+                except (TypeError, ValueError, OverflowError):
+                    pass
+        for name in RESET_HEADERS:
+            try:
+                seconds = float(str(header_value(name) or "").strip()) - self._clock()
+                if seconds > 0:
+                    waits.append(seconds)
+            except (TypeError, ValueError, OverflowError):
+                pass
+        wait = max(waits) if waits else LINEAR_STEP_SECONDS * (attempt + 1)
+        return float(min(wait, MAX_RATE_LIMIT_WAIT_SECONDS))
+
+
+def cleanup_pacing_ms(environ: Mapping[str, str] | None = None) -> int:
+    """Parse cleanup-only request pacing without exposing environment contents."""
+    source = os.environ if environ is None else environ
+    raw = source.get("QA_CLEANUP_PACING_MS", "")
+    value = str(raw).strip()
+    if not value:
+        return DEFAULT_CLEANUP_PACING_MS
+    try:
+        pacing_ms = int(value)
+    except ValueError:
+        raise QaSafetyError("QA_CLEANUP_PACING_MS must be a non-negative integer") from None
+    if pacing_ms < 0:
+        raise QaSafetyError("QA_CLEANUP_PACING_MS must be a non-negative integer")
+    return pacing_ms
+
+
+def merge_request_telemetry(clients: Mapping[str, YnabQaClient]) -> list[dict[str, Any]]:
+    """Merge client metrics without retaining which token or plan issued a request."""
+    totals: dict[tuple[str, str, str], dict[str, int]] = {}
+    for client in clients.values():
+        for row in client.request_telemetry():
+            key = (row["method"], row["resource_class"], row["status_class"])
+            aggregate = totals.setdefault(key, {"count": 0, "retry_count": 0})
+            aggregate["count"] += row["count"]
+            aggregate["retry_count"] += row["retry_count"]
+    return [
+        {
+            "method": key[0], "resource_class": key[1], "status_class": key[2],
+            "count": totals[key]["count"], "retry_count": totals[key]["retry_count"],
+        }
+        for key in sorted(totals)
+    ]

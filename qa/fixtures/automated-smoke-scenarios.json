@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "suite": "automated-smoke",
+  "scenario_ids": [
+    "A2-guard-rejection",
+    "A3-config-smoke",
+    "B1-live-create",
+    "B2-live-replay"
+  ]
+}

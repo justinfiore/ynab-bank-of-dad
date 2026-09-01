@@ -341,8 +341,10 @@ class RecordAllowanceWireMockSpec extends Specification {
 
         then:
         def ex = thrown(IllegalStateException)
-        ex.message.contains('YNAB GET /v1/plans failed with status 503')
-        ex.message.contains('try later')
+        ex.message == 'YNAB GET plans failed with status 503'
+        !ex.message.contains('/v1/plans')
+        !ex.message.contains('service_unavailable')
+        !ex.message.contains('try later')
     }
 
     def "getUser uses simulated YNAB user response"() {
@@ -577,8 +579,10 @@ class RecordAllowanceWireMockSpec extends Specification {
 
         then:
         def ex = thrown(IllegalStateException)
-        ex.message.contains('YNAB POST /v1/plans/budget-new/transactions/bulk failed with status 500')
-        ex.message.contains('boom')
+        ex.message == 'YNAB POST transactions failed with status 500'
+        !ex.message.contains('budget-new')
+        !ex.message.contains('internal_server_error')
+        !ex.message.contains('boom')
     }
 
     private YnabHttpClient buildClient() {

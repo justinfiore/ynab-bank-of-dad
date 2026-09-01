@@ -39,6 +39,24 @@ FULL_UUID = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", re.IGNORE
 FULL_UUID_BYTES = re.compile(
     rb"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", re.IGNORECASE
 )
+BYTE_SCAN_ENCODINGS = ("utf-8", "utf-16-le", "utf-16-be", "utf-32-le", "utf-32-be")
+
+
+def _case_insensitive_ascii_byte_pattern(value: str, encoding: str) -> re.Pattern[bytes]:
+    width = 1 if encoding == "utf-8" else 2 if encoding.startswith("utf-16") else 4
+    big_endian = encoding.endswith("be")
+    code_units = []
+    for character in value:
+        letter = b"[" + character.lower().encode("ascii") + character.upper().encode("ascii") + b"]"
+        padding = b"\x00" * (width - 1)
+        code_units.append(padding + letter if big_endian else letter + padding)
+    return re.compile(b"".join(code_units))
+
+
+AUTHORIZATION_BYTES = tuple(
+    _case_insensitive_ascii_byte_pattern("authorization", encoding)
+    for encoding in BYTE_SCAN_ENCODINGS
+)
 
 
 class EvidenceSafetyError(RuntimeError):
@@ -54,7 +72,11 @@ def _sha256(path: Path) -> str:
 
 
 def scan_evidence(root: Path, tokens: Iterable[str]) -> dict[str, object]:
-    token_values = [value.encode() for value in tokens if value]
+    token_values = [
+        value.encode(encoding)
+        for value in tokens if value
+        for encoding in BYTE_SCAN_ENCODINGS
+    ]
     problems: list[str] = []
     files = [path for path in root.rglob("*") if path.is_file()]
     for path in files:
@@ -63,10 +85,17 @@ def scan_evidence(root: Path, tokens: Iterable[str]) -> dict[str, object]:
             problems.append(f"raw token value: {path.relative_to(root)}")
         if FULL_UUID_BYTES.search(data):
             problems.append(f"full UUID outside ignored internal config: {path.relative_to(root)}")
+        authorization_matches = [
+            pattern.search(data) is not None for pattern in AUTHORIZATION_BYTES
+        ]
         try:
             text = data.decode("utf-8")
         except UnicodeDecodeError:
+            if any(authorization_matches):
+                problems.append(f"Authorization marker: {path.relative_to(root)}")
             continue
+        if any(authorization_matches[1:]):
+            problems.append(f"Authorization marker: {path.relative_to(root)}")
         if any(
             match.group(2).strip() != "[REDACTED]"
             for pattern in AUTH_VALUE_PATTERNS
@@ -84,7 +113,9 @@ def scan_evidence(root: Path, tokens: Iterable[str]) -> dict[str, object]:
     }
 
 
-def sanitize_evidence_text(root: Path, tokens: Iterable[str]) -> None:
+def sanitize_evidence_text(
+    root: Path, tokens: Iterable[str], *, refresh_capture_checksums: bool = True,
+) -> None:
     """Redact values copied from generated logs/reports; source files are never touched."""
     token_values = [value for value in tokens if value]
     for path in [candidate for candidate in root.rglob("*") if candidate.is_file()]:
@@ -100,6 +131,9 @@ def sanitize_evidence_text(root: Path, tokens: Iterable[str]) -> None:
         redacted = FULL_UUID.sub("[REDACTED-UUID]", redacted)
         if redacted != text:
             path.write_text(redacted, encoding="utf-8")
+
+    if not refresh_capture_checksums:
+        return
 
     for capture_path in root.glob("scenarios/**/*-capture.json"):
         capture = json.loads(capture_path.read_text(encoding="utf-8"))

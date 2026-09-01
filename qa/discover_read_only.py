@@ -9,11 +9,10 @@ import os
 import sys
 from pathlib import Path
 
-import yaml
-
 QA_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(QA_ROOT))
 
+from lib.qa_config import load_budget_identities
 from lib.read_only_discovery import CHILD_NAMES, PARENT_NAME, DiscoveryBlocked, run_discovery
 from lib.ynab_qa_client import PlanIdentity, YnabQaClient
 
@@ -32,10 +31,7 @@ def _write_json(path: Path, value: object) -> None:
 
 
 def _identities(config_path: Path) -> dict[str, PlanIdentity]:
-    raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    budgets = raw["budgets"]
-    entries = [budgets["parent"], *budgets["children"]]
-    return {item["displayName"]: PlanIdentity(item["displayName"], item["fullId"]) for item in entries}
+    return load_budget_identities(config_path)
 
 
 def main() -> int:

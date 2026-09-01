@@ -8,6 +8,7 @@ qa/artifacts contains stable references only and is safe for final packaging.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -16,6 +17,8 @@ import sqlite3
 import subprocess
 import sys
 import fcntl
+import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -25,17 +28,24 @@ QA_ROOT = Path(__file__).resolve().parent
 REPO_ROOT = QA_ROOT.parent
 sys.path.insert(0, str(QA_ROOT))
 
-from lib.campaign_matrix import SCENARIOS
+from lib.campaign_matrix import AUTOMATED_SCENARIO_IDS, SCENARIOS
 from lib.evidence_bundle import FULL_UUID
+from lib.qa_config import load_budget_identities
 from lib.live_campaign import (
     FreshMutationGate,
     evidence_transaction,
     fixture_amount,
     fixture_import_id,
+    memo_has_exact_campaign,
+    one_transaction_matches,
+    scenario_transactions,
     successful_operation_attempts,
 )
 from lib.run_capture import capture_sqlite_audit, redact, write_receipt
-from lib.ynab_qa_client import PlanIdentity, QaSafetyError, YnabQaClient
+from lib.ynab_qa_client import (
+    PlanIdentity, QaSafetyError, YnabQaClient, cleanup_pacing_ms,
+    merge_request_telemetry,
+)
 
 
 TOKEN_ENV = {
@@ -47,6 +57,7 @@ TOKEN_ENV = {
 PARENT = "Jorsten's Plan"
 CHILDREN = ("Jorsten Jr's Plan", "Borsten's Plan", "Thorsten's Plan")
 COUNTS = {"creates": 0, "updates": 0, "deletes": 0}
+WRITE_ATTEMPT_TELEMETRY_ENV = "YNAB_WRITE_ATTEMPT_TELEMETRY_FILE"
 
 
 def write_json(path: Path, value: Any) -> None:
@@ -56,6 +67,26 @@ def write_json(path: Path, value: Any) -> None:
 
 def safe_text(value: str, secrets: list[str]) -> str:
     return FULL_UUID.sub("[REDACTED-UUID]", redact(value, secrets))
+
+
+def safe_log_value(value: Any, secrets: list[str], *, limit: int = 1000) -> str:
+    """Redact sensitive values and keep one untrusted value on one log line."""
+    text = safe_text(str(value), secrets)
+    text = re.sub(r"https?://\S+", "[REDACTED-URL]", text)
+    return text.replace("\r", " ").replace("\n", " ")[:limit]
+
+
+def emit_progress(message: str) -> None:
+    """Write immediately visible, grep-friendly progress to CI logs."""
+    print(f"[QA] {message}", flush=True)
+
+
+def emit_failure_output(label: str, output: str) -> None:
+    """Expose a bounded diagnostic tail without allowing log-command injection."""
+    emit_progress(f"FAILURE OUTPUT START {label}")
+    for line in output[-12000:].splitlines():
+        print(f"[QA] | {line}", flush=True)
+    emit_progress(f"FAILURE OUTPUT END {label}")
 
 
 def extract_object(response: dict[str, Any], singular: str) -> dict[str, Any]:
@@ -80,12 +111,7 @@ class Campaign:
         if (self.artifacts / "scenarios").exists() and not resume:
             raise ValueError("Campaign artifact tree already contains scenario execution")
         self.raw.mkdir(parents=True, exist_ok=resume)
-        config = yaml.safe_load((QA_ROOT / "config/qa-sync.yaml").read_text(encoding="utf-8"))
-        entries = [config["budgets"]["parent"], *config["budgets"]["children"]]
-        self.identities = {
-            item["displayName"]: PlanIdentity(item["displayName"], item["fullId"])
-            for item in entries
-        }
+        self.identities = load_budget_identities(QA_ROOT / "config/qa-sync.yaml")
         self.allowlist = {name: item.plan_id for name, item in self.identities.items()}
         self.secrets = [os.environ.get(value, "") for value in TOKEN_ENV.values()]
         self.clients = {
@@ -101,6 +127,7 @@ class Campaign:
         self.created: list[tuple[str, str]] = []
         self.fixture_ordinal = self.api_write_attempts + 100 if resume else 0
         self.receipts: dict[str, dict[str, Any]] = {}
+        self.cleanup_failures: list[dict[str, str]] = []
         self.branch = subprocess.check_output(
             ["git", "branch", "--show-current"], cwd=REPO_ROOT, text=True
         ).strip()
@@ -111,11 +138,19 @@ class Campaign:
         self.state_db = self.raw / "campaign.db"
         self._write_runtime_config()
 
-    def raw_transactions(self, name: str, scenario: str | None = None) -> list[dict[str, Any]]:
+    def raw_transactions(self, name: str, scenario: str | None = None,
+                         *, include_deleted: bool = False) -> list[dict[str, Any]]:
         response = self.clients[name].get(self.identities[name], "transactions")
-        tag = f"{self.campaign_id}:{scenario}" if scenario else self.campaign_id
-        return [item for item in response.get("data", {}).get("transactions", [])
-                if tag in str(item.get("memo") or "") and not item.get("deleted")]
+        values = response.get("data", {}).get("transactions", [])
+        if scenario is not None:
+            return list(scenario_transactions(
+                values, self.campaign_id, scenario, include_deleted=include_deleted,
+            ))
+        return [
+            item for item in values
+            if memo_has_exact_campaign(item.get("memo"), self.campaign_id)
+            and (include_deleted or not item.get("deleted"))
+        ]
 
     @staticmethod
     def attempt_rows(state_db: Path) -> list[dict[str, Any]]:
@@ -130,8 +165,53 @@ class Campaign:
             except sqlite3.OperationalError:
                 return []
 
+    @staticmethod
+    def operation_attempt_count(state_db: Path) -> int:
+        """Return zero until the state database and operation-attempt schema exist."""
+        return len(Campaign.attempt_rows(state_db))
+
+    @staticmethod
+    def sqlite_family_fingerprints(state_db: Path) -> dict[str, str | None]:
+        """Fingerprint the database and standard sidecars without exposing their content."""
+        fingerprints = {}
+        for suffix in ("", "-journal", "-wal", "-shm"):
+            member = Path(str(state_db) + suffix)
+            try:
+                if member.is_symlink():
+                    raise QaSafetyError("SQLite database family contained an unsafe member")
+                if member.exists():
+                    if not member.is_file():
+                        raise QaSafetyError("SQLite database family contained an unsafe member")
+                    fingerprints[suffix] = hashlib.sha256(member.read_bytes()).hexdigest()
+                else:
+                    fingerprints[suffix] = None
+            except OSError as error:
+                raise QaSafetyError("SQLite database family could not be fingerprinted safely") from error
+        return fingerprints
+
+    @staticmethod
+    def write_attempt_telemetry_count(path: Path) -> int:
+        """Count only the HTTP client's fixed, sanitized JSONL telemetry schema."""
+        count = 0
+        try:
+            with path.open(encoding="utf-8") as records:
+                for line in records:
+                    record = json.loads(line)
+                    if (
+                        not isinstance(record, dict)
+                        or set(record) != {"method", "resource_class"}
+                        or record["method"] not in {"POST", "PUT", "PATCH", "DELETE"}
+                        or not isinstance(record["resource_class"], str)
+                        or re.fullmatch(r"[a-z_]+", record["resource_class"]) is None
+                    ):
+                        raise QaSafetyError("Write-attempt telemetry contained an unsafe record")
+                    count += 1
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            raise QaSafetyError("Write-attempt telemetry could not be read safely") from error
+        return count
+
     def run_live_counted(self, scenario: str, state_db: Path, *, max_cycles: int = 1,
-                         env_override: dict[str, str] | None = None) -> tuple[int, str, int]:
+                         env_override: dict[str, str | None] | None = None) -> tuple[int, str, int]:
         before = self.attempt_rows(state_db)
         rc, output = self.run_sync(scenario, False, state_db, max_cycles=max_cycles,
                                    env_override=env_override)
@@ -276,18 +356,25 @@ class Campaign:
         self.created.append((PARENT, transaction_id))
         return transaction_id
 
-    def snapshot(self, scenario: str, label: str) -> dict[str, list[dict[str, Any]]]:
+    def snapshot(self, scenario: str, label: str, *, scope_scenario: str | None = "") -> dict[str, list[dict[str, Any]]]:
+        selected_scenario = scenario if scope_scenario == "" else scope_scenario
         result: dict[str, list[dict[str, Any]]] = {}
         for name in (PARENT, *CHILDREN):
             response = self.clients[name].get(self.identities[name], "transactions")
             values = response.get("data", {}).get("transactions", [])
-            result[name] = [evidence_transaction(item) for item in values
-                            if self.campaign_id in str(item.get("memo") or "")]
+            selected = (
+                scenario_transactions(values, self.campaign_id, selected_scenario)
+                if selected_scenario is not None
+                else [item for item in values
+                      if memo_has_exact_campaign(item.get("memo"), self.campaign_id)
+                      and not item.get("deleted")]
+            )
+            result[name] = [evidence_transaction(item) for item in selected]
         write_json(self.artifacts / "scenarios" / scenario / f"api-{label}.json", result)
         return result
 
     def run_sync(self, scenario: str, dry: bool, state_db: Path, max_cycles: int = 1,
-                 env_override: dict[str, str] | None = None) -> tuple[int, str]:
+                 env_override: dict[str, str | None] | None = None) -> tuple[int, str]:
         # This discovery is intentionally immediately before the one-cycle process.
         parent_plans = self._plans(PARENT)
         for identity in self.identities.values():
@@ -298,19 +385,32 @@ class Campaign:
             "--config", str(self.runtime_config), "--sync-state-db-path", str(state_db),
             *( ["--dry-run"] if dry else [] ), "--max-cycles", str(max_cycles),
         ])]
+        mode = "dry-run" if dry else "live"
+        started = time.monotonic()
+        emit_progress(f"SYNC START {scenario} mode={mode} max_cycles={max_cycles}")
         environment = dict(os.environ)
-        environment.update(env_override or {})
+        for name, value in (env_override or {}).items():
+            if value is None:
+                environment.pop(name, None)
+            else:
+                environment[name] = value
         completed = subprocess.run(command, cwd=REPO_ROOT, env=environment, text=True,
                                    capture_output=True, check=False)
         output = safe_text(completed.stdout + completed.stderr, self.secrets)
         path = self.artifacts / "scenarios" / scenario / ("dry-run.log" if dry else "live-run.log")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(output, encoding="utf-8")
+        emit_progress(
+            f"SYNC FINISH {scenario} mode={mode} exit_code={completed.returncode} "
+            f"duration_seconds={time.monotonic() - started:.1f} log={path.relative_to(REPO_ROOT)}"
+        )
+        if completed.returncode != 0:
+            emit_failure_output(f"{scenario} mode={mode}", output)
         return completed.returncode, output
 
     def receipt(self, scenario: str, status: str, reason: str, *, expected=None, observed=None,
                 dry="NOT_RUN", live="NOT_RUN", api="NOT_RUN", sqlite="NOT_RUN",
-                assertions=None, links=None, attempts=0) -> None:
+                assertions=None, links=None, attempts=0, **outcome: Any) -> None:
         requirement = next(item[1] for item in SCENARIOS if item[0] == scenario)
         value = {
             "campaign_id": self.campaign_id, "scenario_id": scenario, "phase": scenario[0],
@@ -322,6 +422,7 @@ class Campaign:
             "dry_run": dry, "live_run": live, "api_observation": api,
             "sqlite_audit": sqlite, "assertions": assertions or [{"name": reason, "status": status}],
             "reason": reason, "status": status, "artifact_links": links or ["receipt.json"],
+            **outcome,
         }
         write_receipt(self.artifacts / "scenarios" / scenario / "receipt.json", value)
         self.receipts[scenario] = value
@@ -370,22 +471,35 @@ class Campaign:
         directory.mkdir(parents=True, exist_ok=True)
         py = subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "qa/tests", "-v"],
                             cwd=REPO_ROOT, text=True, capture_output=True, check=False)
-        gradle = subprocess.run(["./gradlew", "testAll", "--rerun-tasks"], cwd=REPO_ROOT,
-                                text=True, capture_output=True, check=False)
+        skip_gradle = os.environ.get("GITHUB_ACTIONS") == "true"
+        if skip_gradle:
+            gradle_ok = True
+            gradle_output = "Skipped nested ./gradlew testAll because GITHUB_ACTIONS=true.\n"
+        else:
+            gradle = subprocess.run(["./gradlew", "testAll", "--rerun-tasks"], cwd=REPO_ROOT,
+                                    text=True, capture_output=True, check=False)
+            gradle_ok = gradle.returncode == 0
+            gradle_output = gradle.stdout + gradle.stderr
         (directory / "harness-tests.log").write_text(safe_text(py.stdout + py.stderr, self.secrets))
-        (directory / "gradle-testAll.log").write_text(safe_text(gradle.stdout + gradle.stderr, self.secrets))
+        (directory / "gradle-testAll.log").write_text(safe_text(gradle_output, self.secrets))
         reports = self.artifacts / "automated-tests"
         for name in ("test", "integrationTest"):
             source = REPO_ROOT / "build/reports/tests" / name
             if source.exists():
                 shutil.copytree(source, reports / name, dirs_exist_ok=True)
-        passed = py.returncode == 0 and gradle.returncode == 0
+        passed = py.returncode == 0 and gradle_ok
+        if py.returncode != 0:
+            emit_failure_output(
+                "python-qa-tests", safe_text(py.stdout + py.stderr, self.secrets)
+            )
+        if not gradle_ok:
+            emit_failure_output("gradle-testAll", safe_text(gradle_output, self.secrets))
         self.receipt(scenario, "PASS" if passed else "FAIL", "Fresh Python and Gradle baselines passed." if passed
                      else "One or more fresh automated baselines failed.", dry="PASS" if passed else "FAIL",
                      live="N/A", api="N/A", sqlite="N/A",
                      assertions=[{"name": "Python QA tests", "status": "PASS" if py.returncode == 0 else "FAIL"},
-                                 {"name": "./gradlew testAll --rerun-tasks", "status": "PASS" if gradle.returncode == 0 else "FAIL"}],
-                     links=["harness-tests.log", "gradle-testAll.log", "../../automated-tests"])
+                                 {"name": "./gradlew testAll --rerun-tasks", "status": "PASS" if gradle_ok else "FAIL"}],
+                     links=["harness-tests.log", "gradle-testAll.log"])
 
     def _a2_guard(self) -> None:
         blocked = False
@@ -511,8 +625,7 @@ class Campaign:
         live_rc, _live_log, _ = self.run_live_counted(scenario, self.state_db)
         after = self.snapshot(scenario, "after")
         before_count = len(before["Jorsten Jr's Plan"])
-        matches = [item for item in after["Jorsten Jr's Plan"]
-                   if f"{self.campaign_id}:{scenario}" in str(item.get("memo") or "")]
+        matches = after["Jorsten Jr's Plan"]
         created = max(0, len(matches) - before_count)
         audit_status = "NOT_PRESENT"
         sync_write_attempts = 0
@@ -537,10 +650,10 @@ class Campaign:
 
     def _b2(self) -> None:
         scenario = "B2-live-replay"
-        before = self.snapshot(scenario, "before")
+        before = self.snapshot(scenario, "before", scope_scenario="B1-live-create")
         dry_rc, _ = self.run_sync(scenario, True, self.state_db)
         live_rc, _, _ = self.run_live_counted(scenario, self.state_db)
-        after = self.snapshot(scenario, "after")
+        after = self.snapshot(scenario, "after", scope_scenario="B1-live-create")
         stable = before == after
         passed = dry_rc == 0 and live_rc == 0 and stable
         self.receipt(scenario, "PASS" if passed else "FAIL",
@@ -582,6 +695,154 @@ class Campaign:
         capture_sqlite_audit(state_db, self.raw / f"{scenario}-audit.db", output)
         return "PASS"
 
+    def _redacted_executor_cause(self, error: Exception) -> str:
+        cause = safe_log_value(error, self.secrets)
+        return cause[:1000] or error.__class__.__name__
+
+    def _record_cleanup_failure(self, scenario: str, error: Exception) -> None:
+        cause = self._redacted_executor_cause(error)
+        self.cleanup_failures.append({"scenario_id": scenario, "cause": cause})
+        existing = self.receipts.get(scenario)
+        if existing is None:
+            self.receipt(
+                scenario, "FAIL", "Tagged cleanup failed after scenario execution.",
+                dry="NOT_RUN", live="NOT_RUN", api="FAIL", sqlite="NOT_RUN",
+                cleanup_failure=True, cleanup_cause=cause,
+            )
+            return
+        existing["status"] = "FAIL"
+        existing["cleanup_failure"] = True
+        existing["cleanup_cause"] = cause
+        existing["reason"] = "Scenario cleanup failed; campaign isolation is not verified."
+        existing.setdefault("assertions", []).append({
+            "name": "Exact campaign tagged cleanup", "status": "FAIL",
+        })
+        write_receipt(
+            self.artifacts / "scenarios" / scenario / "receipt.json", existing,
+        )
+
+    def run_scenario(self, scenario: str, action, *, cleanup_after: bool = True):
+        """Run one independent scenario without aborting later scenarios."""
+        receipts_before = set(self.receipts)
+        completed_before = sum(item in self.receipts for item in AUTOMATED_SCENARIO_IDS)
+        position = min(completed_before + 1, len(AUTOMATED_SCENARIO_IDS))
+        requirement = next(
+            (item[1] for item in SCENARIOS if item[0] == scenario), "QA scenario"
+        )
+        started = time.monotonic()
+        emit_progress(
+            f"START {position}/{len(AUTOMATED_SCENARIO_IDS)} {scenario}: {requirement}"
+        )
+        result = None
+        try:
+            result = action()
+        except Exception as error:
+            cause = self._redacted_executor_cause(error)
+            emit_progress(f"ERROR {scenario} {error.__class__.__name__}: {cause}")
+            if scenario not in self.receipts:
+                self.receipt(
+                    scenario, "FAIL", "Scenario executor failed before verification completed.",
+                    dry="FAIL", live="NOT_RUN", api="FAIL", sqlite="NOT_RUN",
+                    execution_error=True, executor_cause=cause,
+                )
+        finally:
+            if cleanup_after:
+                emit_progress(f"CLEANUP START {scenario}")
+                try:
+                    self.cleanup()
+                    emit_progress(f"CLEANUP FINISH {scenario} status=PASS")
+                except Exception as cleanup_error:
+                    cleanup_cause = self._redacted_executor_cause(cleanup_error)
+                    emit_progress(
+                        f"CLEANUP FINISH {scenario} status=FAIL "
+                        f"{cleanup_error.__class__.__name__}: {cleanup_cause}"
+                    )
+                    self._record_cleanup_failure(scenario, cleanup_error)
+        completed_after = sum(item in self.receipts for item in AUTOMATED_SCENARIO_IDS)
+        covered = [
+            item for item in AUTOMATED_SCENARIO_IDS
+            if item in self.receipts and item not in receipts_before
+        ]
+        statuses = ",".join(
+            f"{item}={self.receipts[item].get('status', 'UNKNOWN')}" for item in covered
+        ) or f"{scenario}=NOT_RECORDED"
+        finish_position = max(position, completed_after)
+        emit_progress(
+            f"FINISH {finish_position}/{len(AUTOMATED_SCENARIO_IDS)} {scenario} "
+            f"status={self.receipts.get(scenario, {}).get('status', 'NOT_RECORDED')} "
+            f"receipts={statuses} duration_seconds={time.monotonic() - started:.1f}"
+        )
+        for item in covered:
+            receipt = self.receipts[item]
+            if receipt.get("status") == "PASS":
+                continue
+            failed_assertions = ",".join(
+                safe_log_value(assertion.get("name", "unnamed"), self.secrets)
+                for assertion in receipt.get("assertions", [])
+                if assertion.get("status") != "PASS"
+            ) or "none-recorded"
+            artifacts = ",".join(
+                safe_log_value(link, self.secrets) for link in receipt.get("artifact_links", [])
+            ) or "none-recorded"
+            emit_progress(
+                f"RESULT {item} status={receipt.get('status', 'UNKNOWN')} "
+                f"reason={safe_log_value(receipt.get('reason', ''), self.secrets)} "
+                f"failed_assertions={failed_assertions} artifacts={artifacts}"
+            )
+        return result
+
+    def run_automated_matrix(self) -> None:
+        """Execute every automated scenario with explicit dependency and cleanup boundaries."""
+        independent = (
+            ("A1-baseline", self._baseline),
+            ("A2-guard-rejection", self._a2_guard),
+            ("A3-config-smoke", self._a3_smoke),
+            ("A4-dry-create", self._a4_a5),
+            ("A6-unapproved-unmapped", self._a6),
+            ("A7-split-fanout", lambda: self._a7(self._resources())),
+        )
+        for scenario, action in independent:
+            self.run_scenario(scenario, action)
+
+        b1_result = self.run_scenario("B1-live-create", self._b1, cleanup_after=False)
+        b1_passed = b1_result is True and self.receipts.get("B1-live-create", {}).get("status") == "PASS"
+        if b1_passed:
+            self.run_scenario("B2-live-replay", self._b2, cleanup_after=False)
+        else:
+            self.receipt(
+                "B2-live-replay", "NOT_RUN",
+                "B2 was skipped because B1 did not establish a verified replay baseline.",
+                dry="NOT_RUN", live="NOT_RUN", api="NOT_RUN", sqlite="NOT_RUN",
+                dependency_blocked=True, dependency="B1-live-create",
+            )
+            emit_progress(
+                f"SKIP 9/{len(AUTOMATED_SCENARIO_IDS)} B2-live-replay "
+                "status=NOT_RUN dependency=B1-live-create"
+            )
+        try:
+            self.cleanup()
+        except Exception as cleanup_error:
+            self._record_cleanup_failure("B2-live-replay" if b1_passed else "B1-live-create", cleanup_error)
+
+        remaining = (
+            ("B3-approval-transition", self._b3),
+            ("B4-live-split", self._b4),
+            ("C1-financial-update", self._c1),
+            ("C2-child-memo-owned", self._c2),
+            ("C3-same-child-reroute", self._c3),
+            ("C4-cross-child-reroute", self._c4),
+            ("C5-parent-unapproved", self._c5),
+            ("C6-parent-unmapped", self._c6),
+            ("C7-parent-deleted", self._c7),
+            ("C9-child-mirror-recreated", self._c9),
+            ("D1-invalid-child-token", self._d1),
+            ("D2-invalid-child-mapping", self._d2),
+            ("D3-single-writer-lock", self._d3),
+            ("D4-controlled-continuous", self._d4),
+        )
+        for scenario, action in remaining:
+            self.run_scenario(scenario, action)
+
     def execute_remaining(self) -> None:
         methods = (
             self._b3, self._b4, self._c1, self._c2, self._c3, self._c4,
@@ -618,8 +879,7 @@ class Campaign:
             subtransactions=subtransactions,
         )
         observations = self.snapshot(scenario, "after")
-        created = sum(1 for name in expected_children for item in observations[name]
-                      if f"{self.campaign_id}:{scenario}" in str(item.get("memo") or ""))
+        created = sum(len(observations[name]) for name in expected_children)
         expected_count = len(expected_children)
         passed = created == expected_count
         self.receipt(scenario, "PASS" if passed else "FAIL",
@@ -642,8 +902,7 @@ class Campaign:
         rc1, log1 = self.run_sync(scenario, True, state)
         live_rc, _, _ = self.run_live_counted(scenario, state)
         after = self.snapshot(scenario, "after")
-        matches = [item for item in after["Jorsten Jr's Plan"]
-                   if f"{self.campaign_id}:{scenario}" in str(item.get("memo") or "")]
+        matches = after["Jorsten Jr's Plan"]
         passed = rc0 == 0 and no_plan and rc1 == 0 and self.campaign_id in log1 and live_rc == 0 and len(matches) == 1
         self.receipt(scenario, "PASS" if passed else "FAIL",
                      "No mirror before approval and exactly one after approval.",
@@ -678,7 +937,9 @@ class Campaign:
         after = self.snapshot(scenario, "after-change")
         observed, ok = verify(child_before[0], after, dry_log)
         passed = dry_rc == 0 and live_rc == 0 and ok
-        self.receipt(scenario, "PASS" if passed else "FAIL", "Observed reconciliation matched the expected in-place/destructive semantics.",
+        self.receipt(scenario, "PASS" if passed else "FAIL",
+                     "Observed reconciliation matched the expected in-place/destructive semantics." if passed
+                     else "Scenario-scoped API identity or field assertions did not match the expected reconciliation.",
                      expected=expected, observed=observed, dry="PASS" if dry_rc == 0 else "FAIL",
                      live="PASS" if live_rc == 0 else "FAIL", api="PASS" if ok else "FAIL",
                      sqlite=self.audit(scenario, state), attempts=self.api_write_attempts - start,
@@ -691,8 +952,14 @@ class Campaign:
             self.parent_update(scenario, parent_id, date="2026-08-20", amount=-15,
                                payee_id=None, payee_name="Synthetic C1 changed")
         def verify(before, after, _log):
-            matches = [item for item in after["Jorsten Jr's Plan"] if self.campaign_id in str(item.get("memo") or "")]
-            ok = len(matches) == 1 and matches[0]["id"] == evidence_transaction(before)["id"] and matches[0].get("date") == "2026-08-20" and matches[0].get("amount") == -15 and matches[0].get("payee_name") == "Synthetic C1 changed" and matches[0].get("cleared") == "cleared" and matches[0].get("approved") is False
+            matches = after["Jorsten Jr's Plan"]
+            ok = one_transaction_matches(
+                matches, evidence_transaction(before)["id"], {
+                    "date": "2026-08-20", "amount": -15,
+                    "payee_name": "Synthetic C1 changed", "cleared": "cleared",
+                    "approved": False,
+                },
+            )
             return {"creates": 0, "updates": 1 if ok else 0, "deletes": 0}, ok
         self._changed_scenario(scenario, change, {"creates": 0, "updates": 1, "deletes": 0}, verify)
 
@@ -703,7 +970,7 @@ class Campaign:
             self.mutate(scenario, "PUT", "Jorsten Jr's Plan", {"transaction": {"memo": child_memo}}, child["id"])
             self.parent_update(scenario, parent_id, memo=f"BOD QA {self.campaign_id}:{scenario}:parent-edited")
         def verify(before, after, log):
-            matches = [item for item in after["Jorsten Jr's Plan"] if self.campaign_id in str(item.get("memo") or "")]
+            matches = after["Jorsten Jr's Plan"]
             ok = len(matches) == 1 and matches[0].get("memo") == child_memo and "update child transaction" not in log
             return dict(COUNTS), ok
         self._changed_scenario(scenario, change, dict(COUNTS), verify)
@@ -713,7 +980,7 @@ class Campaign:
         category = self._resources()["categories"]["QA Jorsten Jr Bronze"]
         def change(parent_id, _child): self.parent_update(scenario, parent_id, category_id=category)
         def verify(before, after, _log):
-            matches = [item for item in after["Jorsten Jr's Plan"] if self.campaign_id in str(item.get("memo") or "")]
+            matches = after["Jorsten Jr's Plan"]
             ok = len(matches) == 1 and matches[0]["id"] == evidence_transaction(before)["id"] and matches[0].get("account_name") == "Bronze"
             return {"creates": 0, "updates": 1 if ok else 0, "deletes": 0}, ok
         self._changed_scenario(scenario, change, {"creates": 0, "updates": 1, "deletes": 0}, verify)
@@ -723,15 +990,15 @@ class Campaign:
         category = self._resources()["categories"]["QA Borsten Silver"]
         def change(parent_id, _child): self.parent_update(scenario, parent_id, category_id=category)
         def verify(_before, after, _log):
-            old = [item for item in after["Jorsten Jr's Plan"] if self.campaign_id in str(item.get("memo") or "")]
-            new = [item for item in after["Borsten's Plan"] if self.campaign_id in str(item.get("memo") or "")]
+            old = after["Jorsten Jr's Plan"]
+            new = after["Borsten's Plan"]
             ok = not old and len(new) == 1
             return {"creates": 1 if new else 0, "updates": 0, "deletes": 1 if not old else 0}, ok
         self._changed_scenario(scenario, change, {"creates": 1, "updates": 0, "deletes": 1}, verify)
 
     def _deletion_scenario(self, scenario: str, change) -> None:
         def verify(_before, after, _log):
-            matches = [item for item in after["Jorsten Jr's Plan"] if self.campaign_id in str(item.get("memo") or "")]
+            matches = after["Jorsten Jr's Plan"]
             ok = not matches
             return {"creates": 0, "updates": 0, "deletes": 1 if ok else 0}, ok
         self._changed_scenario(scenario, change, {"creates": 0, "updates": 0, "deletes": 1}, verify)
@@ -755,7 +1022,7 @@ class Campaign:
             self.mutate(scenario, "DELETE", "Jorsten Jr's Plan", None, child["id"])
             self.parent_update(scenario, parent_id, memo=f"BOD QA {self.campaign_id}:{scenario}:benign-parent-edit")
         def verify(before, after, _log):
-            matches = [item for item in after["Jorsten Jr's Plan"] if self.campaign_id in str(item.get("memo") or "")]
+            matches = after["Jorsten Jr's Plan"]
             ok = len(matches) == 1 and matches[0]["id"] != evidence_transaction(before)["id"]
             return {"creates": 1 if ok else 0, "updates": 0, "deletes": 0}, ok
         self._changed_scenario(scenario, change, {"creates": 1, "updates": 0, "deletes": 0}, verify)
@@ -834,23 +1101,81 @@ class Campaign:
         state = self.raw / f"{scenario}.db"
         lock_path = Path(str(state) + ".lock")
         lock_path.parent.mkdir(parents=True, exist_ok=True)
+        telemetry_directory = self.artifacts / "scenarios" / scenario
+        telemetry_directory.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=telemetry_directory,
+            prefix="blocked-write-attempts-", suffix=".jsonl", delete=False,
+        ) as telemetry_file:
+            telemetry_path = Path(telemetry_file.name)
+        blocked_api_before = self.write_attempt_telemetry_count(telemetry_path)
+        blocked_sqlite_before = self.operation_attempt_count(state)
+        blocked_sqlite_family_before = self.sqlite_family_fingerprints(state)
         with lock_path.open("a+") as handle:
             fcntl.lockf(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            blocked_rc, blocked_log = self.run_sync(scenario, False, state)
+            blocked_rc, blocked_log = self.run_sync(
+                scenario, False, state,
+                env_override={WRITE_ATTEMPT_TELEMETRY_ENV: str(telemetry_path)},
+            )
             fcntl.lockf(handle, fcntl.LOCK_UN)
-        released_rc, released_log, attempts = self.run_live_counted(scenario, state)
+        blocked_api_delta = self.write_attempt_telemetry_count(telemetry_path) - blocked_api_before
+        self.api_write_attempts += blocked_api_delta
+        blocked_sqlite_family_after = self.sqlite_family_fingerprints(state)
+        blocked_sqlite_family_unchanged = (
+            blocked_sqlite_family_after == blocked_sqlite_family_before
+        )
+        blocked_sqlite_delta = self.operation_attempt_count(state) - blocked_sqlite_before
+        released_rc, _released_log, post_release_attempts = self.run_live_counted(
+            scenario, state, env_override={WRITE_ATTEMPT_TELEMETRY_ENV: None},
+        )
         blocked = blocked_rc != 0 and "already holds the live lock" in blocked_log
         released = released_rc == 0
         write_json(self.artifacts / "scenarios" / scenario / "lock-observation.json", {
-            "concurrent_process": "BLOCKED BEFORE API/SQLITE MUTATION" if blocked else "UNEXPECTED",
-            "post_release_process": "PASS" if released else "FAIL", "mutation_attempts": attempts,
+            "blocked_contender": {
+                "lock_rejection": "RECOGNIZED" if blocked else "NOT_RECOGNIZED",
+                "api_write_attempt_delta": blocked_api_delta,
+                "sqlite_database_family_unchanged": blocked_sqlite_family_unchanged,
+                "sqlite_database_family_members_before": sum(
+                    value is not None for value in blocked_sqlite_family_before.values()
+                ),
+                "sqlite_database_family_members_after": sum(
+                    value is not None for value in blocked_sqlite_family_after.values()
+                ),
+                "sqlite_operation_attempt_row_delta": blocked_sqlite_delta,
+                "write_attempt_telemetry": "SANITIZED_JSONL",
+                "write_attempt_telemetry_file": telemetry_path.name,
+            },
+            "post_release_process": {
+                "result": "PASS" if released else "FAIL",
+                "operation_attempt_rows": post_release_attempts,
+            },
         })
-        passed = blocked and released and attempts == 0
+        sqlite_safe = blocked_sqlite_family_unchanged and blocked_sqlite_delta == 0
+        passed = blocked and blocked_api_delta == 0 and sqlite_safe and released
         self.receipt(scenario, "PASS" if passed else "FAIL",
                      "A concurrent live process was rejected before mutation and a post-release max-cycles=1 run succeeded.",
-                     dry="PASS", live="PASS" if passed else "FAIL", api="ZERO MUTATIONS",
-                     sqlite="PASS" if passed else "FAIL", attempts=0,
-                     links=["live-run.log", "lock-observation.json"])
+                     dry="PASS", live="PASS" if released else "FAIL",
+                     api="PASS" if blocked_api_delta == 0 else "FAIL",
+                     sqlite="PASS" if sqlite_safe else "FAIL",
+                     attempts=blocked_api_delta + post_release_attempts,
+                     assertions=[
+                         {"name": "Concurrent live lock rejection recognized",
+                          "status": "PASS" if blocked else "FAIL"},
+                         {"name": "Blocked contender API write-attempt delta is zero",
+                          "status": "PASS" if blocked_api_delta == 0 else "FAIL"},
+                         {"name": "Blocked contender SQLite database family is unchanged",
+                          "status": "PASS" if blocked_sqlite_family_unchanged else "FAIL"},
+                         {"name": "Blocked contender SQLite operation-attempt row delta is zero",
+                          "status": "PASS" if blocked_sqlite_delta == 0 else "FAIL"},
+                         {"name": "Post-release max-cycles=1 run exits successfully",
+                          "status": "PASS" if released else "FAIL"},
+                     ],
+                     blocked_api_write_attempt_delta=blocked_api_delta,
+                     blocked_sqlite_database_family_unchanged=blocked_sqlite_family_unchanged,
+                     blocked_sqlite_operation_attempt_row_delta=blocked_sqlite_delta,
+                     post_release_operation_attempts=post_release_attempts,
+                     links=["live-run.log", "lock-observation.json",
+                            telemetry_path.name])
 
     def _d4(self) -> None:
         scenario = "D4-controlled-continuous"
@@ -860,8 +1185,7 @@ class Campaign:
         dry_rc, _ = self.run_sync(scenario, True, state)
         live_rc, live_log, _ = self.run_live_counted(scenario, state, max_cycles=2)
         after = self.snapshot(scenario, "after")
-        matches = [item for item in after["Thorsten's Plan"]
-                   if f"{self.campaign_id}:{scenario}" in str(item.get("memo") or "")]
+        matches = after["Thorsten's Plan"]
         two_cycles = "Cycle 2 read" in live_log
         passed = dry_rc == live_rc == 0 and len(matches) == 1 and two_cycles
         self.receipt(scenario, "PASS" if passed else "FAIL",
@@ -876,23 +1200,34 @@ class Campaign:
     def cleanup(self) -> None:
         cleanup_dir = self.artifacts / "cleanup"
         results = []
-        # Discover every currently tagged transaction, then delete only those exact tagged IDs.
-        for name in (PARENT, *CHILDREN):
-            identity = self.identities[name]
-            response = self.clients[name].get(identity, "transactions")
-            tagged = [item for item in response.get("data", {}).get("transactions", [])
-                      if self.campaign_id in str(item.get("memo") or "") and not item.get("deleted")]
-            for item in tagged:
-                scenario = "cleanup"
-                self.mutate(scenario, "DELETE", name, None, item["id"])
-                results.append({"target": name, "transaction": evidence_transaction(item),
-                                "cleanup": "DELETE APPLIED"})
-        remaining = self.snapshot("cleanup", "verification")
-        clean = all(not values for values in remaining.values())
-        write_json(cleanup_dir / "cleanup-manifest.json", {
-            "campaign_id": self.campaign_id, "deleted": results,
-            "verification": "PASS" if clean else "FAIL", "remaining_tagged": remaining,
-        })
+        pacing_ms = cleanup_pacing_ms()
+        for client in self.clients.values():
+            client.set_request_pacing_ms(pacing_ms)
+        try:
+            # Discover every currently tagged transaction, then delete only those exact tagged IDs.
+            for name in (PARENT, *CHILDREN):
+                identity = self.identities[name]
+                response = self.clients[name].get(identity, "transactions")
+                tagged = [item for item in response.get("data", {}).get("transactions", [])
+                          if memo_has_exact_campaign(item.get("memo"), self.campaign_id) and not item.get("deleted")]
+                for item in tagged:
+                    scenario = "cleanup"
+                    self.mutate(scenario, "DELETE", name, None, item["id"])
+                    results.append({"target": name, "transaction": evidence_transaction(item),
+                                    "cleanup": "DELETE APPLIED"})
+            remaining = self.snapshot("cleanup", "verification", scope_scenario=None)
+            clean = all(not values for values in remaining.values())
+            write_json(cleanup_dir / "cleanup-manifest.json", {
+                "campaign_id": self.campaign_id, "deleted": results,
+                "verification": "PASS" if clean else "FAIL", "remaining_tagged": remaining,
+            })
+            if not clean:
+                raise QaSafetyError(
+                    "Tagged cleanup verification failed; campaign-tagged transactions remain"
+                )
+        finally:
+            for client in self.clients.values():
+                client.set_request_pacing_ms(0)
 
     def _final_metadata(self) -> None:
         environment_path = self.artifacts / "environment.json"
@@ -906,14 +1241,60 @@ class Campaign:
         environment["cleanup_api_write_count"] = max(0, self.api_write_attempts - receipt_attempts)
         write_json(environment_path, environment)
         all_receipts = [json.loads(path.read_text()) for path in self.artifacts.glob("scenarios/*/receipt.json")]
+        receipts_by_scenario = {
+            item.get("scenario_id"): item for item in all_receipts if item.get("scenario_id")
+        }
+        selected_scenario_ids = environment.get("selected_scenario_ids", [])
+        selected_receipts = [
+            receipts_by_scenario.get(scenario_id)
+            for scenario_id in selected_scenario_ids
+        ]
+        selected_failed = any(
+            item is not None and (
+                item.get("status") in {"FAIL", "BLOCKED"}
+                or item.get("execution_error") is True
+            )
+            for item in selected_receipts
+        )
+        selected_blocked = any(
+            item is None
+            or item.get("status") == "NOT_RUN"
+            or item.get("dependency_blocked") is True
+            for item in selected_receipts
+        )
+        all_selected_passed = bool(selected_scenario_ids) and all(
+            item is not None and item.get("status") == "PASS"
+            for item in selected_receipts
+        )
+        if self.cleanup_failures or selected_failed:
+            status = "FAIL"
+        elif selected_blocked or not all_selected_passed:
+            status = "BLOCKED"
+        else:
+            status = "PASS"
+        cleanup_summary = (
+            "Cleanup failed; campaign-tagged transaction removal was not verified."
+            if self.cleanup_failures
+            else "All campaign-tagged transactions were deleted and API verification found none."
+        )
         write_json(self.artifacts / "campaign-manifest.json", {
-            "campaign_id": self.campaign_id, "status": "FAIL" if any(
-                item["status"] == "FAIL" for item in all_receipts) else "BLOCKED",
+            "campaign_id": self.campaign_id, "status": status,
             "actual_api_write_count": self.api_write_attempts,
             "successful_api_write_count": self.successful_writes,
-            "cleanup": "All campaign-tagged transactions were deleted and API verification found none.",
+            "cleanup": cleanup_summary,
+            "cleanup_failures": self.cleanup_failures,
             "release_recommendation": "NOT READY", "secret_scan": "PENDING",
         })
+        write_json(
+            self.artifacts / "api-observations" / "request-telemetry.json",
+            {
+                "schema_version": 1,
+                "safe_fields": [
+                    "method", "resource_class", "status_class", "count", "retry_count",
+                ],
+                "requests": merge_request_telemetry(self.clients),
+            },
+        )
 
 
 def main() -> int:

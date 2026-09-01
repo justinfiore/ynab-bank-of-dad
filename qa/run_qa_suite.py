@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from datetime import datetime
@@ -14,35 +15,20 @@ REPO_ROOT = QA_ROOT.parent
 sys.path.insert(0, str(QA_ROOT))
 
 from lib.campaign_matrix import AUTOMATED_SCENARIO_IDS, MANUAL_SCENARIO_IDS
-from run_live_campaign import Campaign, PARENT, CHILDREN, write_json
+from lib.ci_evidence import write_current_campaign_pointer
+from lib.junit_writer import write_automated_junit
+from lib.qa_config import QaConfigBlocked, load_tokens as load_token_env
+from run_live_campaign import Campaign, PARENT, CHILDREN, emit_progress, write_json
 
 
 TOKEN_FILE = REPO_ROOT / "tokens.txt"
-TOKEN_NAMES = (
-    "PARENT_ACCESS_TOKEN",
-    "JORSTEN_JR_ACCESS_TOKEN",
-    "BORSTEN_ACCESS_TOKEN",
-    "THORSTEN_ACCESS_TOKEN",
-)
 
 
 def load_tokens() -> None:
-    if not TOKEN_FILE.is_file():
-        raise SystemExit(
-            "BLOCKED: tokens.txt is missing. Copy qa/config/tokens.txt.example "
-            "to tokens.txt at the repo root and fill the four QA tokens. "
-            "See qa/SETUP.md."
-        )
-    for raw in TOKEN_FILE.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        name, value = line.split("=", 1)
-        if name in TOKEN_NAMES and value.strip():
-            os.environ.setdefault(name, value.strip())
-    missing = [name for name in TOKEN_NAMES if not os.environ.get(name)]
-    if missing:
-        raise SystemExit("BLOCKED: required QA token environment values are missing.")
+    try:
+        load_token_env(os.environ, TOKEN_FILE if TOKEN_FILE.is_file() else None)
+    except QaConfigBlocked as error:
+        raise SystemExit(f"BLOCKED: {error}. See qa/SETUP.md.")
 
 
 def require_live_confirmation() -> None:
@@ -53,8 +39,10 @@ def require_live_confirmation() -> None:
         )
 
 
-def new_campaign(suite: str) -> Campaign:
+def new_campaign(suite: str, scenario_ids: tuple[str, ...] | None = None) -> Campaign:
     campaign_id = f"QA-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{suite}"
+    if suite == "automated":
+        write_current_campaign_pointer(REPO_ROOT, campaign_id)
     campaign = Campaign(campaign_id)
     write_json(campaign.artifacts / "environment.json", {
         "campaign_id": campaign.campaign_id,
@@ -67,6 +55,7 @@ def new_campaign(suite: str) -> Campaign:
         "selected_parent_fixture_account": "Checking",
         "actual_api_write_count": 0,
         "suite": suite,
+        "selected_scenario_ids": list(scenario_ids or ()),
     })
     write_json(campaign.artifacts / "api-observations" / "campaign-start.json", {
         "all_targets_allowlisted": True,
@@ -74,53 +63,130 @@ def new_campaign(suite: str) -> Campaign:
         "validated_plan_names": [PARENT, *CHILDREN],
         "api_write_count": 0,
         "suite": suite,
+        "selected_scenario_ids": list(scenario_ids or ()),
     })
     return campaign
 
 
+def _write_automated_junit(
+    receipts: list, *, scenario_ids: tuple[str, ...], suite_name: str,
+) -> int:
+    junit = REPO_ROOT / f"build/test-results/{suite_name}/TEST-{suite_name}.xml"
+    failures = write_automated_junit(
+        receipts,
+        junit,
+        automated_ids=scenario_ids,
+        suite_name=suite_name,
+    )
+    print(f"JUnit: {junit}")
+    return failures
+
+
 def run_automated() -> int:
     require_live_confirmation()
-    load_tokens()
-    campaign = new_campaign("automated")
+    junit_receipts: list = []
     try:
-        campaign._baseline()
-        resources = campaign._resources()
-        campaign._a2_guard()
-        campaign._a3_smoke()
-        campaign._a4_a5()
-        campaign._a6()
-        campaign._a7(resources)
-        if campaign._b1():
-            campaign._b2()
-            campaign._b3()
-            campaign._b4()
-            campaign._c1()
-            campaign._c2()
-            campaign._c3()
-            campaign._c4()
-            campaign._c5()
-            campaign._c6()
-            campaign._c7()
-            campaign._c9()
-            campaign._d1()
-            campaign._d2()
-            campaign._d3()
-            campaign._d4()
-        for scenario_id in MANUAL_SCENARIO_IDS:
-            if scenario_id not in campaign.receipts:
-                campaign.receipt(
-                    scenario_id, "NOT_RUN",
-                    "Manual UI suite. Run ./gradlew qaManual.",
+        load_tokens()
+        campaign = new_campaign("automated", AUTOMATED_SCENARIO_IDS)
+        emit_progress(
+            f"CAMPAIGN START {campaign.campaign_id} suite=automated "
+            f"scenarios={len(AUTOMATED_SCENARIO_IDS)}"
+        )
+        try:
+            campaign.run_automated_matrix()
+            for scenario_id in MANUAL_SCENARIO_IDS:
+                if scenario_id not in campaign.receipts:
+                    campaign.receipt(
+                        scenario_id, "NOT_RUN",
+                        "Manual UI suite. Run ./gradlew qaManual.",
+                    )
+        finally:
+            emit_progress(f"CAMPAIGN CLEANUP START {campaign.campaign_id}")
+            try:
+                campaign.cleanup()
+                emit_progress(f"CAMPAIGN CLEANUP FINISH {campaign.campaign_id} status=PASS")
+            except Exception as cleanup_error:
+                emit_progress(
+                    f"CAMPAIGN CLEANUP FINISH {campaign.campaign_id} status=FAIL "
+                    f"{cleanup_error.__class__.__name__}: "
+                    f"{campaign._redacted_executor_cause(cleanup_error)}"
                 )
-        campaign.cleanup()
-        campaign._final_metadata()
-    except Exception:
-        campaign.cleanup()
-        campaign._final_metadata()
-        raise
-    print(f"Automated QA complete: {campaign.campaign_id}")
-    print(f"Covered scenarios: {', '.join(AUTOMATED_SCENARIO_IDS)}")
-    return 0
+                campaign._record_cleanup_failure("D4-controlled-continuous", cleanup_error)
+            campaign._final_metadata()
+            junit_receipts = list(campaign.receipts.values())
+    finally:
+        failures = _write_automated_junit(
+            junit_receipts, scenario_ids=AUTOMATED_SCENARIO_IDS, suite_name="qaAutomated",
+        )
+    passed = sum(
+        campaign.receipts.get(item, {}).get("status") == "PASS"
+        for item in AUTOMATED_SCENARIO_IDS
+    )
+    failed = len(AUTOMATED_SCENARIO_IDS) - passed
+    emit_progress(
+        f"CAMPAIGN FINISH {campaign.campaign_id} passed={passed} failed={failed} "
+        f"junit_failures={failures}"
+    )
+    print(f"Automated QA complete: {campaign.campaign_id}", flush=True)
+    print(f"Covered scenarios: {', '.join(AUTOMATED_SCENARIO_IDS)}", flush=True)
+    return 1 if failures else 0
+
+
+SMOKE_SCENARIO_IDS = (
+    "A2-guard-rejection",
+    "A3-config-smoke",
+    "B1-live-create",
+    "B2-live-replay",
+)
+
+
+def load_smoke_selection(path: Path) -> tuple[str, ...]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise SystemExit(f"BLOCKED: invalid smoke scenario selection: {error}")
+    selected = value.get("scenario_ids") if isinstance(value, dict) else None
+    if (
+        value.get("schema_version") != 1
+        or value.get("suite") != "automated-smoke"
+        or not isinstance(selected, list)
+        or tuple(selected) != SMOKE_SCENARIO_IDS
+    ):
+        raise SystemExit("BLOCKED: smoke scenario selection does not match the reviewed contract")
+    return tuple(selected)
+
+
+def run_automated_smoke(selection_path: Path) -> int:
+    require_live_confirmation()
+    selected = load_smoke_selection(selection_path)
+    junit_receipts: list = []
+    try:
+        load_tokens()
+        campaign = new_campaign("automated-smoke", selected)
+        write_json(campaign.artifacts / "scenario-selection.json", {
+            "schema_version": 1, "suite": "automated-smoke",
+            "scenario_ids": list(selected),
+        })
+        try:
+            campaign._a2_guard()
+            campaign._a3_smoke()
+            if campaign._b1():
+                campaign._b2()
+            campaign.cleanup()
+            campaign._final_metadata()
+        except Exception:
+            campaign.cleanup()
+            campaign._final_metadata()
+            raise
+        finally:
+            junit_receipts = list(campaign.receipts.values())
+    finally:
+        failures = _write_automated_junit(
+            junit_receipts, scenario_ids=selected, suite_name="qaAutomatedSmoke",
+        )
+    print(f"Automated smoke QA complete: {campaign.campaign_id}")
+    print(f"Covered scenarios: {', '.join(selected)}")
+    return 1 if failures else 0
 
 
 def run_manual(*, ui_complete: bool) -> int:
@@ -201,11 +267,18 @@ def run_manual(*, ui_complete: bool) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run disposable YNAB QA suites")
-    parser.add_argument("--suite", choices=("automated", "manual"), required=True)
+    parser.add_argument(
+        "--suite", choices=("automated", "automated-smoke", "manual"), required=True,
+    )
+    parser.add_argument("--scenario-selection", type=Path)
     parser.add_argument("--ui-complete", action="store_true")
     args = parser.parse_args()
     if args.suite == "automated":
         return run_automated()
+    if args.suite == "automated-smoke":
+        if args.scenario_selection is None:
+            parser.error("--scenario-selection is required for automated-smoke")
+        return run_automated_smoke(args.scenario_selection)
     return run_manual(ui_complete=args.ui_complete)
 
 

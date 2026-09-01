@@ -304,7 +304,9 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         appliedRows().findAll { it.status == 'applied' }*.created_child_transaction_id ==
             ['created-first', 'created-first', 'created-retry', 'created-new']
         runRows()*.status == ['partial', 'succeeded', 'succeeded']
-        runRows()[0].error_summary.contains('simulated second post failure')
+        runRows()[0].error_summary.contains('YNAB POST transactions failed with status 500')
+        !runRows()[0].error_summary.contains('/v1/plans')
+        !runRows()[0].error_summary.contains('simulated second post failure')
         runRows()[1..2]*.error_summary == [null, null]
         tableCount('source_entities') == 3
         tableCount('child_mirrors') == 3
@@ -369,7 +371,10 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         then:
         postedTransactions('child-two-budget-id').size() == 1
         appliedRows()*.status.sort() == ['applied', 'failed']
-        appliedRows().find { it.status == 'failed' }.failure_reason.contains('YNAB POST /v1/plans/child-one-budget-id/transactions/bulk failed with status 500')
+        appliedRows().find { it.status == 'failed' }.failure_reason ==
+            'YNAB POST transactions failed with status 500'
+        !appliedRows().find { it.status == 'failed' }.failure_reason.contains('child-one-budget-id')
+        !appliedRows().find { it.status == 'failed' }.failure_reason.contains('simulated child failure')
         cursorValue('transactions.last_server_knowledge') == null
     }
 
@@ -741,7 +746,9 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         then:
         postedTransactions('child-two-budget-id').size() == 1
         appliedRows()*.status == ['applied']
-        runRows()[0].error_summary.contains('YNAB GET /v1/plans/child-one-budget-id/accounts failed with status 401')
+        runRows()[0].error_summary.contains('YNAB GET accounts failed with status 401')
+        !runRows()[0].error_summary.contains('child-one-budget-id')
+        !runRows()[0].error_summary.contains('unauthorized child token')
         cursorValue('transactions.last_server_knowledge') == null
     }
 
@@ -764,7 +771,9 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         then:
         postedTransactions('child-two-budget-id').size() == 1
         appliedRows()*.status == ['applied']
-        runRows()[0].error_summary.contains('YNAB GET /v1/plans failed with status 403')
+        runRows()[0].error_summary.contains('YNAB GET plans failed with status 403')
+        !runRows()[0].error_summary.contains('/v1/plans')
+        !runRows()[0].error_summary.contains('forbidden child plan discovery')
         cursorValue('transactions.last_server_knowledge') == null
     }
 
@@ -789,7 +798,10 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         then:
         postedTransactions('child-two-budget-id').size() == 1
         appliedRows()*.status.sort() == ['applied', 'failed']
-        appliedRows().find { it.status == 'failed' }.failure_reason.contains('YNAB POST /v1/plans/child-one-budget-id/transactions/bulk failed with status 403')
+        appliedRows().find { it.status == 'failed' }.failure_reason ==
+            'YNAB POST transactions failed with status 403'
+        !appliedRows().find { it.status == 'failed' }.failure_reason.contains('child-one-budget-id')
+        !appliedRows().find { it.status == 'failed' }.failure_reason.contains('forbidden child transaction post')
         cursorValue('transactions.last_server_knowledge') == null
     }
 
@@ -804,7 +816,9 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
 
         then:
         def ex = thrown(IllegalStateException)
-        ex.message.contains('YNAB GET /v1/plans failed with status 503')
+        ex.message == 'YNAB GET plans failed with status 503'
+        !ex.message.contains('/v1/plans')
+        !ex.message.contains('parent plan list outage')
         verify(0, getRequestedFor(urlMatching('/v1/plans/.*/accounts')))
         verify(0, postRequestedFor(urlMatching('/v1/plans/.*/transactions/bulk')))
         tableCount('sync_runs') == 0
@@ -823,7 +837,9 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
 
         then:
         def ex = thrown(IllegalStateException)
-        ex.message.contains('YNAB GET /v1/plans/parent-budget-id/categories failed with status 503')
+        ex.message == 'YNAB GET categories failed with status 503'
+        !ex.message.contains('parent-budget-id')
+        !ex.message.contains('category outage')
         verify(0, postRequestedFor(urlMatching('/v1/plans/.*/transactions/bulk')))
         tableCount('sync_runs') == 0
         cursorValue('transactions.last_server_knowledge') == null
@@ -842,8 +858,9 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
 
         then:
         def ex = thrown(IllegalStateException)
-        ex.message.contains('/v1/plans/parent-budget-id/transactions')
-        ex.message.contains('failed with status 500')
+        ex.message == 'YNAB GET transactions failed with status 500'
+        !ex.message.contains('parent-budget-id')
+        !ex.message.contains('transaction outage')
         verify(0, postRequestedFor(urlMatching('/v1/plans/.*/transactions/bulk')))
         tableCount('sync_runs') == 0
         cursorValue('transactions.last_server_knowledge') == null
@@ -864,7 +881,9 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         then:
         verify(0, postRequestedFor(urlMatching('/v1/plans/.*/transactions/bulk')))
         runRows()*.status == ['partial']
-        runRows()[0].error_summary.contains('money movement outage')
+        runRows()[0].error_summary.contains('YNAB GET plans failed with status 500')
+        !runRows()[0].error_summary.contains('parent-budget-id')
+        !runRows()[0].error_summary.contains('money movement outage')
         cursorValue('transactions.last_server_knowledge') == 81
     }
 

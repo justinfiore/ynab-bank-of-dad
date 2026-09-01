@@ -110,12 +110,23 @@ These are not part of `test`, `testAll`, `check`, `build`, or `installDist`.
 # No UI. Mutates only the four disposable QA plans.
 ./gradlew qaAutomated -PqaConfirmLive=YES
 
+# Narrow rate-budgeted live smoke contract: A2, A3, B1, B2.
+./gradlew qaAutomatedSmoke -PqaConfirmLive=YES
+
 # Prepare Move Money + C8b fixtures and print UI steps.
 ./gradlew qaManual -PqaConfirmLive=YES
 
 # After the UI edits:
 ./gradlew qaManual -PqaConfirmLive=YES -PqaManualReady=YES
 ```
+
+Tokens may be supplied as environment variables instead of `tokens.txt`. Plan `fullId` values may be `${QA_*_PLAN_ID}` placeholders. See `qa/SETUP.md`.
+
+Opt-in GitHub Actions: label a same-repo PR `end-to-end-qa` when the author is `justinfiore` or `jhorgenson`. That job runs the full UI-free `qaAutomated` campaign; `qaManual` remains local-only.
+
+The QA HTTP client retries HTTP 429 responses for every request method until success by default. It waits for a usable case-insensitive `Retry-After` value (integer seconds or an HTTP date) or a `RateLimit-Reset`, `X-RateLimit-Reset`, or `X-Rate-Limit-Reset` epoch. Without a usable resume header it uses 5-second linear backoff (5, 10, 15, ... seconds). Each wait is capped at one hour; other 4xx responses fail immediately. Cleanup additionally spaces every client request by `QA_CLEANUP_PACING_MS` milliseconds. The cleanup-only default is `500`, an empty value also uses that default, and `0` disables pacing.
+
+If a prior campaign needs recovery, use `qaCleanupCampaign` with its exact `QA-...` campaign ID. It performs fresh exact four-plan discovery before deleting only matching `BOD QA` transactions and writes a redacted request-telemetry receipt.
 
 Account and token setup is in `qa/SETUP.md`.
 
@@ -149,6 +160,34 @@ python3 qa/finalize_evidence.py qa/artifacts/<campaign-id>
 Finalization rejects raw token values, Authorization header values, full UUIDs
 outside ignored internal config, incomplete matrices, and nonzero blocked-campaign
 write counts. It writes the summary, per-file checksums, ZIP, and ZIP checksum.
+
+The labeled Actions campaign also writes a deterministic, non-secret pointer at
+`build/qa/current-campaign.json`. After `qaAutomated`, including when that step
+fails partway through, Actions runs:
+
+```bash
+python3 qa/package_ci_evidence.py
+```
+
+This separate packager accepts partial campaigns and copies regular files only
+from the pointed `qa/artifacts/<campaign-id>` tree into
+`build/qa-ci-evidence/<campaign-id>/`. It retains partial receipts, sanitized
+dry/live logs (including an interrupted C2 log), API observations, SQLite JSON
+audit exports, cleanup and environment/campaign manifests, and aggregate request
+telemetry. It never copies `qa/.campaign-state`, database files, `tokens.txt`,
+`qa/config/qa-sync.yaml`, or symlinks. The four existing token environment values
+are used only for in-memory redaction and are never printed.
+
+`ci-evidence-manifest.json` records the derived status and completeness, receipt
+counts, cleanup verification, source type, raw-state exclusion, and safety scan.
+The packager sanitizes token values, Authorization values, and full UUIDs, then
+byte-scans every delivered file and refuses publication if any remain.
+`SHA256SUMS` covers every regular file recursively inside the campaign directory
+except `SHA256SUMS` itself; this explicit exclusion avoids checksum
+self-reference. The sibling ZIP contains that directory (including
+`SHA256SUMS`), and the sibling `.zip.sha256` covers the ZIP. Actions always
+uploads only `build/qa-ci-evidence/` for at least seven days; raw
+`qa/artifacts/` is never uploaded.
 
 `qa/artifacts/`, the completed config, raw discovery snapshots, tokens, state
 databases, and campaign state are Gitignored. Report receipts must use one of

@@ -25,7 +25,12 @@ class QaEvidenceConfigSpec extends Specification {
         budgets*.displayName == [
             "Jorsten's Plan", "Jorsten Jr's Plan", "Borsten's Plan", "Thorsten's Plan"
         ]
-        budgets.every { it.fullId == 'REPLACE_WITH_FULL_IMMUTABLE_PLAN_UUID' }
+        budgets*.fullId == [
+            '${QA_PARENT_PLAN_ID}',
+            '${QA_JORSTEN_JR_PLAN_ID}',
+            '${QA_BORSTEN_PLAN_ID}',
+            '${QA_THORSTEN_PLAN_ID}',
+        ]
         !file.text.toLowerCase().contains('token')
 
         and:

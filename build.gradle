@@ -95,6 +95,26 @@ tasks.register('qaAutomated', Exec) {
     environment 'QA_CONFIRM_LIVE_MUTATIONS', qaConfirmLive.get() == 'YES' ? 'YES' : ''
 }
 
+tasks.register('qaAutomatedSmoke', Exec) {
+    group = 'qa'
+    description = 'Runs the explicit narrow disposable YNAB smoke contract. Not part of test/build/check.'
+    workingDir = layout.projectDirectory
+    commandLine qaPython.get(), 'qa/run_qa_suite.py', '--suite', 'automated-smoke',
+        '--scenario-selection', 'qa/fixtures/automated-smoke-scenarios.json'
+    environment 'QA_CONFIRM_LIVE_MUTATIONS', qaConfirmLive.get() == 'YES' ? 'YES' : ''
+}
+
+tasks.register('qaCleanupCampaign', Exec) {
+    group = 'qa'
+    description = 'Deletes transactions belonging to one exact QA campaign after fresh validation.'
+    workingDir = layout.projectDirectory
+    def campaignId = providers.gradleProperty('qaCampaignId').orElse('')
+    def output = providers.gradleProperty('qaCleanupOutput').orElse('build/qa-cleanup/cleanup.json')
+    commandLine qaPython.get(), 'qa/cleanup_campaign.py', '--campaign-id', campaignId.get(),
+        '--output', output.get()
+    environment 'QA_CONFIRM_LIVE_MUTATIONS', qaConfirmLive.get() == 'YES' ? 'YES' : ''
+}
+
 tasks.register('qaManual', Exec) {
     group = 'qa'
     description = 'Prepares or continues UI-gated disposable YNAB QA (A8/B5/C8). Not part of test/build/check.'
