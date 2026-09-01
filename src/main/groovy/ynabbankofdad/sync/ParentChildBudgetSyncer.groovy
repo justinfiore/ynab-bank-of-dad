@@ -259,10 +259,9 @@ class ParentChildBudgetSyncer {
                 if (!child.budgetId) {
                     child.budgetId = child.repository.getLatestBudgetId(child.target.budgetName)
                 }
-                neededMappings*.childAccountName.unique().each { String accountName ->
-                    if (!child.resolveAccountId(accountName)) {
-                        child.cacheAccountId(accountName, child.repository.getAccountId(child.budgetId, accountName))
-                    }
+                Map<String, String> existingIds = child.repository.accountIdByName(child.budgetId)
+                neededMappings.each { mapping ->
+                    resolveOrCreateChildAccount(child, mapping, categoryNames, existingIds)
                 }
                 resolved << child
             } catch (Exception failure) {
@@ -273,6 +272,46 @@ class ParentChildBudgetSyncer {
             }
         }
         new RoutingResolution(resolved, failed, failures)
+    }
+
+    private void resolveOrCreateChildAccount(ChildSyncContext child, ChildAccountMapping mapping,
+                                             Set<String> categoryNames, Map<String, String> existingIds) {
+        String mappedName = mapping.childAccountName
+        if (existingIds[mappedName]) {
+            child.cacheAccountId(mappedName, existingIds[mappedName])
+            return
+        }
+        if (!child.target.autoCreateAccounts) {
+            throw new IllegalStateException(
+                "Could not find account named '${mappedName}' in budget '${child.budgetId}'")
+        }
+        if (child.target.createdAccountOnBudget == false) {
+            throw new IllegalStateException(
+                "Child '${child.target.childKey}' requested tracking Savings accounts, " +
+                    'but the live YNAB SaveAccount contract does not accept on_budget')
+        }
+        categoryNames.findAll { String name -> mapping.matches(name) }.each { String parentName ->
+            String derived = child.target.derivedAccountName(parentName)
+            if (!derived) {
+                throw new IllegalStateException(
+                    "Child '${child.target.childKey}' derived an empty account name from parent category '${parentName}'")
+            }
+            String existingId = child.resolveAccountId(derived) ?: existingIds[derived]
+            if (existingId) {
+                child.cacheAccountId(derived, existingId)
+                return
+            }
+            if (dryRun) {
+                log.info(
+                    "Would create savings account '{}' (createdAccountOnBudget={}) in child {}",
+                    derived, child.target.createdAccountOnBudget, child.target.childKey)
+                return
+            }
+            Map created = child.repository.createAccount(child.budgetId, derived)
+            String createdId = created.id as String
+            child.cacheAccountId(derived, createdId)
+            existingIds[derived] = createdId
+        }
     }
 
     private static boolean routingBlocked(Set<String> categoryNames,

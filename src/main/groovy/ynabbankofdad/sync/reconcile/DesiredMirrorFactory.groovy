@@ -28,8 +28,15 @@ class DesiredMirrorFactory {
             if (!mapping) {
                 return null
             }
-            String accountId = child.resolveAccountId(mapping.childAccountName)
+            String derivedName = child.target.derivedAccountName(resolvedName)
+            String accountName = child.resolveAccountId(mapping.childAccountName) ?
+                mapping.childAccountName : derivedName
+            String accountId = child.resolveAccountId(mapping.childAccountName) ?:
+                (derivedName ? child.resolveAccountId(derivedName) : null)
             if (!child.budgetId || !accountId) {
+                if (child.target.autoCreateAccounts) {
+                    return null
+                }
                 throw new IllegalStateException("Child '${child.target.childKey}' routing is not resolved")
             }
             // Payee IDs are budget-scoped and cannot be copied from the parent
@@ -42,7 +49,7 @@ class DesiredMirrorFactory {
             String decoratedMemo = ((child.target.memoPrefix ?: '') + (memo ?: '') +
                 (child.target.memoSuffix ?: '')).trim()
             new DesiredMirror(source, child.target.childKey, child.budgetId, direction, accountId,
-                mapping.childAccountName, date, amount, null, payeeName, decoratedMemo, mapping.mappingKey,
+                accountName, date, amount, null, payeeName, decoratedMemo, mapping.mappingKey,
                 payloadJson, ReconciliationCanonicalizer.hashJson(payloadJson))
         }.sort { DesiredMirror left, DesiredMirror right ->
             mirrorSortKey(left) <=> mirrorSortKey(right)

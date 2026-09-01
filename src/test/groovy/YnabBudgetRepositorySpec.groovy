@@ -479,6 +479,47 @@ class YnabBudgetRepositorySpec extends Specification {
         body == [transactions: transactions]
     }
 
+    def "createAccount posts savings account with zero balance and returns the new id"() {
+        given:
+        stubFor(post(urlEqualTo('/v1/plans/budget-new/accounts'))
+            .willReturn(aResponse()
+                .withStatus(201)
+                .withHeader('Content-Type', 'application/json')
+                .withBody('''
+{
+  "data": {
+    "account": {"id": "acct-created", "name": "Child One Spend", "type": "savings", "on_budget": true, "balance": 0}
+  }
+}
+''')))
+
+        when:
+        def created = buildRepository().createAccount('budget-new', 'Child One Spend')
+        def requests = wireMockServer.findAll(postRequestedFor(urlEqualTo('/v1/plans/budget-new/accounts')))
+        def body = new JsonSlurper().parseText(requests[0].bodyAsString)
+
+        then:
+        created.id == 'acct-created'
+        requests.size() == 1
+        body == [account: [name: 'Child One Spend', type: 'savings', balance: 0]]
+    }
+
+    def "createAccount throws when the response is missing account.id"() {
+        given:
+        stubFor(post(urlEqualTo('/v1/plans/budget-new/accounts'))
+            .willReturn(aResponse()
+                .withStatus(201)
+                .withHeader('Content-Type', 'application/json')
+                .withBody('{"data":{"account":{"name":"Child One Spend"}}}')))
+
+        when:
+        buildRepository().createAccount('budget-new', 'Child One Spend')
+
+        then:
+        def ex = thrown(IllegalStateException)
+        ex.message.contains('missing account.id')
+    }
+
     private YnabBudgetRepository buildRepository() {
         new YnabBudgetRepository(new YnabHttpClient("http://localhost:${wireMockServer.port()}", 'token'))
     }

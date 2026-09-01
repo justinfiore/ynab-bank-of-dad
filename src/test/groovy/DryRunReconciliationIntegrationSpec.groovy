@@ -32,7 +32,8 @@ class DryRunReconciliationIntegrationSpec extends Specification {
         def childRepository = new ReadOnlyChildRepository()
         childRepository.remote['existing'] = child('existing')
         def context = new ChildSyncContext(new ChildBudgetSyncTarget(
-            'child', 'Child', 'TOKEN', [], '', ''), childRepository, 'child-budget')
+            childKey: 'child', budgetName: 'Child', tokenEnvVarName: 'TOKEN',
+            accountMappings: [], memoPrefix: '', memoSuffix: ''), childRepository, 'child-budget')
         def syncer = new ParentChildBudgetSyncer(new RuntimeConfig(sync: config(database)), config(database),
             true, database.toString(), 1, null, dryState, [context])
         def source = new SourceEntityKey('parent', SourceEntityType.TRANSACTION, 'source', null, null)

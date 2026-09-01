@@ -176,7 +176,8 @@ class ReconciliationRecoveryIntegrationSpec extends Specification {
     }
 
     private static def apply(SyncStateStore store, RecoveringRepository remote) {
-        def target = new ChildBudgetSyncTarget('child', 'Child', 'TOKEN', [], '', '')
+        def target = new ChildBudgetSyncTarget(childKey: 'child', budgetName: 'Child', tokenEnvVarName: 'TOKEN',
+            accountMappings: [], memoPrefix: '', memoSuffix: '')
         def context = new ChildSyncContext(target, remote, 'child-budget')
         new ReconciliationOperationApplier(store, [context]).applyReadyOperations()
     }

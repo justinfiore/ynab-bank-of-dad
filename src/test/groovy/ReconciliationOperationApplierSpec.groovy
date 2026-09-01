@@ -329,7 +329,8 @@ class ReconciliationOperationApplierSpec extends Specification {
     }
 
     private static ChildSyncContext context(String budgetId, FakeChildRepository repository) {
-        def target = new ChildBudgetSyncTarget('child', 'Child', 'TOKEN', [], '', '')
+        def target = new ChildBudgetSyncTarget(childKey: 'child', budgetName: 'Child', tokenEnvVarName: 'TOKEN',
+            accountMappings: [], memoPrefix: '', memoSuffix: '')
         new ChildSyncContext(target, repository, budgetId)
     }
 

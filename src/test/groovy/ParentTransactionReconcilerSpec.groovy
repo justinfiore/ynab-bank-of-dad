@@ -196,7 +196,8 @@ class ParentTransactionReconcilerSpec extends Specification {
     def "create uses configured memo decoration while update state excludes memo"() {
         given:
         def mapping = new ChildAccountMapping('mapping', [new ParentCategoryNameMatcher('Spend', false)], 'Checking')
-        def target = new ChildBudgetSyncTarget('child', 'child', 'TOKEN', [mapping], '[Kid] ', ' (sync)')
+        def target = new ChildBudgetSyncTarget(childKey: 'child', budgetName: 'child', tokenEnvVarName: 'TOKEN',
+            accountMappings: [mapping], memoPrefix: '[Kid] ', memoSuffix: ' (sync)')
         def child = new ChildSyncContext(target, null, 'budget-1', null)
         child.cacheAccountId('Checking', 'acct-1')
 
@@ -229,7 +230,8 @@ class ParentTransactionReconcilerSpec extends Specification {
 
     private static ChildSyncContext context(String key, String budgetId, String accountId, String... names) {
         def mapping = new ChildAccountMapping('mapping', names.collect { new ParentCategoryNameMatcher(it, false) }, 'Checking')
-        def target = new ChildBudgetSyncTarget(key, key, 'TOKEN', [mapping], 'YBOD: ', '')
+        def target = new ChildBudgetSyncTarget(childKey: key, budgetName: key, tokenEnvVarName: 'TOKEN',
+            accountMappings: [mapping], memoPrefix: 'YBOD: ', memoSuffix: '')
         def context = new ChildSyncContext(target, null, budgetId, null)
         context.cacheAccountId('Checking', accountId)
         context

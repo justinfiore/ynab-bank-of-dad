@@ -139,6 +139,17 @@ sync:
       tokenEnvVarName: YNAB_CHILD_ONE_TOKEN
       memoPrefix: "YBOD: "
       memoSuffix: ""
+      # Optional. Default false. When true, mapped parent categories whose
+      # childAccountName is missing get a Savings account named from the parent
+      # category (after accountCreationNameStripRegex). --dry-run never creates.
+      autoCreateAccounts: false
+      # Optional. Default true (on-budget). false requests tracking; the live
+      # YNAB create-account contract currently cannot set on_budget, so tracking
+      # fails closed rather than creating a non-savings type.
+      createdAccountOnBudget: true
+      # Optional. Every regex match in the parent category name is replaced with
+      # "" when deriving the auto-created account name.
+      # accountCreationNameStripRegex: " Bank$"
       accountMappings:
         - mappingKey: spend-save
           parentCategoryNames:
