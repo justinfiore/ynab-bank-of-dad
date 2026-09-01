@@ -78,6 +78,7 @@ Before enabling live parent/child syncing, read [PARENT_TRANSACTION_RECONCILIATI
 - `YNAB_PARENT_TOKEN`
 - one token env var per configured child budget (for example `YNAB_CHILD_ONE_TOKEN`, `YNAB_CHILD_TWO_TOKEN`)
 - each token env var may be a single token or a comma-separated list; on HTTP 429 the client switches to the next token immediately and sleeps only after every token for that account is rate-limited
+- production 429 logs identify the budget by name, identify rate-limited tokens by their 1-based slot (never by secret value), and show the rolling API-call count from the last hour for every configured token; at DEBUG level they also include the complete 429 response headers and body; retry durations are shown as `1H`, `30M`, or `5S` without Java's `PT` prefix
 - a config file containing a valid `sync:` section
 - network access to `https://api.ynab.com`
 - a writable SQLite state path such as `syncstate.db`

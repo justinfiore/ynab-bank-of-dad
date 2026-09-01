@@ -6,8 +6,13 @@ import ynabbankofdad.sync.*
 import ynabbankofdad.sync.model.*
 import ynabbankofdad.sync.state.*
 import groovy.json.JsonSlurper
+import ch.qos.logback.classic.Level
+import ch.qos.logback.classic.Logger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import org.slf4j.LoggerFactory
 import spock.lang.Specification
 
 import java.net.URI
@@ -407,6 +412,46 @@ class YnabHttpClientSpec extends Specification {
         !infos[0].contains('too_many_requests')
     }
 
+    def "DEBUG log includes complete 429 response headers and body"() {
+        given:
+        String responseBody = '{"error":{"id":"429","detail":"first line\\nsecond line","extra":{"value":42}}}'
+        server.enqueue(new MockResponse()
+            .setResponseCode(429)
+            .addHeader('X-Debug-One', 'value-a')
+            .addHeader('X-Debug-Two', 'value-b-1')
+            .addHeader('X-Debug-Two', 'value-b-2')
+            .setBody(responseBody))
+        server.enqueue(new MockResponse().setResponseCode(200).setBody('{"data":{}}'))
+        Logger logger = LoggerFactory.getLogger(YnabHttpClient) as Logger
+        Level previousLevel = logger.level
+        def appender = new ListAppender<ILoggingEvent>()
+        appender.start()
+        logger.level = Level.DEBUG
+        logger.addAppender(appender)
+        def client = rateLimitClient('access-token-secret', [])
+        client.registerBudgetName('budget-1', 'Fiores')
+
+        when:
+        client.getJson('/v1/plans/budget-1/transactions')
+
+        then:
+        List<ILoggingEvent> debugEvents = appender.list.findAll { it.level == Level.DEBUG }
+        debugEvents.size() == 1
+        String message = debugEvents[0].formattedMessage
+        message.startsWith("YNAB GET transactions for budget 'Fiores' received 429 response; headers=")
+        String lowerMessage = message.toLowerCase()
+        lowerMessage.contains('x-debug-one:[value-a]')
+        lowerMessage.contains('x-debug-two:[value-b-1, value-b-2]')
+        message.contains("; body=${responseBody}")
+        !message.contains('access-token-secret')
+        !message.contains('budget-1')
+
+        cleanup:
+        logger.detachAppender(appender)
+        logger.level = previousLevel
+        appender.stop()
+    }
+
     def "INFO log includes Retry-After delay without Authorization values"() {
         given:
         server.enqueue(new MockResponse()
@@ -423,11 +468,67 @@ class YnabHttpClientSpec extends Specification {
 
         then:
         waits == [Duration.ofSeconds(3)]
-        infos[0].contains('retry after PT3S')
+        infos[0].contains('retry after 3S')
+        !infos[0].contains('PT3S')
         infos[0].contains('headers=Retry-After')
         !infos[0].contains('access-token-secret')
         !infos[0].contains('header-secret')
         !infos[0].contains('Authorization: Bearer')
+    }
+
+    def "rate limit logs identify budget name token slots hourly call counts and readable delays"() {
+        given:
+        server.enqueue(new MockResponse().setResponseCode(429).setHeader('Retry-After', '3600'))
+        server.enqueue(new MockResponse().setResponseCode(429).setHeader('Retry-After', '3600'))
+        server.enqueue(new MockResponse().setResponseCode(200).setBody('{"data":{}}'))
+        List<Duration> waits = []
+        List<String> infos = []
+        List<String> warnings = []
+        def client = new YnabHttpClient(server.url('/').toString(), 't1,t2',
+            HttpClient.newHttpClient(), Duration.ofSeconds(7), null,
+            { Duration delay -> waits << delay }, { Instant.EPOCH }, null,
+            { String msg -> infos << msg }, { String msg -> warnings << msg })
+        client.registerBudgetName('budget-1', 'Fiores')
+
+        when:
+        client.getJson('/v1/plans/budget-1/transactions')
+
+        then:
+        waits == [Duration.ofHours(1)]
+        infos == [
+            "YNAB GET transactions for budget 'Fiores' rate limited on token 1 of 2; API calls in last hour by token: token 1=1, token 2=0; retry after 1H; headers=Retry-After",
+            "YNAB GET transactions for budget 'Fiores' rate limited on token 2 of 2; API calls in last hour by token: token 1=1, token 2=1; retry after 1H; headers=Retry-After",
+        ]
+        warnings == [
+            "YNAB GET transactions for budget 'Fiores' was rate limited on tokens 1, 2 of 2; " +
+                'API calls in last hour by token: token 1=1, token 2=1; retrying after 1H'
+        ]
+        !((infos + warnings).join('\n').contains('PT1H'))
+        !((infos + warnings).join('\n').contains('budget-1'))
+        !((infos + warnings).join('\n').contains('t1'))
+        !((infos + warnings).join('\n').contains('t2'))
+    }
+
+    def "hourly API call count excludes attempts older than one hour"() {
+        given:
+        server.enqueue(new MockResponse().setResponseCode(200).setBody('{"data":{}}'))
+        server.enqueue(new MockResponse().setResponseCode(429))
+        server.enqueue(new MockResponse().setResponseCode(200).setBody('{"data":{}}'))
+        Instant now = Instant.EPOCH
+        List<String> infos = []
+        def client = new YnabHttpClient(server.url('/').toString(), 't1,t2',
+            HttpClient.newHttpClient(), Duration.ofSeconds(7), null,
+            { Duration ignored -> }, { now }, null, { String msg -> infos << msg })
+        client.registerBudgetName('budget-1', 'Fiores')
+        client.getJson('/v1/plans/budget-1/transactions')
+
+        when:
+        now = now.plusSeconds(3601)
+        client.getJson('/v1/plans/budget-1/transactions')
+
+        then:
+        infos.size() == 1
+        infos[0].contains('API calls in last hour by token: token 1=1, token 2=0')
     }
 
     def "second token succeeds without sleep and stays sticky"() {
