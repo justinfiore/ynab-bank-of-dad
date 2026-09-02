@@ -34,6 +34,14 @@ class YnabBudgetRepository {
         this.ynabClient = ynabClient
     }
 
+    int getRateLimitRetryCount() {
+        ynabClient == null ? 0 : ynabClient.rateLimitRetryCount
+    }
+
+    int getOtherRetryCount() {
+        ynabClient == null ? 0 : ynabClient.otherRetryCount
+    }
+
     List<BudgetSummary> getBudgets() {
         def response = ynabClient.getJson('/v1/plans')
         List budgets = (response?.data?.plans ?: []) as List

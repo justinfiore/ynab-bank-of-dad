@@ -255,6 +255,8 @@ class YnabHttpClientSpec extends Specification {
         first.body.readUtf8() == second.body.readUtf8()
         waits == [Duration.ofSeconds(3)]
         Files.readAllLines(telemetry).size() == expectedTelemetryRecords
+        client.rateLimitRetryCount == 1
+        client.otherRetryCount == 0
 
         cleanup:
         Files.deleteIfExists(telemetry)

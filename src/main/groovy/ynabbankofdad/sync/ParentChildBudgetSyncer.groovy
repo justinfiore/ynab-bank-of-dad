@@ -205,6 +205,9 @@ class ParentChildBudgetSyncer {
 
             if (dryRun) {
                 reportDryRun(transactionResults, movementPlanning)
+                logCycleCompletion(cycleNumber, completeTransactionDelta, movementSnapshot,
+                    transactionResults, movementPlanning, transactionRouting, movementRouting, [],
+                    parentCategoriesById)
                 coordinator.finishRun(runId, SyncRunResult.empty(), transactionDelta.serverKnowledge, false)
                 return
             }
@@ -233,6 +236,9 @@ class ParentChildBudgetSyncer {
             failures.addAll(movementRouting.failures)
             SyncRunResult result = new SyncRunResult(failures)
             coordinator.finishRun(runId, result, transactionDelta.serverKnowledge, transactionComplete)
+            logCycleCompletion(cycleNumber, completeTransactionDelta, movementSnapshot,
+                transactionResults, movementPlanning, transactionRouting, movementRouting, failures,
+                parentCategoriesById)
         } catch (Exception ex) {
             coordinator.failRun(runId, ex)
             throw ex
@@ -627,6 +633,137 @@ class ParentChildBudgetSyncer {
                 intent.source.parentSubtransactionId ?: intent.source.parentTransactionId ?: intent.source.moneyMovementId,
                 intent.payloadJson)
         }
+    }
+
+    private void logCycleCompletion(int cycleNumber, TransactionDelta transactionDelta,
+                                    MoneyMovementSnapshot movementSnapshot,
+                                    List<ParentReconciliationResult> transactionResults,
+                                    MovementPlanning movementPlanning,
+                                    RoutingResolution transactionRouting,
+                                    RoutingResolution movementRouting,
+                                    List<String> failures,
+                                    Map<String, CategorySnapshot> parentCategoriesById) {
+        List<PlannedReconciliationIntent> intents = (transactionResults ?: []).collectMany { it.intents }
+        if (movementPlanning) {
+            intents.addAll(movementPlanning.decisions.collectMany { it.intents })
+        }
+        List<PlannedReconciliationIntent> mutating = intents.findAll {
+            it.action == PlannedAction.CREATE || it.action == PlannedAction.UPDATE || it.action == PlannedAction.DELETE
+        }
+        String throughDate = parentSyncedThroughDate(transactionDelta, movementSnapshot)
+        String mode = dryRun ? ' (dry-run)' : ''
+        log.info('Cycle {} completed{}', cycleNumber, mode)
+        log.info(
+            'Cycle {} parent synced through {} ({} parent transactions, {} money movements)',
+            cycleNumber, throughDate, transactionDelta?.transactions?.size() ?: 0,
+            movementSnapshot?.movements?.size() ?: 0)
+        log.info(
+            'Cycle {} propagated {} parent sources to child budgets',
+            cycleNumber, mutating.collect { identityOf(it.source) }.unique().size())
+        childContexts.each { ChildSyncContext child ->
+            List<PlannedReconciliationIntent> childIntents = mutating.findAll { it.targetChildKey == child.target.childKey }
+            log.info(
+                'Cycle {} child {}: created={} updated={} deleted={}',
+                cycleNumber, child.target.childKey,
+                childIntents.count { it.action == PlannedAction.CREATE },
+                childIntents.count { it.action == PlannedAction.UPDATE },
+                childIntents.count { it.action == PlannedAction.DELETE })
+        }
+        List<String> unreplicated = unreplicatedReasons(transactionDelta, movementSnapshot, transactionRouting,
+            movementRouting, movementPlanning, failures, parentCategoriesById)
+        if (unreplicated) {
+            log.warn('Cycle {} could not replicate: {}', cycleNumber, unreplicated.join('; '))
+        } else {
+            log.info('Cycle {} could not replicate: none', cycleNumber)
+        }
+        log.info(
+            'Cycle {} API retries: rate-limit={} other={}',
+            cycleNumber, totalRateLimitRetries(), totalOtherRetries())
+    }
+
+    private String parentSyncedThroughDate(TransactionDelta transactionDelta, MoneyMovementSnapshot movementSnapshot) {
+        List<String> dates = []
+        (transactionDelta?.transactions ?: []).each { ParentTransactionEvent event ->
+            if (event.date) {
+                dates << event.date
+            }
+        }
+        (movementSnapshot?.movements ?: []).each { MoneyMovementEvent movement ->
+            if (movement.eventDate) {
+                dates << movement.eventDate
+            }
+        }
+        dates.max() ?: LocalDate.now(clock).minusDays(syncConfig.state.transactionLookbackDays as long).toString()
+    }
+
+    private List<String> unreplicatedReasons(TransactionDelta transactionDelta, MoneyMovementSnapshot movementSnapshot,
+                                             RoutingResolution transactionRouting, RoutingResolution movementRouting,
+                                             MovementPlanning movementPlanning, List<String> failures,
+                                             Map<String, CategorySnapshot> parentCategoriesById) {
+        List<String> reasons = []
+        List<String> unmapped = unmappedCategoryNames(transactionDelta, movementSnapshot, parentCategoriesById)
+        if (unmapped) {
+            reasons << "unmapped parent categories [${unmapped.join(', ')}]"
+        }
+        List<String> routing = []
+        routing.addAll(transactionRouting?.failures ?: [])
+        routing.addAll(movementRouting?.failures ?: [])
+        if (routing) {
+            reasons << "routing failures [${routing.unique().join(', ')}]"
+        }
+        List<String> unconfirmed = (movementPlanning?.decisions ?: []).findAll {
+            it.status == MovementObservationStatus.UNCONFIRMED
+        }.collect { it.source.moneyMovementId }
+        if (unconfirmed) {
+            reasons << "unconfirmed money movements [${unconfirmed.join(', ')}]"
+        }
+        List<String> applyFailures = (failures ?: []).findAll { it }
+        if (applyFailures) {
+            reasons << "failures [${applyFailures.join(', ')}]"
+        }
+        reasons
+    }
+
+    private List<String> unmappedCategoryNames(TransactionDelta transactionDelta, MoneyMovementSnapshot movementSnapshot,
+                                               Map<String, CategorySnapshot> parentCategoriesById) {
+        Set<String> names = [] as Set
+        (transactionDelta?.transactions ?: []).findAll { it.approved == true && it.deleted != true }.each { event ->
+            names << event.categoryName
+            (event.subtransactions ?: []).findAll { it.deleted != true }.each { names << it.categoryName }
+        }
+        (movementSnapshot?.movements ?: []).each { MoneyMovementEvent movement ->
+            names << (parentCategoriesById ?: [:])[movement.fromCategoryId]?.name
+            names << (parentCategoriesById ?: [:])[movement.toCategoryId]?.name
+        }
+        names.remove(null)
+        names.remove('')
+        names.findAll { String name -> !categoryMapped(name) }.sort()
+    }
+
+    private boolean categoryMapped(String categoryName) {
+        childContexts.any { ChildSyncContext child ->
+            child.target.accountMappings.any { it.matches(categoryName) }
+        }
+    }
+
+    private static String identityOf(SourceEntityKey source) {
+        source.parentSubtransactionId ?: source.parentTransactionId ?: source.moneyMovementId
+    }
+
+    private int totalRateLimitRetries() {
+        int total = parentRepository?.rateLimitRetryCount ?: 0
+        childContexts.each { ChildSyncContext child ->
+            total += child.repository?.rateLimitRetryCount ?: 0
+        }
+        total
+    }
+
+    private int totalOtherRetries() {
+        int total = parentRepository?.otherRetryCount ?: 0
+        childContexts.each { ChildSyncContext child ->
+            total += child.repository?.otherRetryCount ?: 0
+        }
+        total
     }
 
     private static String resolveRequiredToken(String envVarName, String configKey, Map<String, String> environment) {

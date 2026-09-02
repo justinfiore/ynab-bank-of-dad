@@ -14,3 +14,4 @@ qa/discovered-provisioning.json
 qa/.campaign-state/
 __pycache__/
 *.pyc
+tokens*.txt
