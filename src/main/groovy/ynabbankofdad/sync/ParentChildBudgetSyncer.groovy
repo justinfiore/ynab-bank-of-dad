@@ -305,6 +305,9 @@ class ParentChildBudgetSyncer {
                     derived, accountType, child.target.createdAccountOnBudget, child.target.childKey)
                 return
             }
+            log.info(
+                'Creating New YNAB Account: {} in Budget: {} with type: {}',
+                derived, child.target.budgetName, accountType)
             Map created = child.repository.createAccount(child.budgetId, derived, accountType)
             String createdId = created.id as String
             child.cacheAccountId(derived, createdId)
