@@ -286,11 +286,8 @@ class ParentChildBudgetSyncer {
             throw new IllegalStateException(
                 "Could not find account named '${mappedName}' in budget '${child.budgetId}'")
         }
-        if (child.target.createdAccountOnBudget == false) {
-            throw new IllegalStateException(
-                "Child '${child.target.childKey}' requested tracking Savings accounts, " +
-                    'but the live YNAB SaveAccount contract does not accept on_budget')
-        }
+        String accountType = YnabBudgetRepository.saveAccountTypeForOnBudget(
+            child.target.createdAccountOnBudget != false)
         categoryNames.findAll { String name -> mapping.matches(name) }.each { String parentName ->
             String derived = child.target.derivedAccountName(parentName)
             if (!derived) {
@@ -304,11 +301,11 @@ class ParentChildBudgetSyncer {
             }
             if (dryRun) {
                 log.info(
-                    "Would create savings account '{}' (createdAccountOnBudget={}) in child {}",
-                    derived, child.target.createdAccountOnBudget, child.target.childKey)
+                    "Would create account '{}' type={} (createdAccountOnBudget={}) in child {}",
+                    derived, accountType, child.target.createdAccountOnBudget, child.target.childKey)
                 return
             }
-            Map created = child.repository.createAccount(child.budgetId, derived)
+            Map created = child.repository.createAccount(child.budgetId, derived, accountType)
             String createdId = created.id as String
             child.cacheAccountId(derived, createdId)
             existingIds[derived] = createdId
