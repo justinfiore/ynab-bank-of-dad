@@ -5,6 +5,7 @@ import ynabbankofdad.ynab.*
 import ynabbankofdad.sync.*
 import ynabbankofdad.sync.model.*
 import ynabbankofdad.sync.state.*
+import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.Logger
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.read.ListAppender
@@ -588,6 +589,42 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         ]
         postedTransactions('child-one-budget-id')[0].account_id == 'created-asset-account-id'
         cursorValue('transactions.last_server_knowledge') == 405
+    }
+
+    def "live auto-create logs INFO with account name, budget name, and type"() {
+        given:
+        stubCommonBudgetDiscovery()
+        stubParentCategories()
+        stubParentTransactions([
+            [id: 'txn-auto-create-log', date: '2026-07-01', amount: -1200, memo: 'Shoes', approved: true,
+             category_id: 'cat-child-one-spend', category_name: 'Child One Spend Bank', subtransactions: []]
+        ], 406)
+        stubMoneyMovements([])
+        stubChildAccounts('child-one-budget-id', [])
+        stubCreateAccount('child-one-budget-id', 'Child One Spend', 'created-log-account-id', accountType, onBudget)
+        stubChildPost('child-one-budget-id', ['child-one-created-log'])
+        Logger logger = (Logger) LoggerFactory.getLogger(ParentChildBudgetSyncer)
+        def appender = new ListAppender<ILoggingEvent>()
+        appender.start()
+        logger.addAppender(appender)
+        def syncer = syncer(false, autoCreateSyncConfig(true, onBudget))
+
+        when:
+        syncer.runOnce(1)
+
+        then:
+        appender.list.any {
+            it.level == Level.INFO &&
+                it.formattedMessage == "Creating New YNAB Account: Child One Spend in Budget: Child One Budget with type: ${accountType}"
+        }
+
+        cleanup:
+        logger.detachAppender(appender)
+
+        where:
+        accountType  | onBudget
+        'checking'   | true
+        'otherAsset' | false
     }
 
     def "dry-run auto-create logs a planned checking account and does not POST create or child transactions"() {
