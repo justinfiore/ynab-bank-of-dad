@@ -9,6 +9,6 @@ The Spock unit suite and WireMock suite SHALL cover the new child-budget auto-cr
 
 #### Scenario: Simulated create-account coverage
 - **WHEN** WireMock fixtures simulate `POST /v1/plans/{plan_id}/accounts` success and missing-account list responses
-- **THEN** the suite SHALL verify a live auto-create run issues that POST with `type` `savings` and `balance` `0`
+- **THEN** the suite SHALL verify a live auto-create run issues that POST with `type` `checking` (on-budget) or `otherAsset` (off-budget) and `balance` `0`
 - **AND** it SHALL verify `--dry-run` and `autoCreateAccounts: false` do not issue that POST
 - **AND** it SHALL verify an existing derived-name account is reused without a second POST

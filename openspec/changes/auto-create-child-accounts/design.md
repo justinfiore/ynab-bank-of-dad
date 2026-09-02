@@ -103,7 +103,7 @@ Documented live request:
 {
   "account": {
     "name": "Child One Spend",
-    "type": "savings",
+    "type": "checking",
     "balance": 0
   }
 }
@@ -113,11 +113,12 @@ Path: `POST /v1/plans/{plan_id}/accounts` via existing `postJsonWithMetadata`.
 
 Require HTTP 201 and a non-empty `data.account.id`. Map the returned account enough to cache `id` and `name`. Do not log tokens.
 
-**Budget vs tracking:** Apply MUST re-read the current official OpenAPI (`SaveAccount` / `PostAccountWrapper`) rather than copying this design's field list blindly.
+**Budget vs tracking:** Live `SaveAccount` (OpenAPI v1.86.0) accepts `name`, `type`, and `balance` and does not accept `on_budget`. On-budget vs tracking is expressed by `SaveAccountType`:
 
-- If live `SaveAccount` accepts `on_budget`, send `createdAccountOnBudget` as `on_budget` along with `type: savings` and `balance: 0`.
-- If live `SaveAccount` does not accept `on_budget` and `createdAccountOnBudget` is `true`, omit `on_budget` (savings accounts are on-budget in YNAB).
-- If live `SaveAccount` does not accept `on_budget` and `createdAccountOnBudget` is `false`, fail fast with a clear error. Do not switch `type` to `otherAsset` or any other type to approximate tracking. The operator asked for a Savings account; faking a different type is out of scope.
+- `createdAccountOnBudget: true` → `type: checking` (on-budget Checking)
+- `createdAccountOnBudget: false` → `type: otherAsset` (off-budget tracking Asset)
+
+Do not send `on_budget`. Do not fail closed when tracking is requested.
 
 ### 5. List-then-lookup instead of throw-first
 
@@ -135,7 +136,7 @@ Auto-create does not change parent-authoritative reconciliation rules. It only s
 
 - [Live account creates] → Account creation is a YNAB write. Gate it on `autoCreateAccounts: true` and skip the POST in `--dry-run`. First live run with the flag on can create several accounts.
 - [Per-category accounts when the mapped name is missing] → If `childAccountName` is absent in YNAB, each matching parent category can get its own derived-name account (for example each Gold CD category). If the mapped name exists, all those categories still share it. Document this in config docs.
-- [Tracking + savings may be impossible] → Official create docs require `type` and do not document `on_budget` as a request field. Fail closed when tracking is requested and the live contract cannot honor it, rather than creating a non-savings type.
+- [Tracking vs on-budget] → Live SaveAccount has no `on_budget` field. Use `checking` for on-budget and `otherAsset` for tracking.
 - [Empty names after strip] → A too-greedy `accountCreationNameStripRegex` can wipe the name. Fail that child's routing instead of posting a blank name.
 - [Name collisions] → Derived names are exact-match lookups. Two parent categories that strip to the same string share one child account. That is accepted.
 - [Dry-run does not show downstream transactions for new accounts] → Dry-run cannot mint real YNAB ids. It logs planned creates and skips financial plans for those categories until a live run creates the account.

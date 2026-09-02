@@ -516,29 +516,50 @@ class YnabBudgetRepositorySpec extends Specification {
         body == [transactions: transactions]
     }
 
-    def "createAccount posts savings account with zero balance and returns the new id"() {
+    def "createAccount posts the requested SaveAccount type with zero balance and returns the new id"() {
         given:
         stubFor(post(urlEqualTo('/v1/plans/budget-new/accounts'))
             .willReturn(aResponse()
                 .withStatus(201)
                 .withHeader('Content-Type', 'application/json')
-                .withBody('''
+                .withBody("""
 {
   "data": {
-    "account": {"id": "acct-created", "name": "Child One Spend", "type": "savings", "on_budget": true, "balance": 0}
+    "account": {"id": "acct-created", "name": "Child One Spend", "type": "${accountType}", "on_budget": ${onBudget}, "balance": 0}
   }
 }
-''')))
+""")))
 
         when:
-        def created = buildRepository().createAccount('budget-new', 'Child One Spend')
+        def created = buildRepository().createAccount('budget-new', 'Child One Spend', accountType)
         def requests = wireMockServer.findAll(postRequestedFor(urlEqualTo('/v1/plans/budget-new/accounts')))
         def body = new JsonSlurper().parseText(requests[0].bodyAsString)
 
         then:
         created.id == 'acct-created'
         requests.size() == 1
-        body == [account: [name: 'Child One Spend', type: 'savings', balance: 0]]
+        body == [account: [name: 'Child One Spend', type: accountType, balance: 0]]
+
+        where:
+        accountType  | onBudget
+        'checking'   | true
+        'otherAsset' | false
+    }
+
+    def "createAccount rejects types outside the live SaveAccountType enum"() {
+        when:
+        buildRepository().createAccount('budget-new', 'Child One Spend', 'asset')
+
+        then:
+        def ex = thrown(IllegalArgumentException)
+        ex.message.contains("YNAB SaveAccount type 'asset' is not supported")
+        wireMockServer.findAll(postRequestedFor(urlEqualTo('/v1/plans/budget-new/accounts'))).isEmpty()
+    }
+
+    def "saveAccountTypeForOnBudget maps checking vs otherAsset"() {
+        expect:
+        YnabBudgetRepository.saveAccountTypeForOnBudget(true) == 'checking'
+        YnabBudgetRepository.saveAccountTypeForOnBudget(false) == 'otherAsset'
     }
 
     def "createAccount throws when the response is missing account.id"() {
@@ -550,7 +571,7 @@ class YnabBudgetRepositorySpec extends Specification {
                 .withBody('{"data":{"account":{"name":"Child One Spend"}}}')))
 
         when:
-        buildRepository().createAccount('budget-new', 'Child One Spend')
+        buildRepository().createAccount('budget-new', 'Child One Spend', 'checking')
 
         then:
         def ex = thrown(IllegalStateException)

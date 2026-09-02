@@ -535,8 +535,8 @@ Field guidance:
 - `tokenEnvVarName` — env var name that holds this child budget’s token
 - `memoPrefix` — optional string prepended to synced child memos; defaults to `"YBOD: "`; empty string disables the prefix
 - `memoSuffix` — optional string appended to synced child memos; defaults to `""`; empty strings are allowed
-- `autoCreateAccounts` — optional boolean, default `false`. When `true`, a mapped parent category whose `childAccountName` does not exist causes the syncer to create a YNAB Savings account in that child budget. Unmapped parent categories are still ignored. `--dry-run` logs the planned create and does not POST.
-- `createdAccountOnBudget` — optional boolean, default `true` (budget / on-budget). `false` means tracking / off-budget. The live YNAB `SaveAccount` create body is `name`, `type: savings`, and `balance: 0`; it does not accept `on_budget`. Tracking therefore fails closed instead of creating a different account type.
+- `autoCreateAccounts` — optional boolean, default `false`. When `true`, a mapped parent category whose `childAccountName` does not exist causes the syncer to create a YNAB account in that child budget. Unmapped parent categories are still ignored. `--dry-run` logs the planned create and does not POST.
+- `createdAccountOnBudget` — optional boolean, default `true` (budget / on-budget). `false` means tracking / off-budget. The live YNAB `SaveAccount` create body is `name`, `type`, and `balance: 0`; it does not accept `on_budget`. On-budget creates use `type: checking`. Off-budget / tracking creates use `type: otherAsset` (YNAB's "Asset (e.g. Investment)" tracking account).
 - `accountCreationNameStripRegex` — optional Java regex. Every match in the parent category name is replaced with `""` before the account is created or looked up by derived name. Example: ` Bank$` turns `Child One Spend Bank` into `Child One Spend`. Invalid or empty patterns fail at startup.
 - `accountMappings` — non-empty list of parent-category-to-child-account mappings for this child budget
 - `accountMappings[*].mappingKey` — stable unique key within the child target, used in logs/state/idempotency

@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
-### Requirement: The syncer SHALL create a missing child Savings account when auto-create is enabled
-When a parent category matches a child target's `accountMappings` and that mapping's `childAccountName` does not exist in the child budget, and the child target has `autoCreateAccounts: true`, and the run is not `--dry-run`, the syncer SHALL create a YNAB account in that child budget and use the returned account id for planning in the same cycle. The created account type SHALL be `savings`. The starting `balance` SHALL be `0` milliunits. The create call SHALL use `POST /v1/plans/{plan_id}/accounts` with a JSON body wrapping `account`. The wrapper SHALL NOT be called when `autoCreateAccounts` is `false`.
+### Requirement: The syncer SHALL create a missing child account when auto-create is enabled
+When a parent category matches a child target's `accountMappings` and that mapping's `childAccountName` does not exist in the child budget, and the child target has `autoCreateAccounts: true`, and the run is not `--dry-run`, the syncer SHALL create a YNAB account in that child budget and use the returned account id for planning in the same cycle. The created account type SHALL be the live YNAB `SaveAccountType` string `checking` when `createdAccountOnBudget` is `true`, and `otherAsset` when `createdAccountOnBudget` is `false`. The starting `balance` SHALL be `0` milliunits. The create call SHALL use `POST /v1/plans/{plan_id}/accounts` with a JSON body wrapping `account`. The wrapper SHALL NOT be called when `autoCreateAccounts` is `false`.
 
 #### Scenario: Missing mapped account is created from the parent category name
 - **WHEN** parent category `Child One Spend Bank` matches a mapping whose `childAccountName` is `Spend`
@@ -9,7 +9,7 @@ When a parent category matches a child target's `accountMappings` and that mappi
 - **AND** `autoCreateAccounts` is `true`
 - **AND** the run is live (not `--dry-run`)
 - **AND** `accountCreationNameStripRegex` is omitted
-- **THEN** the syncer SHALL POST a create-account request for name `Child One Spend Bank`, type `savings`, balance `0`
+- **THEN** the syncer SHALL POST a create-account request for name `Child One Spend Bank`, type `checking`, balance `0`
 - **AND** subsequent planning for that category SHALL use the created account id
 
 #### Scenario: Existing mapped account is not created
@@ -52,24 +52,24 @@ When deriving an auto-created account name, the syncer SHALL start from the matc
 - **AND** the syncer SHALL NOT POST a create-account request
 
 ### Requirement: Dry-run SHALL NOT create child accounts
-`--dry-run` SHALL remain write-free for account creation. When auto-create would create an account on a live run, dry-run SHALL log the derived account name, that the type would be `savings`, and the configured `createdAccountOnBudget` value, and SHALL NOT call `POST /v1/plans/{plan_id}/accounts`. Dry-run SHALL NOT plan child financial mutations for categories whose account would only exist after that create.
+`--dry-run` SHALL remain write-free for account creation. When auto-create would create an account on a live run, dry-run SHALL log the derived account name, the live `SaveAccountType` that would be sent, and the configured `createdAccountOnBudget` value, and SHALL NOT call `POST /v1/plans/{plan_id}/accounts`. Dry-run SHALL NOT plan child financial mutations for categories whose account would only exist after that create.
 
 #### Scenario: Dry-run reports a planned account create
 - **WHEN** auto-create would create `Child One Spend` on a live run
 - **AND** the operator passes `--dry-run`
-- **THEN** the syncer SHALL log that it would create that Savings account
+- **THEN** the syncer SHALL log that it would create that account with the mapped `SaveAccountType`
 - **AND** no create-account POST SHALL be sent
 
-### Requirement: Created-account on-budget flag SHALL follow the live SaveAccount contract
-The create payload SHALL include the documented required fields `name`, `type` (`savings`), and `balance` (`0`). If the live YNAB `SaveAccount` schema accepts `on_budget`, the syncer SHALL send `createdAccountOnBudget` as `on_budget`. If the live schema does not accept `on_budget` and `createdAccountOnBudget` is `true`, the syncer SHALL omit `on_budget`. If the live schema does not accept `on_budget` and `createdAccountOnBudget` is `false`, the syncer SHALL fail that child's routing with an error stating that tracking Savings accounts cannot be created through the live API, and SHALL NOT send a different `type` to approximate tracking.
+### Requirement: Created-account on-budget flag SHALL select the live SaveAccount type
+The create payload SHALL include the documented required fields `name`, `type`, and `balance` (`0`). Live YNAB `SaveAccount` (OpenAPI v1.86.0) does not accept `on_budget`; on-budget vs tracking SHALL be expressed by `type`. `createdAccountOnBudget: true` SHALL send `type: checking`. `createdAccountOnBudget: false` SHALL send `type: otherAsset` (YNAB tracking "Asset (e.g. Investment)"). The request SHALL NOT include `on_budget`.
 
-#### Scenario: On-budget create uses savings type
+#### Scenario: On-budget create uses checking type
 - **WHEN** `createdAccountOnBudget` is `true` and a live auto-create runs
-- **THEN** the request `account.type` SHALL be `savings`
+- **THEN** the request `account.type` SHALL be `checking`
 - **AND** `account.balance` SHALL be `0`
 
-#### Scenario: Unsupported tracking savings fails closed
-- **WHEN** `createdAccountOnBudget` is `false`
-- **AND** the live SaveAccount contract cannot set `on_budget` on create
-- **THEN** the syncer SHALL fail routing for that child
-- **AND** it SHALL NOT POST `type` values other than `savings`
+#### Scenario: Off-budget create uses otherAsset type
+- **WHEN** `createdAccountOnBudget` is `false` and a live auto-create runs
+- **THEN** the request `account.type` SHALL be `otherAsset`
+- **AND** `account.balance` SHALL be `0`
+- **AND** the syncer SHALL NOT fail routing solely because tracking was requested

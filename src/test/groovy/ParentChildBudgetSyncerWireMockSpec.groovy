@@ -522,7 +522,7 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         cursorValue('transactions.last_server_knowledge') == null
     }
 
-    def "live cycle auto-creates a missing child savings account then mirrors the parent transaction"() {
+    def "live cycle auto-creates a missing child checking account then mirrors the parent transaction"() {
         given:
         stubCommonBudgetDiscovery()
         stubParentCategories()
@@ -534,7 +534,7 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         ], 401)
         stubMoneyMovements([])
         stubChildAccounts('child-one-budget-id', [])
-        stubCreateAccount('child-one-budget-id', 'Child One Spend', 'created-spend-account-id')
+        stubCreateAccount('child-one-budget-id', 'Child One Spend', 'created-spend-account-id', 'checking', true)
         stubChildPost('child-one-budget-id', ['child-one-created-auto'])
         def syncer = syncer(false, autoCreateSyncConfig())
 
@@ -545,7 +545,7 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         List creates = wireMockServer.findAll(postRequestedFor(urlEqualTo('/v1/plans/child-one-budget-id/accounts')))
         creates.size() == 1
         new JsonSlurper().parseText(creates[0].bodyAsString) == [
-            account: [name: 'Child One Spend', type: 'savings', balance: 0]
+            account: [name: 'Child One Spend', type: 'checking', balance: 0]
         ]
         postedTransactions('child-one-budget-id') == [[
             account_id: 'created-spend-account-id',
@@ -563,7 +563,34 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         cursorValue('transactions.last_server_knowledge') == 401
     }
 
-    def "dry-run auto-create logs a planned savings account and does not POST create or child transactions"() {
+    def "live cycle auto-creates an off-budget otherAsset account when createdAccountOnBudget is false"() {
+        given:
+        stubCommonBudgetDiscovery()
+        stubParentCategories()
+        stubParentTransactions([
+            [id: 'txn-auto-create-tracking', date: '2026-07-01', amount: -1200, memo: 'Shoes', approved: true,
+             category_id: 'cat-child-one-spend', category_name: 'Child One Spend Bank', subtransactions: []]
+        ], 405)
+        stubMoneyMovements([])
+        stubChildAccounts('child-one-budget-id', [])
+        stubCreateAccount('child-one-budget-id', 'Child One Spend', 'created-asset-account-id', 'otherAsset', false)
+        stubChildPost('child-one-budget-id', ['child-one-created-asset'])
+        def syncer = syncer(false, autoCreateSyncConfig(true, false))
+
+        when:
+        syncer.runOnce(1)
+
+        then:
+        List creates = wireMockServer.findAll(postRequestedFor(urlEqualTo('/v1/plans/child-one-budget-id/accounts')))
+        creates.size() == 1
+        new JsonSlurper().parseText(creates[0].bodyAsString) == [
+            account: [name: 'Child One Spend', type: 'otherAsset', balance: 0]
+        ]
+        postedTransactions('child-one-budget-id')[0].account_id == 'created-asset-account-id'
+        cursorValue('transactions.last_server_knowledge') == 405
+    }
+
+    def "dry-run auto-create logs a planned checking account and does not POST create or child transactions"() {
         given:
         stubCommonBudgetDiscovery()
         stubParentCategories()
@@ -586,7 +613,7 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         verify(0, postRequestedFor(urlEqualTo('/v1/plans/child-one-budget-id/accounts')))
         verify(0, postRequestedFor(urlEqualTo('/v1/plans/child-one-budget-id/transactions/bulk')))
         appender.list*.formattedMessage.any {
-            it.contains("Would create savings account 'Child One Spend'") &&
+            it.contains("Would create account 'Child One Spend' type=checking") &&
                 it.contains('createdAccountOnBudget=true') &&
                 it.contains('child-one')
         }
@@ -1372,13 +1399,14 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         )
     }
 
-    private void stubCreateAccount(String budgetId, String name, String accountId) {
+    private void stubCreateAccount(String budgetId, String name, String accountId,
+                                   String type = 'checking', boolean onBudget = true) {
         stubFor(post(urlEqualTo("/v1/plans/${budgetId}/accounts"))
             .willReturn(aResponse()
                 .withStatus(201)
                 .withHeader('Content-Type', 'application/json')
                 .withBody(JsonOutput.toJson([data: [account: [
-                    id: accountId, name: name, type: 'savings', on_budget: true, balance: 0
+                    id: accountId, name: name, type: type, on_budget: onBudget, balance: 0
                 ]]]))))
     }
 

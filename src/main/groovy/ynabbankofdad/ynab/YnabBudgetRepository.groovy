@@ -15,6 +15,18 @@ class YnabBudgetRepository {
         'cleared', 'approved', 'flag_color', 'subtransactions'
     ] as Set
 
+    // Live YNAB SaveAccountType enum (OpenAPI v1.86.0). Checking is on-budget;
+    // otherAsset is the tracking / off-budget "Asset (e.g. Investment)" type.
+    static final String ON_BUDGET_ACCOUNT_TYPE = 'checking'
+    static final String OFF_BUDGET_ACCOUNT_TYPE = 'otherAsset'
+    private static final Set<String> SAVE_ACCOUNT_TYPES = [
+        'checking', 'savings', 'cash', 'creditCard', 'otherAsset', 'otherLiability'
+    ] as Set
+
+    static String saveAccountTypeForOnBudget(boolean onBudget) {
+        onBudget ? ON_BUDGET_ACCOUNT_TYPE : OFF_BUDGET_ACCOUNT_TYPE
+    }
+
     private final YnabHttpClient ynabClient
     private final SimpleDateFormat budgetTimestampFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssX")
 
@@ -82,9 +94,13 @@ class YnabBudgetRepository {
         idsByName
     }
 
-    Map createAccount(String budgetId, String name) {
+    Map createAccount(String budgetId, String name, String type) {
+        if (!SAVE_ACCOUNT_TYPES.contains(type)) {
+            throw new IllegalArgumentException(
+                "YNAB SaveAccount type '${type}' is not supported. Allowed: ${SAVE_ACCOUNT_TYPES.sort().join(', ')}")
+        }
         YnabHttpResponse response = ynabClient.postJsonWithMetadata("/v1/plans/${budgetId}/accounts", [
-            account: [name: name, type: 'savings', balance: 0]
+            account: [name: name, type: type, balance: 0]
         ])
         log.debug(
             "Created account '{}' in budget '{}' and received status {} with body {}",
