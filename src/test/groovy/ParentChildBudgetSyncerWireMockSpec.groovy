@@ -119,9 +119,107 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
             approved: false,
             import_id: postedTransactions('child-one-budget-id')[0].import_id
         ]]
-        verify(getRequestedFor(urlEqualTo(
+        verify(0, getRequestedFor(urlEqualTo(
             '/v1/plans/parent-budget-id/transactions/txn-custom-memo')))
         tableCount('operation_attempts') == 1
+    }
+
+    def "bootstrap listing treats list payload as complete and skips per-id parent fetches"() {
+        given:
+        stubCommonBudgetDiscovery()
+        stubParentCategories()
+        stubParentTransactions([
+            [id: 'txn-ordinary-1', date: '2026-07-01', amount: -100, memo: 'One', approved: true,
+             category_id: 'cat-child-one-spend', category_name: 'Child One Spend Bank', subtransactions: []],
+            [id: 'txn-ordinary-2', date: '2026-07-01', amount: -200, memo: 'Two', approved: true,
+             category_id: 'cat-child-one-spend', category_name: 'Child One Spend Bank', subtransactions: []],
+            [id: 'txn-split-bootstrap', date: '2026-07-02', amount: -300, memo: 'Split', approved: true,
+             category_id: null, category_name: null, subtransactions: [
+                [id: 'sub-bootstrap-save', transaction_id: 'txn-split-bootstrap', amount: -300, memo: 'Save',
+                 category_id: 'cat-child-one-save', category_name: 'Child One Save Bank']
+            ]]
+        ], 501)
+        stubMoneyMovements([])
+        stubChildAccounts('child-one-budget-id', 'child-one-account-id', 'Child One Checking')
+        stubChildPost('child-one-budget-id', ['child-1', 'child-2', 'child-3'])
+
+        when:
+        syncer(false).runOnce(1)
+
+        then:
+        postedTransactions('child-one-budget-id').size() == 3
+        verify(0, getRequestedFor(urlPathMatching('/v1/plans/parent-budget-id/transactions/.+')))
+        cursorValue('transactions.last_server_knowledge') == 501
+    }
+
+    def "incremental delta fetches parent detail only when a split mirror would be deleted from absence"() {
+        given:
+        stubCommonBudgetDiscovery()
+        stubParentCategories()
+        Map subSave = [id: 'sub-keep', transaction_id: 'txn-split-detail', amount: -400, memo: 'Keep',
+                       category_id: 'cat-child-one-save', category_name: 'Child One Save Bank']
+        Map subSpend = [id: 'sub-drop', transaction_id: 'txn-split-detail', amount: -500, memo: 'Drop',
+                        category_id: 'cat-child-one-spend', category_name: 'Child One Spend Bank']
+        Map fullSplit = [id: 'txn-split-detail', date: '2026-07-01', amount: -900, memo: 'Split',
+                         approved: true, category_id: null, category_name: null,
+                         subtransactions: [subSave, subSpend]]
+        Map partialSplit = fullSplit + [amount: -400, subtransactions: [subSave]]
+        stubParentTransactions([fullSplit], 601)
+        stubParentTransactions([partialSplit], 602, 601)
+        stubMoneyMovements([])
+        stubChildAccounts('child-one-budget-id', 'child-one-account-id', 'Child One Checking')
+        stubChildPostsInOrder('child-one-budget-id', ['child-keep', 'child-drop'])
+        stubChildDelete('child-one-budget-id', 'child-drop')
+        stubChildLookup('child-one-budget-id', 'child-keep', 'child-one-account-id',
+            '2026-07-01', -400, null, null)
+
+        when:
+        def syncer = syncer(false)
+        syncer.runOnce(1)
+        syncer.runOnce(2)
+
+        then:
+        verify(1, getRequestedFor(urlEqualTo('/v1/plans/parent-budget-id/transactions/txn-split-detail')))
+        verify(1, deleteRequestedFor(urlEqualTo('/v1/plans/child-one-budget-id/transactions/child-drop')))
+        cursorValue('transactions.last_server_knowledge') == 602
+    }
+
+    def "incremental ordinary parent edit does not fetch the transaction by id"() {
+        given:
+        stubCommonBudgetDiscovery()
+        stubParentCategories()
+        stubParentTransactions([[
+            id: 'txn-ordinary-edit', date: '2026-07-01', amount: -1000, memo: 'Original', approved: true,
+            category_id: 'cat-child-one-spend', category_name: 'Child One Spend Bank', subtransactions: []
+        ]], 701)
+        stubParentTransactions([[
+            id: 'txn-ordinary-edit', date: '2026-07-02', amount: -1100, memo: 'Original', approved: true,
+            category_id: 'cat-child-one-spend', category_name: 'Child One Spend Bank', subtransactions: []
+        ]], 702, 701)
+        stubMoneyMovements([])
+        stubChildAccounts('child-one-budget-id', 'child-one-account-id', 'Child One Checking')
+        stubChildPost('child-one-budget-id', ['child-ordinary-edit'])
+        stubFor(get(urlEqualTo('/v1/plans/child-one-budget-id/transactions/child-ordinary-edit'))
+            .willReturn(jsonResponse([data: [server_knowledge: 1, transaction: [
+                id: 'child-ordinary-edit', account_id: 'child-one-account-id', date: '2026-07-01', amount: -1000,
+                payee_id: null, payee_name: null, memo: 'YBOD: Original',
+                cleared: 'cleared', approved: false, deleted: false
+            ]]])))
+        stubFor(put(urlEqualTo('/v1/plans/child-one-budget-id/transactions/child-ordinary-edit'))
+            .willReturn(jsonResponse([data: [server_knowledge: 2, transaction: [
+                id: 'child-ordinary-edit', account_id: 'child-one-account-id', date: '2026-07-02', amount: -1100,
+                payee_id: null, payee_name: null, memo: 'YBOD: Original',
+                cleared: 'cleared', approved: false, deleted: false
+            ]]])))
+
+        when:
+        def syncer = syncer(false)
+        syncer.runOnce(1)
+        syncer.runOnce(2)
+
+        then:
+        verify(0, getRequestedFor(urlPathMatching('/v1/plans/parent-budget-id/transactions/.+')))
+        cursorValue('transactions.last_server_knowledge') == 702
     }
 
     def "four child budgets route literals regex split and money movements across multiple child accounts"() {

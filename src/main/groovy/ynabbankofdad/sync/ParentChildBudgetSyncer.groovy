@@ -174,7 +174,8 @@ class ParentChildBudgetSyncer {
             movementReadFailure = "money movements: ${failure.message ?: failure.class.simpleName}"
             log.error('Cycle {} could not read money movements: {}', cycleNumber, failure.message, failure)
         }
-        TransactionDelta completeTransactionDelta = completeTransactionDelta(parentBudgetId, transactionDelta)
+        TransactionDelta completeTransactionDelta = completeTransactionDelta(
+            parentBudgetId, requestCursor, transactionDelta)
         Set<String> transactionCategoryNames = completeTransactionDelta.transactions.findAll {
             it.approved == true && it.deleted != true
         }.collectMany { ParentTransactionEvent event ->
@@ -353,11 +354,24 @@ class ParentChildBudgetSyncer {
         }
     }
 
-    private TransactionDelta completeTransactionDelta(String parentBudgetId, TransactionDelta delta) {
+    private TransactionDelta completeTransactionDelta(String parentBudgetId, Integer requestCursor,
+                                                      TransactionDelta delta) {
+        boolean incremental = requestCursor != null
         List<ParentTransactionEvent> complete = delta.transactions.collect { ParentTransactionEvent event ->
-            event.deleted != true ? parentRepository.getParentTransaction(parentBudgetId, event.id) : event
+            if (!incremental || event.deleted == true || !needsCompleteSplitLookup(parentBudgetId, event)) {
+                return event
+            }
+            parentRepository.getParentTransaction(parentBudgetId, event.id)
         }
         new TransactionDelta(complete, delta.serverKnowledge)
+    }
+
+    private boolean needsCompleteSplitLookup(String parentBudgetId, ParentTransactionEvent event) {
+        Set<String> listedSubIds = ((event.subtransactions ?: []) as List)*.id.findAll() as Set
+        activeMirrorsForParent(parentBudgetId, event.id).any { ActiveMirrorReference ref ->
+            ref.source?.type == SourceEntityType.SUBTRANSACTION &&
+                !listedSubIds.contains(ref.source.parentSubtransactionId)
+        }
     }
 
     private MovementPlanning planMovements(

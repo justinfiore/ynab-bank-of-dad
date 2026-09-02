@@ -346,9 +346,11 @@ Money movements are read as a complete, unfiltered snapshot. The implementation 
 
 #### Complete Transaction Composition
 
-For every non-deleted changed transaction, `completeTransactionDelta` performs an individual transaction lookup. This avoids assuming that a delta's `subtransactions` collection is complete. Deleted top-level tombstones are retained directly because the full lookup may no longer exist.
+Bootstrap listings (`since_date`, no cursor) treat the list payload as complete current composition, including `subtransactions`. YNAB's list endpoint returns transaction detail with split lines, and a first-cycle lookback can contain hundreds of parent transactions; fetching each by id exceeds the 200-request hourly token cap.
 
-This extra read is what makes destructive split removal safe: absence is interpreted only after a complete detail response.
+Incremental deltas (`last_knowledge_of_server`) still cannot treat omitted split lines as deletion by themselves. `completeTransactionDelta` performs `GET /plans/{plan_id}/transactions/{transaction_id}` only when an active subtransaction mirror would otherwise be deleted because its id is absent from the listed composition. Deleted top-level tombstones are retained directly because the full lookup may no longer exist.
+
+That extra read is what makes destructive split removal safe: absence is interpreted only after a complete detail response.
 
 ### Stable Source Identity
 
