@@ -654,7 +654,57 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
                 it.contains('createdAccountOnBudget=true') &&
                 it.contains('child-one')
         }
+        appender.list*.formattedMessage.any { it == 'Cycle 1 completed (dry-run)' }
+        appender.list*.formattedMessage.any {
+            it.contains('Cycle 1 parent synced through 2026-07-01') &&
+                it.contains('1 parent transactions') &&
+                it.contains('0 money movements')
+        }
+        appender.list*.formattedMessage.any { it == 'Cycle 1 child child-one: created=0 updated=0 deleted=0' }
+        appender.list*.formattedMessage.any { it == 'Cycle 1 API retries: rate-limit=0 other=0' }
         tableCount('sync_runs') == 0
+
+        cleanup:
+        logger.detachAppender(appender)
+    }
+
+    def "dry-run cycle summary reports unmapped parent categories from money movements"() {
+        given:
+        stubCommonBudgetDiscovery()
+        stubParentCategories()
+        stubParentTransactions([
+            [id: 'txn-summary', date: '2026-07-09', amount: -1200, memo: 'Shoes', approved: true,
+             category_id: 'cat-child-one-spend', category_name: 'Child One Spend Bank', subtransactions: []]
+        ], 407)
+        stubMoneyMovements([
+            [id: 'mm-unmapped-cd', money_movement_group_id: 'group-cd', moved_at: '2026-07-10T12:00:00Z',
+             from_category_id: 'cat-child-one-spend', to_category_id: 'cat-parent-only', amount: 350000]
+        ])
+        stubChildAccounts('child-one-budget-id', 'child-one-account-id', 'Child One Checking')
+        stubChildAccounts('child-two-budget-id', 'child-two-account-id', 'Child Two Checking')
+        Logger logger = (Logger) LoggerFactory.getLogger(ParentChildBudgetSyncer)
+        def appender = new ListAppender<ILoggingEvent>()
+        appender.start()
+        logger.addAppender(appender)
+        def syncer = syncer(true)
+
+        when:
+        syncer.runOnce(1)
+
+        then:
+        appender.list*.formattedMessage.any { it == 'Cycle 1 completed (dry-run)' }
+        appender.list*.formattedMessage.any {
+            it.contains('Cycle 1 parent synced through 2026-07-10') &&
+                it.contains('1 parent transactions') &&
+                it.contains('1 money movements')
+        }
+        appender.list*.formattedMessage.any { it.startsWith('Cycle 1 child child-one: created=') }
+        appender.list.any {
+            it.level == Level.WARN &&
+                it.formattedMessage.contains('Cycle 1 could not replicate:') &&
+                it.formattedMessage.contains('Parent Only')
+        }
+        appender.list*.formattedMessage.any { it == 'Cycle 1 API retries: rate-limit=0 other=0' }
 
         cleanup:
         logger.detachAppender(appender)

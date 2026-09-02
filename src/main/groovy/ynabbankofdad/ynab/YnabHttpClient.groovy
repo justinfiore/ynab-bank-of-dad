@@ -61,6 +61,8 @@ class YnabHttpClient {
     final Closure infoLogger
     final Closure warningLogger
     private int tokenIndex = 0
+    private int rateLimitRetryCount = 0
+    private int otherRetryCount = 0
     private final Map<String, String> budgetNamesById = [:]
     private final List<Deque<Instant>> apiCallTimesByToken
 
@@ -230,6 +232,7 @@ class YnabHttpClient {
             if (response.statusCode() != 429) {
                 break
             }
+            rateLimitRetryCount++
             if (log.debugEnabled) {
                 log.debug(rateLimitDebugMessage(method, resourceClass, budgetName, response))
             }
