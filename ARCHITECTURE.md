@@ -338,7 +338,8 @@ Live `SyncStateStore.initialize` creates baseline version 1 in a missing or empt
 The syncer resolves the newest exact-name parent plan and reads categories. Transaction reads use two modes:
 
 - bootstrap: `since_date` based on `transactionLookbackDays` when no cursor exists;
-- incremental: `last_knowledge_of_server` without the configured bootstrap date filter.
+- incremental: `last_knowledge_of_server` without the configured bootstrap date filter;
+- force lookback: `sync.state.forceLookback: true` uses the bootstrap `since_date` listing even when a cursor exists. The stored cursor is ignored for the request and still advances after successful transaction work. Existing child mirrors are matched from sync state, so already-processed sources are verified or updated rather than created again.
 
 An empty transaction delta still carries response server knowledge and can advance the cursor after successful processing.
 

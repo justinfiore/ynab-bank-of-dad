@@ -355,6 +355,59 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
             .withQueryParam('last_knowledge_of_server', equalTo('41')))
     }
 
+    def "force lookback rereads lookback history to onboard a new child without duplicating existing mirrors"() {
+        given:
+        stubCommonBudgetDiscovery()
+        stubParentCategories()
+        List parentTxns = [
+            [id: 'txn-child-one', date: '2026-07-01', amount: -1200, memo: 'Shoes', approved: true,
+             category_id: 'cat-child-one-spend', category_name: 'Child One Spend Bank', subtransactions: []],
+            [id: 'txn-child-two', date: '2026-07-01', amount: -800, memo: 'Books', approved: true,
+             category_id: 'cat-child-two-spend', category_name: 'Child Two Spend Bank', subtransactions: []]
+        ]
+        stubParentTransactions(parentTxns, 41)
+        stubMoneyMovements([])
+        stubChildAccounts('child-one-budget-id', 'child-one-account-id', 'Child One Checking')
+        stubChildAccounts('child-two-budget-id', 'child-two-account-id', 'Child Two Checking')
+        stubChildPost('child-one-budget-id', ['child-one-created-1'])
+        stubChildPost('child-two-budget-id', ['child-two-created-1'])
+        stubChildLookup('child-one-budget-id', 'child-one-created-1', 'child-one-account-id',
+            '2026-07-01', -1200, null, null)
+        SyncConfig bothChildren = syncConfig()
+        SyncConfig firstChildOnly = new SyncConfig(bothChildren.parentBudget, [bothChildren.childBudgets[0]],
+            bothChildren.pollingIntervalSeconds, bothChildren.logging, bothChildren.state)
+        SyncConfig forceLookbackBoth = new SyncConfig(bothChildren.parentBudget, bothChildren.childBudgets,
+            bothChildren.pollingIntervalSeconds, bothChildren.logging,
+            new SyncStateConfig(bothChildren.state.sqlitePath, bothChildren.state.transactionLookbackDays,
+                bothChildren.state.moneyMovementLookbackDays, true))
+
+        when:
+        syncer(false, firstChildOnly).runOnce(1)
+
+        then:
+        postedTransactions('child-one-budget-id').size() == 1
+        postedTransactions('child-two-budget-id').isEmpty()
+        cursorValue('transactions.last_server_knowledge') == 41
+
+        when:
+        syncer(false, forceLookbackBoth).runOnce(2)
+
+        then:
+        postedTransactions('child-one-budget-id').size() == 1
+        postedTransactions('child-two-budget-id').size() == 1
+        postedTransactions('child-two-budget-id').find {
+            it.memo == 'YBOD: Books' && it.amount == -800 && it.account_id == 'child-two-account-id'
+        }
+        tableCount('child_mirrors') == 2
+        cursorValue('transactions.last_server_knowledge') == 41
+        verify(0, getRequestedFor(urlPathEqualTo('/v1/plans/parent-budget-id/transactions'))
+            .withQueryParam('last_knowledge_of_server', matching('.*')))
+        verify(getRequestedFor(urlPathEqualTo('/v1/plans/parent-budget-id/transactions'))
+            .withQueryParam('since_date', matching('\\d{4}-\\d{2}-\\d{2}'))
+            .withQueryParam('last_knowledge_of_server', absent()))
+        verify(0, getRequestedFor(urlPathMatching('/v1/plans/parent-budget-id/transactions/.+')))
+    }
+
     def "three process-like cycles preserve partial success retry failure and apply only incremental work"() {
         given:
         stubCommonBudgetDiscovery()
@@ -1487,7 +1540,7 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
             ],
             300,
             new SyncLoggingConfig(tempDir.resolve('parent-child-sync.log').toString(), 'INFO', 7, 10),
-            new SyncStateConfig(dbPath, 45, 45)
+            new SyncStateConfig(dbPath, 45, 45, false)
         )
     }
 
@@ -1560,7 +1613,7 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
             ],
             300,
             new SyncLoggingConfig(tempDir.resolve('parent-child-sync.log').toString(), 'INFO', 7, 10),
-            new SyncStateConfig(dbPath, 45, 45)
+            new SyncStateConfig(dbPath, 45, 45, false)
         )
     }
 
@@ -1602,7 +1655,7 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
             ],
             300,
             new SyncLoggingConfig(tempDir.resolve('parent-child-sync.log').toString(), 'INFO', 7, 10),
-            new SyncStateConfig(tempDir.resolve('syncstate-wiremock.db').toString(), 45, 45)
+            new SyncStateConfig(tempDir.resolve('syncstate-wiremock.db').toString(), 45, 45, false)
         )
     }
 
@@ -1620,7 +1673,7 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
             ],
             300,
             new SyncLoggingConfig(tempDir.resolve('parent-child-sync.log').toString(), 'INFO', 7, 10),
-            new SyncStateConfig(tempDir.resolve('syncstate-wiremock.db').toString(), 45, 45)
+            new SyncStateConfig(tempDir.resolve('syncstate-wiremock.db').toString(), 45, 45, false)
         )
     }
 

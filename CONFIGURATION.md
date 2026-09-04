@@ -599,16 +599,19 @@ sync:
     sqlitePath: syncstate.db
     transactionLookbackDays: 45
     moneyMovementLookbackDays: 45
+    forceLookback: false
 ```
 
 Field guidance:
 - `sqlitePath` — default SQLite file location used unless overridden by `--sync-state-db-path`
 - `transactionLookbackDays` — how far back to re-read parent transactions safely
 - `moneyMovementLookbackDays` — how far back to re-read money movements before YNAB ages them out
+- `forceLookback` — optional boolean, default `false`. When `true`, parent transaction reads ignore the stored `transactions.last_server_knowledge` cursor and use `transactionLookbackDays` (`since_date`) as on bootstrap. Use this to onboard a newly mapped child or to reread recent history after a config or software fix. Set it back to `false` afterwards so incremental deltas resume. Live runs still advance the cursor after successful transaction work. Money movements already use a complete snapshot each cycle; this flag does not change that. Existing child mirrors are matched from durable sync state, so already-processed sources are verified or updated rather than duplicated. Force lookback re-verifies every mirrored source in the window (child GETs), which can consume rate-limit budget.
 
 Operational guidance:
 - keep this file on persistent storage if you want long-lived replay protection
 - treat deleting or relocating the file as an operational reset
+- set `forceLookback: true` only for a bounded reread (new child onboarding or recovery), then set it back to `false`
 - dry-run mode does not persist mutable sync state
 - dry-run creates no database at a missing path, reads a supported database without changing its bytes, and rejects unsupported state without mutation
 

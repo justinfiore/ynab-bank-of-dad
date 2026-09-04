@@ -200,7 +200,8 @@ class RuntimeConfig {
         new SyncStateConfig(
             sqlitePath: requireString(stateMap, 'sqlitePath', "${parentKey}.${childKey}"),
             transactionLookbackDays: requirePositiveInteger(stateMap, 'transactionLookbackDays', "${parentKey}.${childKey}"),
-            moneyMovementLookbackDays: requirePositiveInteger(stateMap, 'moneyMovementLookbackDays', "${parentKey}.${childKey}")
+            moneyMovementLookbackDays: requirePositiveInteger(stateMap, 'moneyMovementLookbackDays', "${parentKey}.${childKey}"),
+            forceLookback: optionalBoolean(stateMap, 'forceLookback', "${parentKey}.${childKey}", false)
         )
     }
 
@@ -467,4 +468,5 @@ class SyncStateConfig {
     String sqlitePath
     Integer transactionLookbackDays
     Integer moneyMovementLookbackDays
+    boolean forceLookback
 }

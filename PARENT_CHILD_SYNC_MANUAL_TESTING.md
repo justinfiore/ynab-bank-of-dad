@@ -93,6 +93,7 @@ sync:
     sqlitePath: syncstate.db
     transactionLookbackDays: 45
     moneyMovementLookbackDays: 45
+    forceLookback: false
 ```
 
 For every child, check:

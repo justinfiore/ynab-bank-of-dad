@@ -12,7 +12,7 @@ The parent budget is authoritative for whether a mirrored financial event exists
 | Syncer-enforced | A created or automatically updated child mirror is cleared and unapproved |
 | Child-owned after creation | Memo text; the configured prefix and suffix decorate the parent memo only when the mirror is created |
 
-Later reconciliation does not copy a parent memo edit over the child memo. Child edits to parent-authoritative fields are not synchronized back to the parent and can be corrected the next time that source is observed. Mapping configuration changes do not scan and rewrite history by themselves.
+Later reconciliation does not copy a parent memo edit over the child memo. Child edits to parent-authoritative fields are not synchronized back to the parent and can be corrected the next time that source is observed. Mapping configuration changes do not scan and rewrite history by themselves unless `sync.state.forceLookback` is `true`.
 
 ## How reconciliation works
 
@@ -117,8 +117,9 @@ Mapping configuration is prospective:
 
 - Editing configuration alone does not scan and reroute historical mirrors.
 - A later YNAB change to an existing source is reconciled using the mapping configuration active at that time.
+- Set `sync.state.forceLookback: true` for a live run when you need to reread the configured transaction lookback window even though a cursor already exists—for example, after enabling another child budget or after fixing mapping/software. Already-mirrored sources are matched from the sync-state database and are verified or updated, not duplicated. Set the flag back to `false` so later runs resume incremental `last_knowledge_of_server` deltas.
 
-This avoids a config typo immediately rewriting large amounts of history while still allowing later observed activity to use corrected mappings.
+This avoids a config typo immediately rewriting large amounts of history while still allowing later observed activity, or an explicit force-lookback run, to use corrected mappings.
 
 ## Money movements
 
@@ -174,7 +175,7 @@ Transaction deltas are grouped into durable ingestion batches. The transaction c
 
 An empty successful transaction delta can still advance server knowledge when no unfinished transaction batches remain. Money-movement operations use their own batch kind and do not block the transaction cursor.
 
-The configured transaction lookback is used for bootstrap. After a transaction cursor exists, delta requests omit the date filter so the syncer does not intentionally exclude older edits or deletion tombstones. Money movements are read as complete, unfiltered snapshots without an undocumented movement cursor; their ingestion and retries remain independent of the transaction cursor.
+The configured transaction lookback is used for bootstrap, and whenever `sync.state.forceLookback` is `true`. After a transaction cursor exists and force lookback is off, delta requests omit the date filter so the syncer does not intentionally exclude older edits or deletion tombstones. A successful force-lookback run still advances the cursor. Money movements are read as complete, unfiltered snapshots without an undocumented movement cursor; their ingestion and retries remain independent of the transaction cursor.
 
 ## Fresh SQLite state and schema versions
 

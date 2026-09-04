@@ -275,6 +275,6 @@ class ParentChildBudgetSyncerSpec extends Specification {
             ],
             300,
             new SyncLoggingConfig('logs/sync.log', 'INFO', 7, 10),
-            new SyncStateConfig(dbPath, 30, 30))
+            new SyncStateConfig(dbPath, 30, 30, false))
     }
 }
