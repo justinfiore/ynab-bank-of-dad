@@ -161,7 +161,13 @@ class ParentChildBudgetSyncer {
         String parentBudgetId = parentRepository.getLatestBudgetId(syncConfig.parentBudget.budgetName)
         Map<String, CategorySnapshot> parentCategoriesByName = parentRepository.getCategoryInfoByCategoryName(parentBudgetId)
         Map<String, CategorySnapshot> parentCategoriesById = parentCategoriesByName.values().collectEntries { [(it.id): it] }
-        Integer requestCursor = transactionCursor()
+        Integer storedCursor = transactionCursor()
+        Integer requestCursor = syncConfig.state.forceLookback ? null : storedCursor
+        if (syncConfig.state.forceLookback) {
+            log.info(
+                'Force lookback enabled; fetching parent transactions with since_date lookback of {} days instead of last_knowledge_of_server={}',
+                syncConfig.state.transactionLookbackDays, storedCursor)
+        }
         TransactionDelta transactionDelta = parentRepository.getTransactions(
             parentBudgetId,
             syncConfig.state.transactionLookbackDays,

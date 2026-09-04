@@ -113,6 +113,7 @@ sync:
         config.sync.parentBudget.budgetName == 'Parent Budget'
         config.sync.childBudgets*.childKey == ['child-one']
         config.sync.state.sqlitePath == 'syncstate.db'
+        config.sync.state.forceLookback == false
     }
 
     def "sync childBudgets parse memoPrefix and memoSuffix correctly including explicit empty string"() {
@@ -541,6 +542,36 @@ sync:
         then:
         def ex = thrown(IllegalArgumentException)
         ex.message.contains("sync.pollingIntervalSeconds")
+    }
+
+    def "sync state forceLookback defaults to false and parses explicit booleans"() {
+        given:
+        def raw = validConfigMap()
+        if (setKey) {
+            raw.sync.state.forceLookback = value
+        }
+
+        expect:
+        RuntimeConfig.fromMap(raw).sync.state.forceLookback == expected
+
+        where:
+        setKey | value | expected
+        false  | null  | false
+        true   | false | false
+        true   | true  | true
+    }
+
+    def "sync state forceLookback rejects non-boolean values"() {
+        given:
+        def raw = validConfigMap()
+        raw.sync.state.forceLookback = 'yes'
+
+        when:
+        RuntimeConfig.fromMap(raw)
+
+        then:
+        def ex = thrown(IllegalArgumentException)
+        ex.message.contains('sync.state.forceLookback')
     }
 
     def "validate throws when replay protection setting is non-positive"() {

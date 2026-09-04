@@ -96,7 +96,7 @@ class DryRunReconciliationIntegrationSpec extends Specification {
     private SyncConfig config(Path database) {
         new SyncConfig(new BudgetRef('Parent', 'PARENT'), [], 60,
             new SyncLoggingConfig(tempDir.resolve('sync.log').toString(), 'INFO', 1, 1),
-            new SyncStateConfig(database.toString(), 45, 45))
+            new SyncStateConfig(database.toString(), 45, 45, false))
     }
 
     private static PlannedReconciliationIntent intent(String key, PlannedAction action, SourceEntityKey source,

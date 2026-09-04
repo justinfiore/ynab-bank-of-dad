@@ -191,3 +191,9 @@ sync:
     transactionLookbackDays: 45
     # How many days of money movements to reread before YNAB ages them out.
     moneyMovementLookbackDays: 45
+    # When true, ignore the stored transaction cursor and reread parent
+    # transactions using transactionLookbackDays. Use while onboarding a
+    # newly mapped child or recovering after a config/software fix, then
+    # set back to false so incremental deltas resume. Existing child
+    # mirrors are matched from sync state and are not duplicated.
+    forceLookback: false
