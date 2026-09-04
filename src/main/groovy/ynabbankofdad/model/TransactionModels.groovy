@@ -37,6 +37,7 @@ class CategorySnapshot {
 class AccountSnapshot {
     String id
     String name
+    Integer balance = 0
 }
 
 @Immutable(knownImmutableClasses = [Date])

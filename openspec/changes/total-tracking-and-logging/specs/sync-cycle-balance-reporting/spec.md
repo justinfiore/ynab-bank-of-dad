@@ -9,7 +9,7 @@ At the end of each sync cycle the syncer SHALL keep logging per-child created, u
 
 #### Scenario: Create updates and deletes roll up per account
 - **WHEN** a cycle plans a CREATE of `-1200` milliunits, an UPDATE from `-500` to `-800` milliunits, and a DELETE of a `400` milliunit child transaction against the same child account
-- **THEN** the cycle summary SHALL log net change `-1600` milliunits for that child budget and account
+- **THEN** the cycle summary SHALL log net change `-1900` milliunits for that child budget and account
 - **AND** it SHALL still log created, updated, and deleted counts for that child
 
 #### Scenario: Cached accounts with no mutations log zero net change

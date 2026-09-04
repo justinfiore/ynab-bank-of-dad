@@ -710,6 +710,84 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         logger.detachAppender(appender)
     }
 
+    def "dry-run cycle summary projects child account balance plus accumulated change"() {
+        given:
+        stubCommonBudgetDiscovery()
+        stubParentCategoriesWithBalances(['Child One Spend Bank': 98800])
+        stubParentTransactions([
+            [id: 'txn-project', date: '2026-07-01', amount: -1200, memo: 'Shoes', approved: true,
+             category_id: 'cat-child-one-spend', category_name: 'Child One Spend Bank', subtransactions: []]
+        ], 501)
+        stubMoneyMovements([])
+        stubChildAccounts('child-one-budget-id', [[id: 'child-one-account-id', name: 'Child One Checking', balance: 100000]])
+        stubChildAccounts('child-two-budget-id', 'child-two-account-id', 'Child Two Checking')
+        Logger logger = (Logger) LoggerFactory.getLogger(ParentChildBudgetSyncer)
+        def appender = new ListAppender<ILoggingEvent>()
+        appender.start()
+        logger.addAppender(appender)
+        def reporterLogger = (Logger) LoggerFactory.getLogger(CycleBalanceReporter)
+        reporterLogger.addAppender(appender)
+        def syncer = syncer(true)
+
+        when:
+        syncer.runOnce(1)
+
+        then:
+        verify(0, postRequestedFor(urlPathMatching('/v1/plans/.*/transactions/bulk')))
+        verify(1, getRequestedFor(urlEqualTo('/v1/plans/child-one-budget-id/accounts')))
+        appender.list*.formattedMessage.any {
+            it == 'Cycle 1 child child-one account Child One Checking: netChange=-$1.20 current=$100.00 projected=$98.80 parent=$98.80 diff=$0.00'
+        }
+        !appender.list*.formattedMessage.any { it.contains('Parent Only') }
+
+        cleanup:
+        logger.detachAppender(appender)
+        reporterLogger.detachAppender(appender)
+    }
+
+    def "live cycle summary uses post-apply account balance and logs mismatch without failing"() {
+        given:
+        stubCommonBudgetDiscovery()
+        stubParentCategoriesWithBalances(['Child One Spend Bank': 48000])
+        stubParentTransactions([
+            [id: 'txn-live-balance', date: '2026-07-01', amount: -1200, memo: 'Shoes', approved: true,
+             category_id: 'cat-child-one-spend', category_name: 'Child One Spend Bank', subtransactions: []]
+        ], 502)
+        stubMoneyMovements([])
+        stubChildAccountsInOrder('child-one-budget-id', [
+            [id: 'child-one-account-id', name: 'Child One Checking', balance: 100000]
+        ], [
+            [id: 'child-one-account-id', name: 'Child One Checking', balance: 50000]
+        ])
+        stubChildAccounts('child-two-budget-id', 'child-two-account-id', 'Child Two Checking')
+        stubChildPost('child-one-budget-id', ['child-live-1'])
+        Logger logger = (Logger) LoggerFactory.getLogger(ParentChildBudgetSyncer)
+        def appender = new ListAppender<ILoggingEvent>()
+        appender.start()
+        logger.addAppender(appender)
+        def reporterLogger = (Logger) LoggerFactory.getLogger(CycleBalanceReporter)
+        reporterLogger.addAppender(appender)
+        def syncer = syncer(false)
+
+        when:
+        syncer.runOnce(1)
+
+        then:
+        verify(2, getRequestedFor(urlEqualTo('/v1/plans/child-one-budget-id/accounts')))
+        appender.list*.formattedMessage.any {
+            it == 'Cycle 1 child child-one account Child One Checking: netChange=-$1.20 actual=$50.00 parent=$48.00 diff=$2.00'
+        }
+        appender.list.any {
+            it.level == Level.WARN &&
+                it.formattedMessage == 'Cycle 1 balance mismatch child-one/Child One Checking: child=$50.00 parent=$48.00 diff=$2.00 (live actual)'
+        }
+        tableCount('sync_runs') == 1
+
+        cleanup:
+        logger.detachAppender(appender)
+        reporterLogger.detachAppender(appender)
+    }
+
     def "auto-create reuses an existing derived-name account without a second create POST"() {
         given:
         stubCommonBudgetDiscovery()
@@ -1583,27 +1661,31 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         ])
     }
 
-    private void stubParentCategories() {
+    private void stubParentCategories(Map<String, Integer> balances = [:]) {
+        stubParentCategoriesWithBalances(balances)
+    }
+
+    private void stubParentCategoriesWithBalances(Map<String, Integer> balances) {
+        List categories = [
+            [id: 'cat-child-one-spend', name: 'Child One Spend Bank'],
+            [id: 'cat-child-one-save', name: 'Child One Save Bank'],
+            [id: 'cat-child-one-bonus', name: 'Child One Bonus Bank'],
+            [id: 'cat-child-two-spend', name: 'Child Two Spend Bank'],
+            [id: 'cat-child-two-give', name: 'Child Two Give Bank'],
+            [id: 'cat-child-two-cd-0726', name: 'Child Two Gold CD 07/31/26'],
+            [id: 'cat-child-three-spend', name: 'Child Three Spend Bank'],
+            [id: 'cat-child-three-give', name: 'Child Three Give Bank'],
+            [id: 'cat-child-three-cd-0726', name: 'Child Three Gold CD 07/31/26'],
+            [id: 'cat-child-four-bonus', name: 'Child Four Bonus Bank'],
+            [id: 'cat-child-four-give', name: 'Child Four Give Bank'],
+            [id: 'cat-child-four-cd-0826', name: 'Child Four Gold CD 08/31/26'],
+            [id: 'cat-parent-only', name: 'Parent Only']
+        ].collect { Map row ->
+            row + [balance: balances.getOrDefault(row.name as String, 0)]
+        }
         stubFor(get(urlEqualTo('/v1/plans/parent-budget-id/categories'))
             .willReturn(jsonResponse([
-                data: [category_groups: [[
-                    name: 'Kids',
-                    categories: [
-                        [id: 'cat-child-one-spend', name: 'Child One Spend Bank', balance: 0],
-                        [id: 'cat-child-one-save', name: 'Child One Save Bank', balance: 0],
-                        [id: 'cat-child-one-bonus', name: 'Child One Bonus Bank', balance: 0],
-                        [id: 'cat-child-two-spend', name: 'Child Two Spend Bank', balance: 0],
-                        [id: 'cat-child-two-give', name: 'Child Two Give Bank', balance: 0],
-                        [id: 'cat-child-two-cd-0726', name: 'Child Two Gold CD 07/31/26', balance: 0],
-                        [id: 'cat-child-three-spend', name: 'Child Three Spend Bank', balance: 0],
-                        [id: 'cat-child-three-give', name: 'Child Three Give Bank', balance: 0],
-                        [id: 'cat-child-three-cd-0726', name: 'Child Three Gold CD 07/31/26', balance: 0],
-                        [id: 'cat-child-four-bonus', name: 'Child Four Bonus Bank', balance: 0],
-                        [id: 'cat-child-four-give', name: 'Child Four Give Bank', balance: 0],
-                        [id: 'cat-child-four-cd-0826', name: 'Child Four Gold CD 08/31/26', balance: 0],
-                        [id: 'cat-parent-only', name: 'Parent Only', balance: 0]
-                    ]
-                ]]]
+                data: [category_groups: [[name: 'Kids', categories: categories]]]
             ])))
     }
 
@@ -1663,6 +1745,16 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
     private void stubChildAccounts(String budgetId, List<Map> accounts) {
         stubFor(get(urlEqualTo("/v1/plans/${budgetId}/accounts"))
             .willReturn(jsonResponse([data: [accounts: accounts]])))
+    }
+
+    private void stubChildAccountsInOrder(String budgetId, List<Map> first, List<Map> second) {
+        String path = "/v1/plans/${budgetId}/accounts"
+        String scenario = "child-accounts-${budgetId}"
+        stubFor(get(urlEqualTo(path)).inScenario(scenario).whenScenarioStateIs('Started')
+            .willReturn(jsonResponse([data: [accounts: first]]))
+            .willSetStateTo('after-apply'))
+        stubFor(get(urlEqualTo(path)).inScenario(scenario).whenScenarioStateIs('after-apply')
+            .willReturn(jsonResponse([data: [accounts: second]])))
     }
 
     private void stubChildPost(String budgetId, List<String> transactionIds) {
@@ -1781,11 +1873,17 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         String path = "/v1/plans/${budgetId}/accounts"
         stubFor(get(urlEqualTo(path)).inScenario(scenario).whenScenarioStateIs('Started')
             .willReturn(jsonResponse([data: [accounts: firstAccounts]]))
+            .willSetStateTo('cycle1-refresh'))
+        stubFor(get(urlEqualTo(path)).inScenario(scenario).whenScenarioStateIs('cycle1-refresh')
+            .willReturn(jsonResponse([data: [accounts: firstAccounts]]))
             .willSetStateTo('routing-fails'))
         stubFor(get(urlEqualTo(path)).inScenario(scenario).whenScenarioStateIs('routing-fails')
             .willReturn(errorResponse(401, 'unauthorized child token'))
             .willSetStateTo('routing-restored'))
         stubFor(get(urlEqualTo(path)).inScenario(scenario).whenScenarioStateIs('routing-restored')
+            .willReturn(jsonResponse([data: [accounts: restoredAccounts]]))
+            .willSetStateTo('cycle3-refresh'))
+        stubFor(get(urlEqualTo(path)).inScenario(scenario).whenScenarioStateIs('cycle3-refresh')
             .willReturn(jsonResponse([data: [accounts: restoredAccounts]])))
     }
 

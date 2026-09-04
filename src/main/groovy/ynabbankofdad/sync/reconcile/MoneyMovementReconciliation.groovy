@@ -44,11 +44,14 @@ class MoneyMovementNormalizer {
 class MoneyMovementReconciler {
     private final List<ChildSyncContext> childContexts
     private final Map<String, CategorySnapshot> categoriesById
+    private final ParentCategoryAccountCache mappingCache
 
     MoneyMovementReconciler(List<ChildSyncContext> childContexts,
-                            Map<String, CategorySnapshot> categoriesById = [:]) {
+                            Map<String, CategorySnapshot> categoriesById = [:],
+                            ParentCategoryAccountCache mappingCache = null) {
         this.childContexts = childContexts ?: []
         this.categoriesById = categoriesById ?: [:]
+        this.mappingCache = mappingCache
     }
 
     List<MovementDecision> reconcile(MovementSnapshotObservation snapshot,
@@ -75,7 +78,7 @@ class MoneyMovementReconciler {
     }
 
     private List<DesiredMirror> desired(NormalizedMovementObservation movement) {
-        DesiredMirrorFactory factory = new DesiredMirrorFactory(childContexts, categoriesById)
+        DesiredMirrorFactory factory = new DesiredMirrorFactory(childContexts, categoriesById, mappingCache)
         String fromName = movement.fromCategoryName ?: categoriesById[movement.fromCategoryId]?.name
         String toName = movement.toCategoryName ?: categoriesById[movement.toCategoryId]?.name
         String memo = "From ${fromName ?: 'Unknown'} to ${toName ?: 'Unknown'}"

@@ -8,6 +8,7 @@ import ynabbankofdad.sync.model.ChildSyncContext
 import ynabbankofdad.sync.model.ParentSubtransactionEvent
 import ynabbankofdad.sync.model.ParentTransactionEvent
 import ynabbankofdad.sync.reconcile.DesiredMirrorFactory
+import ynabbankofdad.sync.reconcile.ParentCategoryAccountCache
 import ynabbankofdad.sync.reconcile.ParentReconciliationResult
 import ynabbankofdad.sync.reconcile.SourceRevisionNormalizer
 import ynabbankofdad.sync.state.SourceEntityKey
@@ -83,6 +84,33 @@ class ParentChildBudgetSyncerSpec extends Specification {
         then:
         mirrors*.mappingKey == ['literal']
         mirrors*.targetAccountId == ['literal-account']
+    }
+
+    def "desired mirror factory records the resolved account in the propagation cache"() {
+        given:
+        def target = new ChildBudgetSyncTarget(
+            childKey: 'child-one', budgetName: 'Child One Budget', tokenEnvVarName: 'CHILD_ONE_TOKEN',
+            accountMappings: [
+                new ChildAccountMapping('spend',
+                    [new ParentCategoryNameMatcher('Child One Spend Bank', false)], 'Configured Checking')
+            ],
+            autoCreateAccounts: true,
+            accountCreationNameStripRegex: ' Bank$')
+        def context = new ChildSyncContext(target, null, 'child-budget')
+        context.cacheAccountId('Child One Spend', 'derived-id')
+        def cache = new ParentCategoryAccountCache()
+
+        when:
+        def mirrors = new DesiredMirrorFactory([context], [:], cache).forSource(
+            new SourceEntityKey('parent', SourceEntityType.TRANSACTION, 'txn', null, null),
+            'cat-spend', 'Child One Spend Bank', '2026-07-01', -1200,
+            null, 'Payee', 'Memo', 'outflow')
+
+        then:
+        mirrors*.targetAccountName == ['Child One Spend']
+        cache.mappings()*.accountName == ['Child One Spend']
+        cache.mappings()*.parentCategoryName == ['Child One Spend Bank']
+        cache.mappings()*.accountId == ['derived-id']
     }
 
     def "fromConfig validates required token environment and honors state override"() {

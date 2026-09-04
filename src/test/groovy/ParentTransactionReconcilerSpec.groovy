@@ -12,6 +12,36 @@ import ynabbankofdad.sync.state.ChildMirrorState
 class ParentTransactionReconcilerSpec extends Specification {
     def normalizer = new SourceRevisionNormalizer()
 
+    def "create stamps targetAccountId without priorAmount"() {
+        when:
+        def result = reconciler(context('child', 'budget-1', 'acct-1', 'Spend')).reconcile(revision())
+
+        then:
+        result.intents*.action == [PlannedAction.CREATE]
+        result.intents.first().targetAccountId == 'acct-1'
+        result.intents.first().priorAmount == null
+    }
+
+    def "update and delete stamp targetAccountId and observed priorAmount"() {
+        given:
+        def reconciler = reconciler(context('child', 'budget-1', 'acct-1', 'Spend'))
+        def wanted = reconciler.reconcile(revision(amount: -100)).desiredMirrors.first()
+        def child = new ChildTransaction('child-txn', 'acct-1', '2026-07-01', -100,
+            'payee', 'Payee', null, 'memo', 'cleared', false, null, false)
+
+        when:
+        def updated = reconciler.reconcile(revision(amount: -250), [mirror(wanted, child)])
+        def deleted = reconciler.reconcile(revision(approved: false), [mirror(wanted, child)])
+
+        then:
+        updated.intents.first().action == PlannedAction.UPDATE
+        updated.intents.first().targetAccountId == 'acct-1'
+        updated.intents.first().priorAmount == -100
+        deleted.intents.first().action == PlannedAction.DELETE
+        deleted.intents.first().targetAccountId == 'acct-1'
+        deleted.intents.first().priorAmount == -100
+    }
+
     def "authoritative changes plan one update with recreation payload"() {
         given:
         def reconciler = reconciler(context('child', 'budget-1', 'acct-1', 'Spend'))

@@ -98,6 +98,8 @@ class PlannedReconciliationIntent {
     String payloadHash
     List<String> dependsOnOperationKeys
     boolean requiresExistenceCheck
+    String targetAccountId
+    Integer priorAmount
 }
 
 @Immutable
