@@ -90,16 +90,26 @@ class YnabBudgetRepository {
     }
 
     Map<String, String> accountIdByName(String budgetId) {
+        accountsByName(budgetId).collectEntries { String name, AccountSnapshot snapshot ->
+            [(name): snapshot.id]
+        }
+    }
+
+    Map<String, AccountSnapshot> accountsByName(String budgetId) {
         def response = ynabClient.getJson("/v1/plans/${budgetId}/accounts")
         List accounts = (response?.data?.accounts ?: []) as List
         log.debug("Fetched {} accounts from YNAB for budget '{}'", accounts.size(), budgetId)
-        Map<String, String> idsByName = [:]
+        Map<String, AccountSnapshot> snapshotsByName = [:]
         accounts.each { account ->
-            if (account?.name && account.deleted != true && !idsByName.containsKey(account.name as String)) {
-                idsByName[account.name as String] = account.id as String
+            if (account?.name && account.deleted != true && !snapshotsByName.containsKey(account.name as String)) {
+                snapshotsByName[account.name as String] = new AccountSnapshot(
+                    account.id as String,
+                    account.name as String,
+                    (account.balance ?: 0) as Integer
+                )
             }
         }
-        idsByName
+        snapshotsByName
     }
 
     Map createAccount(String budgetId, String name, String type) {

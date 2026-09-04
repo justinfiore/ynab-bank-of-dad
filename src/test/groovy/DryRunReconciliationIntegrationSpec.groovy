@@ -104,7 +104,7 @@ class DryRunReconciliationIntegrationSpec extends Specification {
                                                        List<String> dependencies = [], boolean verify = false) {
         new PlannedReconciliationIntent(key, 1, action, source, 'child', budget, 'outflow', 1L,
             childId, '{"account_id":"account","date":"2026-07-18","amount":-100}',
-            'hash', dependencies, verify)
+            'hash', dependencies, verify, 'account', action == PlannedAction.CREATE ? null : -100)
     }
 
     private static ChildTransaction child(String id) {

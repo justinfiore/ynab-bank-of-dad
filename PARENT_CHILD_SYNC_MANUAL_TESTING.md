@@ -166,6 +166,8 @@ Expected common dry-run behavior:
 - The process exits after one cycle.
 - Logs show `Starting parent-child budget syncer`.
 - Logs show `Cycle 1 read ... parent transactions and ... money movements`.
+- Logs show per-child `created=` / `updated=` / `deleted=` counts, then per cached account `netChange=`, `current=`, `projected=`, `parent=`, and `diff=`.
+- A `balance mismatch` line is informational; it is not a dry-run or live failure.
 - For qualifying work, logs include `[DRY RUN] <action> child transaction for <childKey> ... payload=...`.
 - No new transaction appears in any child budget.
 - Mutable replay-protection rows should not be persisted for the planned work.

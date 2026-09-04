@@ -719,6 +719,14 @@ When an operation resolves, INFO logging records:
 - direction/account where applicable;
 - formatted outgoing payload.
 
+Cycle completion also logs per-child created/updated/deleted counts, then per cached child account:
+
+- `netChange` of that cycle's CREATE/UPDATE/DELETE milliunits
+- dry-run `current` + `projected` (`current + netChange`) versus parent category `balance` (summed when several parent categories mapped to the same account)
+- live `actual` account `balance` from a post-apply `GET /v1/plans/{plan}/accounts` versus the same parent side
+
+A nonzero `diff` is WARN (`balance mismatch`) and never a run failure. Reverse mapping comes from the cycle's parent-category → child-account cache written when desired mirrors are resolved, not from a second `accountMappings` pass.
+
 Failures remain ERROR and unconfirmed movements remain WARN. Tokens are never logged. Payees, memos, IDs, and financial data are logged and persisted intentionally for audit, so retention and backup access should be controlled.
 
 ### YNAB API Contracts Used

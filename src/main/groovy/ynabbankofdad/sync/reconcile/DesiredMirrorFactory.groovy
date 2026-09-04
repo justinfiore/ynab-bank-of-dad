@@ -10,10 +10,13 @@ class DesiredMirrorFactory {
     static final String LOGICAL_DIRECTION_FIELD = '_reconciliation_direction'
     private final List<ChildSyncContext> childContexts
     private final Map<String, CategorySnapshot> categoriesById
+    private final ParentCategoryAccountCache mappingCache
 
-    DesiredMirrorFactory(List<ChildSyncContext> childContexts, Map<String, CategorySnapshot> categoriesById = [:]) {
+    DesiredMirrorFactory(List<ChildSyncContext> childContexts, Map<String, CategorySnapshot> categoriesById = [:],
+                         ParentCategoryAccountCache mappingCache = null) {
         this.childContexts = childContexts ?: []
         this.categoriesById = categoriesById ?: [:]
+        this.mappingCache = mappingCache
     }
 
     List<DesiredMirror> forSource(SourceEntityKey source, String categoryId, String categoryName,
@@ -33,6 +36,7 @@ class DesiredMirrorFactory {
                 mapping.childAccountName : derivedName
             String accountId = child.resolveAccountId(mapping.childAccountName) ?:
                 (derivedName ? child.resolveAccountId(derivedName) : null)
+            mappingCache?.record(categoryId, resolvedName, child.target.childKey, accountId, accountName)
             if (!child.budgetId || !accountId) {
                 if (child.target.autoCreateAccounts) {
                     return null

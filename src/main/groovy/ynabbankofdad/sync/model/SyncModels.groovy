@@ -2,6 +2,7 @@ package ynabbankofdad.sync.model
 
 import groovy.transform.Immutable
 import ynabbankofdad.config.ChildBudgetSyncTarget
+import ynabbankofdad.model.AccountSnapshot
 import ynabbankofdad.ynab.YnabBudgetRepository
 
 class ChildSyncContext {
@@ -9,6 +10,7 @@ class ChildSyncContext {
     final YnabBudgetRepository repository
     String budgetId
     Map<String, String> accountIdsByName = [:]
+    Map<String, AccountSnapshot> accountSnapshotsByName = [:]
 
     ChildSyncContext(ChildBudgetSyncTarget target, YnabBudgetRepository repository, String budgetId = null, String accountId = null) {
         this.target = target
@@ -27,6 +29,21 @@ class ChildSyncContext {
 
     void cacheAccountId(String accountName, String accountId) {
         accountIdsByName[accountName] = accountId
+        AccountSnapshot existing = accountSnapshotsByName[accountName]
+        if (existing == null || existing.id != accountId) {
+            accountSnapshotsByName[accountName] = new AccountSnapshot(
+                accountId, accountName, existing?.balance ?: 0)
+        }
+    }
+
+    void cacheAccountSnapshot(AccountSnapshot snapshot) {
+        if (!snapshot?.name) {
+            return
+        }
+        accountSnapshotsByName[snapshot.name] = snapshot
+        if (snapshot.id) {
+            accountIdsByName[snapshot.name] = snapshot.id
+        }
     }
 }
 

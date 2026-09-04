@@ -8,11 +8,14 @@ import ynabbankofdad.sync.state.SourceEntityKey
 class ParentTransactionReconciler {
     private final List<ChildSyncContext> childContexts
     private final Map<String, CategorySnapshot> categoriesById
+    private final ParentCategoryAccountCache mappingCache
 
     ParentTransactionReconciler(List<ChildSyncContext> childContexts,
-                                Map<String, CategorySnapshot> categoriesById = [:]) {
+                                Map<String, CategorySnapshot> categoriesById = [:],
+                                ParentCategoryAccountCache mappingCache = null) {
         this.childContexts = childContexts ?: []
         this.categoriesById = categoriesById ?: [:]
+        this.mappingCache = mappingCache
     }
 
     ParentReconciliationResult reconcile(ParentSourceRevision revision,
@@ -40,7 +43,7 @@ class ParentTransactionReconciler {
         if (revision.deleted || revision.approved != true) {
             return []
         }
-        DesiredMirrorFactory factory = new DesiredMirrorFactory(childContexts, categoriesById)
+        DesiredMirrorFactory factory = new DesiredMirrorFactory(childContexts, categoriesById, mappingCache)
         revision.components.findAll { !it.deleted }.collectMany { component ->
             factory.forSource(component.source, component.categoryId, component.categoryName,
                 revision.date, component.amount, component.payeeId, component.payeeName,
@@ -92,7 +95,8 @@ class ParentTransactionReconciler {
             new PlannedReconciliationIntent(intent.operationKey, index + 1, intent.action, intent.source,
                 intent.targetChildKey, intent.targetBudgetId, intent.direction, intent.childMirrorId,
                 intent.childTransactionId, intent.payloadJson, intent.payloadHash,
-                intent.dependsOnOperationKeys, intent.requiresExistenceCheck)
+                intent.dependsOnOperationKeys, intent.requiresExistenceCheck,
+                intent.targetAccountId, intent.priorAmount)
         }
     }
 
@@ -103,7 +107,8 @@ class ParentTransactionReconciler {
         PlannedAction action = changed ? PlannedAction.UPDATE : PlannedAction.NO_OP
         intent(action, wanted.source, wanted.targetChildKey, wanted.targetBudgetId, wanted.direction,
             current.mirror.id, current.mirror.childTransactionId,
-            mutationPayload(wanted), wanted.authoritativePayloadHash, [], true)
+            mutationPayload(wanted), wanted.authoritativePayloadHash, [], true,
+            wanted.targetAccountId, current.observedChild?.amount)
     }
 
     private static boolean childDiffers(ChildTransaction child, DesiredMirror wanted) {
@@ -118,13 +123,15 @@ class ParentTransactionReconciler {
     private static PlannedReconciliationIntent deleteIntent(ActiveMirrorReference current) {
         intent(PlannedAction.DELETE, current.source, current.targetChildKey,
             current.mirror.targetBudgetId, current.direction, current.mirror.id,
-            current.mirror.childTransactionId, null, null, [], false)
+            current.mirror.childTransactionId, null, null, [], false,
+            current.mirror.targetAccountId, current.observedChild?.amount)
     }
 
     private static PlannedReconciliationIntent createIntent(DesiredMirror wanted, List<String> dependencies) {
         String json = mutationPayload(wanted)
         intent(PlannedAction.CREATE, wanted.source, wanted.targetChildKey, wanted.targetBudgetId,
-            wanted.direction, null, null, json, wanted.authoritativePayloadHash, dependencies, false)
+            wanted.direction, null, null, json, wanted.authoritativePayloadHash, dependencies, false,
+            wanted.targetAccountId, null)
     }
 
     private static String mutationPayload(DesiredMirror wanted) {
@@ -140,14 +147,16 @@ class ParentTransactionReconciler {
                                                        String targetChildKey, String targetBudgetId,
                                                        String direction, Long mirrorId, String childId,
                                                        String payloadJson, String payloadHash,
-                                                       List<String> dependencies, boolean verify) {
+                                                       List<String> dependencies, boolean verify,
+                                                       String targetAccountId, Integer priorAmount) {
         String key = ReconciliationCanonicalizer.stableKey([
             action.name(), source.sourceBudgetId, source.type.databaseValue,
             source.parentTransactionId, source.parentSubtransactionId, source.moneyMovementId,
             targetBudgetId, direction, childId, payloadHash
         ])
         new PlannedReconciliationIntent(key, 0, action, source, targetChildKey, targetBudgetId,
-            direction, mirrorId, childId, payloadJson, payloadHash, dependencies, verify)
+            direction, mirrorId, childId, payloadJson, payloadHash, dependencies, verify,
+            targetAccountId, priorAmount)
     }
 
     private static boolean exactMirror(ActiveMirrorReference current, DesiredMirror wanted) {

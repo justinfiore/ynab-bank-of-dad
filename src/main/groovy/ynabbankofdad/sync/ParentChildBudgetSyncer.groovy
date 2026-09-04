@@ -3,6 +3,7 @@ package ynabbankofdad.sync
 import groovy.json.JsonOutput
 import groovy.util.logging.Slf4j
 import ynabbankofdad.config.*
+import ynabbankofdad.model.AccountSnapshot
 import ynabbankofdad.model.CategorySnapshot
 import ynabbankofdad.sync.model.*
 import ynabbankofdad.sync.reconcile.*
@@ -192,22 +193,23 @@ class ParentChildBudgetSyncer {
         RoutingResolution transactionRouting = resolveChildRouting(transactionCategoryNames)
         RoutingResolution movementRouting = resolveChildRouting(movementCategoryNames)
 
+        ParentCategoryAccountCache mappingCache = new ParentCategoryAccountCache()
         long runId = dryRun ? -1L : stateStore.startRun(syncConfig.pollingIntervalSeconds, parentBudgetId)
         try {
             log.info('Cycle {} read {} parent transactions and {} money movements', cycleNumber,
                 completeTransactionDelta.transactions.size(), movementSnapshot?.movements?.size() ?: 0)
             List<ParentReconciliationResult> transactionResults = planTransactions(
                 parentBudgetId, parentCategoriesById, completeTransactionDelta, transactionRouting.contexts,
-                transactionRouting.failedContexts)
+                transactionRouting.failedContexts, mappingCache)
             MovementPlanning movementPlanning = movementSnapshot == null ? null :
                 planMovements(parentBudgetId, parentCategoriesById, movementSnapshot, movementRouting.contexts,
-                    movementRouting.failedContexts)
+                    movementRouting.failedContexts, mappingCache)
 
             if (dryRun) {
                 reportDryRun(transactionResults, movementPlanning)
                 logCycleCompletion(cycleNumber, completeTransactionDelta, movementSnapshot,
                     transactionResults, movementPlanning, transactionRouting, movementRouting, [],
-                    parentCategoriesById)
+                    parentCategoriesById, mappingCache)
                 coordinator.finishRun(runId, SyncRunResult.empty(), transactionDelta.serverKnowledge, false)
                 return
             }
@@ -236,9 +238,13 @@ class ParentChildBudgetSyncer {
             failures.addAll(movementRouting.failures)
             SyncRunResult result = new SyncRunResult(failures)
             coordinator.finishRun(runId, result, transactionDelta.serverKnowledge, transactionComplete)
+            List<ChildSyncContext> resolvedChildren = []
+            resolvedChildren.addAll(transactionRouting.contexts)
+            resolvedChildren.addAll(movementRouting.contexts)
+            refreshChildAccountSnapshots(resolvedChildren)
             logCycleCompletion(cycleNumber, completeTransactionDelta, movementSnapshot,
                 transactionResults, movementPlanning, transactionRouting, movementRouting, failures,
-                parentCategoriesById)
+                parentCategoriesById, mappingCache)
         } catch (Exception ex) {
             coordinator.failRun(runId, ex)
             throw ex
@@ -266,7 +272,11 @@ class ParentChildBudgetSyncer {
                 if (!child.budgetId) {
                     child.budgetId = child.repository.getLatestBudgetId(child.target.budgetName)
                 }
-                Map<String, String> existingIds = child.repository.accountIdByName(child.budgetId)
+                Map<String, AccountSnapshot> snapshots = child.repository.accountsByName(child.budgetId)
+                snapshots.each { String name, AccountSnapshot snapshot -> child.cacheAccountSnapshot(snapshot) }
+                Map<String, String> existingIds = snapshots.collectEntries { String name, AccountSnapshot snapshot ->
+                    [(name): snapshot.id]
+                }
                 neededMappings.each { mapping ->
                     resolveOrCreateChildAccount(child, mapping, categoryNames, existingIds)
                 }
@@ -337,10 +347,11 @@ class ParentChildBudgetSyncer {
         Map<String, CategorySnapshot> categoriesById,
         TransactionDelta delta,
         List<ChildSyncContext> planningContexts,
-        List<ChildSyncContext> failedContexts = []
+        List<ChildSyncContext> failedContexts = [],
+        ParentCategoryAccountCache mappingCache = null
     ) {
         def normalizer = new SourceRevisionNormalizer()
-        def reconciler = new ParentTransactionReconciler(planningContexts, categoriesById)
+        def reconciler = new ParentTransactionReconciler(planningContexts, categoriesById, mappingCache)
         delta.transactions.toList().sort { it.id }.collect { ParentTransactionEvent event ->
             List<ActiveMirrorReference> mirrors = activeMirrorsForParent(parentBudgetId, event.id)
             ParentSourceRevision revision = normalizer.normalize(
@@ -385,7 +396,8 @@ class ParentChildBudgetSyncer {
         Map<String, CategorySnapshot> categoriesById,
         MoneyMovementSnapshot snapshot,
         List<ChildSyncContext> planningContexts,
-        List<ChildSyncContext> failedContexts = []
+        List<ChildSyncContext> failedContexts = [],
+        ParentCategoryAccountCache mappingCache = null
     ) {
         List<SourceEntityKey> prior = reconciliationState.findSourceEntities(
             parentBudgetId, SourceEntityType.MONEY_MOVEMENT)
@@ -395,7 +407,7 @@ class ParentChildBudgetSyncer {
             activeMirrorsForSource(source)
         }
         LocalDate cutoff = LocalDate.now(clock).minusDays(syncConfig.state.moneyMovementLookbackDays as long)
-        List<MovementDecision> decisions = new MoneyMovementReconciler(planningContexts, categoriesById)
+        List<MovementDecision> decisions = new MoneyMovementReconciler(planningContexts, categoriesById, mappingCache)
             .reconcile(observation, mirrors, cutoff).collect { MovementDecision decision ->
                 NormalizedMovementObservation current = observation.observations.find { it.source == decision.source }
                 boolean blocked = current && routingBlocked(
@@ -635,6 +647,19 @@ class ParentChildBudgetSyncer {
         }
     }
 
+    private void refreshChildAccountSnapshots(List<ChildSyncContext> children) {
+        children.findAll { it?.budgetId }.unique { it.target.childKey }.each { ChildSyncContext child ->
+            try {
+                child.repository.accountsByName(child.budgetId).each { String name, AccountSnapshot snapshot ->
+                    child.cacheAccountSnapshot(snapshot)
+                }
+            } catch (Exception ex) {
+                log.warn('Could not refresh accounts for child {} for balance reporting: {}',
+                    child.target.childKey, ex.message)
+            }
+        }
+    }
+
     private void logCycleCompletion(int cycleNumber, TransactionDelta transactionDelta,
                                     MoneyMovementSnapshot movementSnapshot,
                                     List<ParentReconciliationResult> transactionResults,
@@ -642,7 +667,8 @@ class ParentChildBudgetSyncer {
                                     RoutingResolution transactionRouting,
                                     RoutingResolution movementRouting,
                                     List<String> failures,
-                                    Map<String, CategorySnapshot> parentCategoriesById) {
+                                    Map<String, CategorySnapshot> parentCategoriesById,
+                                    ParentCategoryAccountCache mappingCache) {
         List<PlannedReconciliationIntent> intents = (transactionResults ?: []).collectMany { it.intents }
         if (movementPlanning) {
             intents.addAll(movementPlanning.decisions.collectMany { it.intents })
@@ -669,6 +695,14 @@ class ParentChildBudgetSyncer {
                 childIntents.count { it.action == PlannedAction.UPDATE },
                 childIntents.count { it.action == PlannedAction.DELETE })
         }
+        Map<String, CategorySnapshot> parentByName = (parentCategoriesById ?: [:]).values()
+            .collectEntries { CategorySnapshot snapshot -> [(snapshot.name): snapshot] }
+        Map<String, Map<String, AccountSnapshot>> childAccounts = [:]
+        childContexts.each { ChildSyncContext child ->
+            childAccounts[child.target.childKey] = new LinkedHashMap<>(child.accountSnapshotsByName ?: [:])
+        }
+        new CycleBalanceReporter().report(cycleNumber, dryRun, mappingCache ?: new ParentCategoryAccountCache(),
+            parentByName, intents, childAccounts)
         List<String> unreplicated = unreplicatedReasons(transactionDelta, movementSnapshot, transactionRouting,
             movementRouting, movementPlanning, failures, parentCategoriesById)
         if (unreplicated) {

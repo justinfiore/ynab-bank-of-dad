@@ -562,6 +562,36 @@ class YnabBudgetRepositorySpec extends Specification {
         YnabBudgetRepository.saveAccountTypeForOnBudget(false) == 'otherAsset'
     }
 
+    def "accountsByName preserves balances and defaults missing balances to zero"() {
+        given:
+        stubFor(get(urlEqualTo('/v1/plans/budget-new/accounts'))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader('Content-Type', 'application/json')
+                .withBody('''
+{
+  "data": {
+    "accounts": [
+      {"id": "acct-spend", "name": "Spend", "balance": 12500, "deleted": false},
+      {"id": "acct-save", "name": "Save", "deleted": false},
+      {"id": "acct-gone", "name": "Gone", "balance": 9, "deleted": true},
+      {"id": "acct-dup", "name": "Spend", "balance": 1, "deleted": false}
+    ]
+  }
+}
+''')))
+
+        when:
+        def accounts = buildRepository().accountsByName('budget-new')
+        def ids = buildRepository().accountIdByName('budget-new')
+
+        then:
+        accounts['Spend'] == new AccountSnapshot('acct-spend', 'Spend', 12500)
+        accounts['Save'] == new AccountSnapshot('acct-save', 'Save', 0)
+        !accounts.containsKey('Gone')
+        ids == [Spend: 'acct-spend', Save: 'acct-save']
+    }
+
     def "createAccount throws when the response is missing account.id"() {
         given:
         stubFor(post(urlEqualTo('/v1/plans/budget-new/accounts'))
