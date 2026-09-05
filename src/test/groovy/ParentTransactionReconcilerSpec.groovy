@@ -22,6 +22,23 @@ class ParentTransactionReconcilerSpec extends Specification {
         result.intents.first().priorAmount == null
     }
 
+    def "create persists target import id namespace as internal payload metadata"() {
+        given:
+        def mapping = new ChildAccountMapping('mapping',
+            [new ParentCategoryNameMatcher('Spend', false)], 'Checking')
+        def target = new ChildBudgetSyncTarget(childKey: 'child', budgetName: 'child', tokenEnvVarName: 'TOKEN',
+            accountMappings: [mapping], importIdNamespace: 'reseed-v2')
+        def child = new ChildSyncContext(target, null, 'budget-1', null)
+        child.cacheAccountId('Checking', 'acct-1')
+
+        when:
+        def result = reconciler(child).reconcile(revision())
+
+        then:
+        result.intents.first().payloadJson.contains('"_import_id_namespace":"reseed-v2"')
+        !result.desiredMirrors.first().authoritativePayloadJson.contains('_import_id_namespace')
+    }
+
     def "update and delete stamp targetAccountId and observed priorAmount"() {
         given:
         def reconciler = reconciler(context('child', 'budget-1', 'acct-1', 'Spend'))

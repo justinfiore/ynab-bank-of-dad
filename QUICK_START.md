@@ -60,6 +60,7 @@ cp config.yaml.example config.yaml
    - each `sync.childBudgets[*].budgetName`
    - each `sync.childBudgets[*].tokenEnvVarName`
    - optional `sync.childBudgets[*].memoPrefix` / `memoSuffix` (defaults: `"YBOD: "` / `""`; empty strings are allowed)
+   - optional `sync.childBudgets[*].importIdNamespace` recovery value; leave unset unless rotating import IDs after deleted transactions remain reserved in YNAB
    - each `sync.childBudgets[*].accountMappings[*].mappingKey`
    - each `sync.childBudgets[*].accountMappings[*].parentCategoryNames[*].name` (literal by default; add `regex: true` only for regex patterns)
    - each `sync.childBudgets[*].accountMappings[*].childAccountName`

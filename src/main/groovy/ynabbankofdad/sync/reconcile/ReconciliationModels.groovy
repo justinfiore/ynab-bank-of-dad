@@ -72,6 +72,7 @@ class DesiredMirror {
     String mappingKey
     String authoritativePayloadJson
     String authoritativePayloadHash
+    String importIdNamespace
 }
 
 @Immutable

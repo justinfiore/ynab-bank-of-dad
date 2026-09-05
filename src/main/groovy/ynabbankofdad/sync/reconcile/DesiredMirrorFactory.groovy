@@ -8,6 +8,7 @@ import ynabbankofdad.sync.state.SourceEntityKey
 
 class DesiredMirrorFactory {
     static final String LOGICAL_DIRECTION_FIELD = '_reconciliation_direction'
+    static final String IMPORT_ID_NAMESPACE_FIELD = '_import_id_namespace'
     private final List<ChildSyncContext> childContexts
     private final Map<String, CategorySnapshot> categoriesById
     private final ParentCategoryAccountCache mappingCache
@@ -54,7 +55,7 @@ class DesiredMirrorFactory {
                 (child.target.memoSuffix ?: '')).trim()
             new DesiredMirror(source, child.target.childKey, child.budgetId, direction, accountId,
                 accountName, date, amount, null, payeeName, decoratedMemo, mapping.mappingKey,
-                payloadJson, ReconciliationCanonicalizer.hashJson(payloadJson))
+                payloadJson, ReconciliationCanonicalizer.hashJson(payloadJson), child.target.importIdNamespace)
         }.sort { DesiredMirror left, DesiredMirror right ->
             mirrorSortKey(left) <=> mirrorSortKey(right)
         }

@@ -140,6 +140,9 @@ class ParentTransactionReconciler {
         payload.memo = wanted.memo
         payload[DesiredMirrorFactory.LOGICAL_DIRECTION_FIELD] = wanted.direction ?:
             ((wanted.amount ?: 0) >= 0 ? 'inflow' : 'outflow')
+        if (wanted.importIdNamespace) {
+            payload[DesiredMirrorFactory.IMPORT_ID_NAMESPACE_FIELD] = wanted.importIdNamespace
+        }
         ReconciliationCanonicalizer.json(payload)
     }
 

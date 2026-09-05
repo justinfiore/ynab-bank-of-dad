@@ -155,6 +155,35 @@ sync:
         config.sync.childBudgets[0].autoCreateAccounts == false
         config.sync.childBudgets[0].createdAccountOnBudget == true
         config.sync.childBudgets[0].accountCreationNameStripRegex == null
+        config.sync.childBudgets[0].importIdNamespace == null
+    }
+
+    def "sync childBudgets parse and trim an import id namespace"() {
+        given:
+        def raw = validConfigMap()
+        raw.sync.childBudgets[0].importIdNamespace = '  peets-reseed-v2  '
+
+        when:
+        def config = RuntimeConfig.fromMap(raw)
+
+        then:
+        config.sync.childBudgets[0].importIdNamespace == 'peets-reseed-v2'
+    }
+
+    def "sync childBudgets reject an invalid import id namespace with full config path"() {
+        given:
+        def raw = validConfigMap()
+        raw.sync.childBudgets[0].importIdNamespace = invalidValue
+
+        when:
+        RuntimeConfig.fromMap(raw)
+
+        then:
+        def ex = thrown(IllegalArgumentException)
+        ex.message == "Config key 'sync.childBudgets[0].importIdNamespace' must be a non-empty string"
+
+        where:
+        invalidValue << ['', '   ', 123, null]
     }
 
     def "sync childBudgets parse auto-create account settings"() {

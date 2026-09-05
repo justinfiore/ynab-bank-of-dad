@@ -504,9 +504,9 @@ New child creates use a bounded deterministic import ID:
 PCBS:<31 hexadecimal SHA-256 characters>
 ```
 
-The hash uses stable source and target identity. It excludes mutable amount, date, category, mapping, and memo. Money-movement direction is included so inflow and outflow cannot collide. Transaction direction is omitted.
+The hash uses stable source and target identity. It excludes mutable amount, date, category, mapping, and memo. Money-movement direction is included so inflow and outflow cannot collide. Transaction direction is omitted. An optional per-child `importIdNamespace` is also incorporated when configured, allowing an explicit recovery rotation without reducing the hash length or changing the visible format. Omitting the namespace preserves historical import IDs byte-for-byte.
 
-The 36-character format respects the documented YNAB limit. Existing child transactions retain their historical import IDs because `import_id` is not a mutable transaction field.
+The 36-character format respects the documented YNAB limit. Existing child transactions retain their historical import IDs because `import_id` is not a mutable transaction field. The selected namespace is persisted as internal operation-payload metadata so retries cannot change identity when live config changes; it is removed before sending the transaction to YNAB. Namespace rotation is operator-controlled and dangerous when untracked active child transactions remain because their new identities can create duplicate financial effects.
 
 ### Durable SQLite Model
 
