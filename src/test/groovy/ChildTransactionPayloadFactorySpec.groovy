@@ -39,6 +39,22 @@ class ChildTransactionPayloadFactorySpec extends Specification {
             factory.buildImportId(source, 'child-budget', 'outflow')
     }
 
+    def "optional namespace changes the hash while preserving legacy identity and format"() {
+        given:
+        def source = transactionSource('txn-1')
+
+        expect:
+        factory.buildImportId(source, 'child-one', 'outflow', null, null) ==
+            'PCBS:fafc540bc31c2fe27034bfe4d360a31'
+        factory.buildImportId(source, 'child-one', 'outflow', null, 'reseed-v2') ==
+            factory.buildImportId(source, 'child-one', 'outflow', null, 'reseed-v2')
+        factory.buildImportId(source, 'child-one', 'outflow', null, 'reseed-v2') !=
+            factory.buildImportId(source, 'child-one', 'outflow', null, 'reseed-v3')
+        factory.buildImportId(source, 'child-one', 'outflow', null, 'reseed-v2') ==~
+            /PCBS:[a-f0-9]{31}/
+        factory.buildImportId(source, 'child-one', 'outflow', null, 'reseed-v2').size() == 36
+    }
+
     def "import ids are sanitized and bounded"() {
         given:
         def source = transactionSource('txn/with:punctuation and lots of extra characters !@#$%^&*()')

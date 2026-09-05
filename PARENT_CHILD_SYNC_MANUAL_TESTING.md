@@ -102,6 +102,7 @@ For every child, check:
 - `budgetName` exactly matches the YNAB child budget name.
 - `tokenEnvVarName` is the **name** of the env var that will hold that child's token.
 - `memoPrefix` and `memoSuffix` are optional strings. They default to `"YBOD: "` and `""`; empty strings are allowed.
+- `importIdNamespace` is an optional per-child recovery value incorporated into import ID hashes. Leave it unset during normal testing; set it before rebuilding reset state only when deleted YNAB transactions still reserve prior IDs.
 - The final decorated memo is trimmed. Decoration and cleared status apply only to synced child transactions.
 - `accountMappings[*].mappingKey` values are stable and unique within that child.
 - `accountMappings[*].parentCategoryNames[*].name` entries exactly match parent categories unless `regex: true` is set.

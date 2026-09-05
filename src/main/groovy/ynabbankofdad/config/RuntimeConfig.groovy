@@ -131,7 +131,9 @@ class RuntimeConfig {
                 memoSuffix: item.containsKey('memoSuffix') ? requireStringAllowEmpty(item, 'memoSuffix', itemKey) : "",
                 autoCreateAccounts: optionalBoolean(item, 'autoCreateAccounts', itemKey, false),
                 createdAccountOnBudget: optionalBoolean(item, 'createdAccountOnBudget', itemKey, true),
-                accountCreationNameStripRegex: optionalAccountCreationNameStripRegex(item, 'accountCreationNameStripRegex', itemKey)
+                accountCreationNameStripRegex: optionalAccountCreationNameStripRegex(item, 'accountCreationNameStripRegex', itemKey),
+                importIdNamespace: item.containsKey('importIdNamespace') ?
+                    requireString(item, 'importIdNamespace', itemKey).trim() : null
             )
         }
     }
@@ -380,6 +382,7 @@ class ChildBudgetSyncTarget {
     Boolean autoCreateAccounts = false
     Boolean createdAccountOnBudget = true
     String accountCreationNameStripRegex
+    String importIdNamespace
 
     String derivedAccountName(String parentCategoryName) {
         String name = parentCategoryName ?: ''

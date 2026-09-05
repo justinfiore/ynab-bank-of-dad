@@ -139,6 +139,11 @@ sync:
       tokenEnvVarName: YNAB_CHILD_ONE_TOKEN
       memoPrefix: "YBOD: "
       memoSuffix: ""
+      # Optional recovery namespace incorporated into the import ID hash. Leave
+      # unset during normal operation. Set it before rebuilding reset sync state
+      # when deleted transactions still reserve their prior import IDs. Rotating
+      # it can duplicate active transactions not tracked by durable sync state.
+      # importIdNamespace: peets-reseed-v2
       # Optional. Default false. When true, mapped parent categories whose
       # childAccountName is missing get a YNAB account named from the parent
       # category (after accountCreationNameStripRegex). --dry-run never creates.

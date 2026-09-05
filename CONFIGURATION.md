@@ -516,6 +516,7 @@ sync:
       tokenEnvVarName: YNAB_CHILD_ONE_TOKEN
       memoPrefix: "[Child One] "
       memoSuffix: " (synced)"
+      # importIdNamespace: child-one-reseed-v2
       accountMappings:
         - mappingKey: spend
           parentCategoryNames:
@@ -535,6 +536,7 @@ Field guidance:
 - `tokenEnvVarName` — env var name that holds this child budget’s token
 - `memoPrefix` — optional string prepended to synced child memos; defaults to `"YBOD: "`; empty string disables the prefix
 - `memoSuffix` — optional string appended to synced child memos; defaults to `""`; empty strings are allowed
+- `importIdNamespace` — optional non-empty string incorporated into the deterministic import ID hash. Omit it during normal operation to preserve existing import IDs. Set or rotate it only as an explicit recovery action when deleted YNAB transactions still reserve prior import IDs.
 - `autoCreateAccounts` — optional boolean, default `false`. When `true`, a mapped parent category whose `childAccountName` does not exist causes the syncer to create a YNAB account in that child budget. Unmapped parent categories are still ignored. `--dry-run` logs the planned create and does not POST.
 - `createdAccountOnBudget` — optional boolean, default `true` (budget / on-budget). `false` means tracking / off-budget. The live YNAB `SaveAccount` create body is `name`, `type`, and `balance: 0`; it does not accept `on_budget`. On-budget creates use `type: checking`. Off-budget / tracking creates use `type: otherAsset` (YNAB's "Asset (e.g. Investment)" tracking account).
 - `accountCreationNameStripRegex` — optional Java regex. Every match in the parent category name is replaced with `""` before the account is created or looked up by derived name. Example: ` Bank$` turns `Child One Spend Bank` into `Child One Spend`. Invalid or empty patterns fail at startup.
@@ -552,6 +554,8 @@ Notes:
 - money movements can fan out when both the source and destination categories belong to configured mappings
 - the final `memoPrefix + source memo + memoSuffix` value is trimmed, including when the source memo is empty
 - these memo settings and `cleared: "cleared"` apply only to transactions created in child budgets by the syncer
+- changing `importIdNamespace` changes future import IDs for that child. If active remote transactions are not represented in the durable sync state, rotating it can create duplicate financial effects.
+- each operation journals the namespace that was active when it was planned, preserving one import identity across retries. Set the recovery namespace before rebuilding reset state; existing queued operations do not adopt later namespace changes.
 
 ### `sync.pollingIntervalSeconds`
 How often the continuous syncer wakes up between cycles.

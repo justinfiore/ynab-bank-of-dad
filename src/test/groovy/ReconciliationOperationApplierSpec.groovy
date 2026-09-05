@@ -6,6 +6,7 @@ import org.slf4j.LoggerFactory
 import spock.lang.Specification
 import spock.lang.TempDir
 import ynabbankofdad.config.ChildBudgetSyncTarget
+import ynabbankofdad.sync.ChildTransactionPayloadFactory
 import ynabbankofdad.sync.ReconciliationOperationApplier
 import ynabbankofdad.sync.model.*
 import ynabbankofdad.sync.reconcile.DesiredMirrorFactory
@@ -52,6 +53,21 @@ class ReconciliationOperationApplierSpec extends Specification {
         store.findMirrorsForParent('parent-budget', 'parent-txn')*.childTransactionId == ['child-1']
         scalar('SELECT status FROM sync_operations WHERE id = ?', operationId) == 'applied'
         scalar('SELECT COUNT(*) FROM operation_attempts WHERE sync_operation_id = ?', operationId) == 1
+    }
+
+    def "create incorporates persisted import id namespace metadata without sending it"() {
+        given:
+        createOperation('namespaced-create', ReconciliationOperationType.CREATE, null, null,
+            payload((DesiredMirrorFactory.IMPORT_ID_NAMESPACE_FIELD): 'reseed-v2'))
+
+        when:
+        def result = applier(store).applyReadyOperations()
+
+        then:
+        result.failed == 0
+        repository.lastCreated.import_id == new ChildTransactionPayloadFactory().buildImportId(
+            store.findSourceEntityKey(sourceId), 'child-budget', 'outflow', null, 'reseed-v2')
+        !repository.lastCreated.containsKey(DesiredMirrorFactory.IMPORT_ID_NAMESPACE_FIELD)
     }
 
     def "update is partial preserves memo enforces cleared unapproved and skips an already matching retry"() {

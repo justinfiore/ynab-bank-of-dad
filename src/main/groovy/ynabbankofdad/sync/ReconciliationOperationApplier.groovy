@@ -84,13 +84,15 @@ class ReconciliationOperationApplier {
                              Map<String, Object> desired, ReconciliationOperationAttempt priorSuccess,
                              boolean recreation) {
         String direction = desired.remove(DesiredMirrorFactory.LOGICAL_DIRECTION_FIELD) as String
+        String importIdNamespace = desired.remove(DesiredMirrorFactory.IMPORT_ID_NAMESPACE_FIELD) as String
         if (!direction) {
             throw new IllegalStateException('Child transaction payload must contain a logical reconciliation direction')
         }
         desired.import_id = payloadFactory.buildImportId(
             stateStore.findSourceEntityKey(operation.intent.sourceEntityId),
             operation.intent.targetBudgetId, direction,
-            recreation ? operation.intent.childTransactionId : null)
+            recreation ? operation.intent.childTransactionId : null,
+            importIdNamespace)
 
         String childTransactionId = priorSuccess?.returnedChildTransactionId
         String outcome = 'already_complete'
@@ -132,6 +134,7 @@ class ReconciliationOperationApplier {
             return
         }
 
+        desired.remove(DesiredMirrorFactory.IMPORT_ID_NAMESPACE_FIELD)
         Map<String, Object> update = desired.findAll { String key, Object ignored -> UPDATE_FIELDS.contains(key) }
         update.cleared = 'cleared'
         update.approved = false
