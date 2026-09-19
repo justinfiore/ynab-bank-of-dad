@@ -562,7 +562,7 @@ Version 1 is the first supported state schema. Operators must delete databases c
 
 ### Applying Durable Operations
 
-`ReconciliationOperationApplier.applyReadyOperations` repeatedly queries ready operations, up to 100 distinct operations per invocation. A dependent operation is ready only after its dependency is applied. Failures are isolated per operation.
+`ReconciliationOperationApplier.applyReadyOperations` repeatedly queries ready operations in pages of 100 and keeps applying until no unattempted ready work remains in the cycle. A hard per-cycle cap previously left later money-movement creates pending when force-lookback re-queued many transaction existence-check updates ahead of them. A dependent operation is ready only after its dependency is applied. Failures are isolated per operation and are not retried endlessly within the same invocation.
 
 #### Create
 
