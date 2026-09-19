@@ -542,9 +542,14 @@ class ParentChildBudgetSyncer {
 
     private long persistMovementBatch(String parentBudgetId, MoneyMovementSnapshot snapshot,
                                       MovementPlanning planning) {
+        // Include planned intent identity in the batch key. Parent observation hashes alone are
+        // unchanged when a new child is enabled, so omitting intents reused a completed
+        // money_movement_snapshot batch, shifted operation_sequence, and crashed on
+        // "operation key already has different intent" for earlier Colin-side movements.
         String batchKey = ReconciliationCanonicalizer.stableKey([
             'money_movement_snapshot', parentBudgetId, snapshot.serverKnowledge,
-            planning.observation.observations.collect { it.revisionHash }
+            planning.observation.observations.collect { it.revisionHash },
+            planning.decisions.collectMany { it.intents ?: [] }.collect { it.operationKey }.sort()
         ])
         long batchId = reconciliationState.createIngestionBatch(
             batchKey, 'money_movement_snapshot', snapshot.serverKnowledge)

@@ -630,7 +630,10 @@ Movement batch identity includes:
 
 - parent budget ID;
 - response server knowledge;
-- ordered observed movement hashes.
+- ordered observed movement hashes;
+- sorted planned intent operation keys for that cycle.
+
+Intent keys are required because enabling an additional child does not change parent observation hashes. Without them, a later cycle reopens a completed money-movement batch at the same server knowledge, shifts `operation_sequence`, and collides on stable operation keys that intentionally omit sequence.
 
 `completeIngestionBatchIfReady` marks one batch complete only when none of its operations remain pending or retryable-failed.
 
