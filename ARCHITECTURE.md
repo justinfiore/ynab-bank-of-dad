@@ -639,10 +639,9 @@ Movement batch identity includes:
 
 - parent budget ID;
 - response server knowledge;
-- ordered observed movement hashes;
-- sorted planned intent operation keys for that cycle.
+- ordered observed movement hashes.
 
-Intent keys are required because enabling an additional child does not change parent observation hashes. Without them, a later cycle reopens a completed money-movement batch at the same server knowledge, shifts `operation_sequence`, and collides on stable operation keys that intentionally omit sequence.
+If `createIngestionBatch` finds an existing row with that key and status `completed`, it **forks** a new pending batch (unique key suffix) instead of reopening the completed one. That covers force-lookback and multi-child onboarding when parent fingerprints are unchanged but planned intents differ, without breaking partial-apply resume on still-`pending` batches. Reopening a completed batch used to shift `operation_sequence` and throw `operation key already has different intent`.
 
 `completeIngestionBatchIfReady` marks one batch complete only when none of its operations remain pending or retryable-failed.
 

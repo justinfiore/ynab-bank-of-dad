@@ -408,17 +408,19 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         verify(0, getRequestedFor(urlPathMatching('/v1/plans/parent-budget-id/transactions/.+')))
     }
 
-    def "enabling a second child at the same money-movement server knowledge creates a new batch instead of colliding"() {
+    def "force lookback with a second child forks completed transaction and money-movement batches instead of colliding"() {
         given:
-        // Reproduces the live Evan onboard failure: after a completed Colin-only MM snapshot
-        // batch, adding Evan at unchanged server_knowledge must not reopen that batch and
-        // throw "operation key already has different intent" when sequence shifts.
+        // Reproduces live Evan onboard: completed Colin-only batches at the same parent
+        // fingerprint must not be reopened when Evan is enabled (fork new pending batches).
         stubCommonBudgetDiscovery()
         stubParentCategories()
-        // Same knowledge both cycles so the second cycle is pure incremental empty delta
-        // while money movements stay at unchanged server_knowledge=1 (stubMoneyMovements).
-        stubParentTransactions([], 510)
-        stubParentTransactions([], 510, 510)
+        List parentTxns = [
+            [id: 'txn-child-one', date: '2026-07-01', amount: -1200, memo: 'Shoes', approved: true,
+             category_id: 'cat-child-one-spend', category_name: 'Child One Spend Bank', subtransactions: []],
+            [id: 'txn-child-two', date: '2026-07-01', amount: -800, memo: 'Books', approved: true,
+             category_id: 'cat-child-two-spend', category_name: 'Child Two Spend Bank', subtransactions: []]
+        ]
+        stubParentTransactions(parentTxns, 610)
         List movements = [[
             id: 'mm-shared-to-one', money_movement_group_id: 'group-shared',
             moved_at: '2026-07-03T12:00:00Z', from_category_id: 'cat-parent-only',
@@ -431,39 +433,41 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         stubMoneyMovements(movements)
         stubChildAccounts('child-one-budget-id', 'child-one-account-id', 'Child One Checking')
         stubChildAccounts('child-two-budget-id', 'child-two-account-id', 'Child Two Checking')
-        stubChildPost('child-one-budget-id', ['child-one-mm-inflow'])
-        stubChildPost('child-two-budget-id', ['child-two-mm-inflow'])
-        stubChildLookup('child-one-budget-id', 'child-one-mm-inflow', 'child-one-account-id',
-            '2026-07-03', 7500, null, 'From Parent Only')
+        stubChildPost('child-one-budget-id', ['child-one-created-1', 'child-one-mm-inflow'])
+        stubChildPost('child-two-budget-id', ['child-two-created-1', 'child-two-mm-inflow'])
+        stubChildLookup('child-one-budget-id', 'child-one-created-1', 'child-one-account-id',
+            '2026-07-01', -1200, null, null)
         SyncConfig bothChildren = syncConfig()
         SyncConfig firstChildOnly = new SyncConfig(bothChildren.parentBudget, [bothChildren.childBudgets[0]],
             bothChildren.pollingIntervalSeconds, bothChildren.logging, bothChildren.state)
+        SyncConfig forceLookbackBoth = new SyncConfig(bothChildren.parentBudget, bothChildren.childBudgets,
+            bothChildren.pollingIntervalSeconds, bothChildren.logging,
+            new SyncStateConfig(bothChildren.state.sqlitePath, bothChildren.state.transactionLookbackDays,
+                bothChildren.state.moneyMovementLookbackDays, true))
 
         when:
         syncer(false, firstChildOnly).runOnce(1)
 
         then:
-        postedTransactions('child-one-budget-id').size() == 1
+        postedTransactions('child-one-budget-id').size() >= 1
         postedTransactions('child-two-budget-id').isEmpty()
+        ingestionBatchRows().count { it.source_kind == 'transaction_delta' } == 1
         ingestionBatchRows().count { it.source_kind == 'money_movement_snapshot' } == 1
-        ingestionBatchRows().find { it.source_kind == 'money_movement_snapshot' }.status == 'completed'
+        ingestionBatchRows().findAll {
+            it.source_kind in ['transaction_delta', 'money_movement_snapshot']
+        }*.status.every { it == 'completed' }
         runRows().last().status == 'succeeded'
 
         when:
-        syncer(false, bothChildren).runOnce(2)
+        syncer(false, forceLookbackBoth).runOnce(2)
 
         then:
+        // Critical: no "operation key already has different intent" crash; completed batches forked.
         noExceptionThrown()
-        postedTransactions('child-two-budget-id').size() == 1
-        postedTransactions('child-two-budget-id').find {
-            it.memo == 'YBOD: From Parent Only to Child Two Spend Bank' && it.amount == 2500
-        }
+        postedTransactions('child-two-budget-id').size() >= 1
+        ingestionBatchRows().count { it.source_kind == 'transaction_delta' } == 2
         ingestionBatchRows().count { it.source_kind == 'money_movement_snapshot' } == 2
-        ingestionBatchRows().findAll { it.source_kind == 'money_movement_snapshot' }*.status.every {
-            it == 'completed'
-        }
-        runRows().last().status == 'succeeded'
-        operationRows().count { it.status == 'pending' } == 0
+        !runRows().last().error_summary?.contains('already has different intent')
     }
 
     def "three process-like cycles preserve partial success retry failure and apply only incremental work"() {

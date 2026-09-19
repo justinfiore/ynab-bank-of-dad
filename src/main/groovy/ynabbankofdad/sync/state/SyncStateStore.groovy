@@ -408,7 +408,32 @@ class SyncStateStore implements SyncStateRepository, ReconciliationSyncStateRepo
             statement.setObject(3, serverKnowledge)
             statement.setString(4, now())
             statement.executeUpdate()
-            selectLong(connection, 'SELECT id FROM ingestion_batches WHERE batch_key = ?', batchKey)
+            long existingId = selectLong(connection, 'SELECT id FROM ingestion_batches WHERE batch_key = ?', batchKey)
+            def statusStatement = connection.prepareStatement(
+                'SELECT status FROM ingestion_batches WHERE id = ?')
+            statusStatement.setLong(1, existingId)
+            def statusResult = statusStatement.executeQuery()
+            statusResult.next()
+            String status = statusResult.getString(1)
+            // Never attach new operations to a completed batch. Force-lookback or enabling another
+            // child can reproduce the same parent fingerprint while planning different intents;
+            // reopening a completed batch shifts operation_sequence and crashes with
+            // "operation key already has different intent". Incomplete (pending) batches still
+            // resume so partial apply can finish without duplicating creates.
+            if (status == 'completed') {
+                String forkedKey = "${batchKey}:cycle:${now()}:${UUID.randomUUID()}"
+                def fork = connection.prepareStatement('''
+                    INSERT INTO ingestion_batches(batch_key, source_kind, ynab_server_knowledge, status, created_at)
+                    VALUES (?, ?, ?, 'pending', ?)
+                ''')
+                fork.setString(1, forkedKey)
+                fork.setString(2, sourceKind)
+                fork.setObject(3, serverKnowledge)
+                fork.setString(4, now())
+                fork.executeUpdate()
+                return selectLong(connection, 'SELECT id FROM ingestion_batches WHERE batch_key = ?', forkedKey)
+            }
+            existingId
         }
     }
 
