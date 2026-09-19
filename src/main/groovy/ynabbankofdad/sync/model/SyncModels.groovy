@@ -130,6 +130,17 @@ class ChildTransactionLookupResult {
     }
 }
 
+/**
+ * One child-budget transaction list read. {@code transactionsById} is the full set returned by
+ * YNAB for the request (since_date lookback or last_knowledge_of_server delta). Child mirrors are
+ * flat transactions, so this map is enough for existence checks without per-id GETs.
+ */
+@Immutable
+class ChildTransactionListResult {
+    Map<String, ChildTransaction> transactionsById = [:]
+    Integer serverKnowledge
+}
+
 @Immutable
 class ChildTransactionDeleteResult {
     ChildTransaction transaction

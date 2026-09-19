@@ -20,14 +20,17 @@ class ReconciliationOperationApplier {
     private final ReconciliationOperationStateRepository stateStore
     private final List<ChildSyncContext> childContexts
     private final ChildTransactionPayloadFactory payloadFactory
+    private final ChildTransactionSnapshotCache childTransactionCache
     private final JsonSlurper jsonSlurper = new JsonSlurper()
 
     ReconciliationOperationApplier(ReconciliationOperationStateRepository stateStore,
                                    List<ChildSyncContext> childContexts,
-                                   ChildTransactionPayloadFactory payloadFactory = new ChildTransactionPayloadFactory()) {
+                                   ChildTransactionPayloadFactory payloadFactory = new ChildTransactionPayloadFactory(),
+                                   ChildTransactionSnapshotCache childTransactionCache = null) {
         this.stateStore = stateStore
         this.childContexts = childContexts ?: []
         this.payloadFactory = payloadFactory
+        this.childTransactionCache = childTransactionCache
     }
 
     /**
@@ -112,12 +115,15 @@ class ReconciliationOperationApplier {
 
         String childTransactionId = priorSuccess?.returnedChildTransactionId
         String outcome = 'already_complete'
+        ChildTransaction createdOrRecovered = null
         if (!childTransactionId) {
             def response = repository.postTransactions(operation.intent.targetBudgetId, [desired])
             childTransactionId = payloadFactory.extractCreatedTransactionId(response)
             if (!childTransactionId && duplicateImportIds(response).contains(desired.import_id as String)) {
-                childTransactionId = repository.recoverChildTransactionByImportId(
-                    operation.intent.targetBudgetId, desired.import_id as String, desired).transaction.id
+                def recovered = repository.recoverChildTransactionByImportId(
+                    operation.intent.targetBudgetId, desired.import_id as String, desired)
+                childTransactionId = recovered.transaction.id
+                createdOrRecovered = recovered.transaction
                 outcome = 'already_complete'
             } else {
                 outcome = 'applied'
@@ -125,6 +131,12 @@ class ReconciliationOperationApplier {
             if (!childTransactionId) {
                 throw new IllegalStateException('YNAB child transaction response did not include a created transaction ID')
             }
+        }
+        if (createdOrRecovered == null && childTransactionId) {
+            createdOrRecovered = childTransactionFromDesired(childTransactionId, desired)
+        }
+        if (createdOrRecovered != null) {
+            childTransactionCache?.put(operation.intent.targetBudgetId, createdOrRecovered)
         }
         stateStore.recordOperationAttempt(operation.id, outcome, null, childTransactionId)
         stateStore.completeCreateOperation(
@@ -141,7 +153,7 @@ class ReconciliationOperationApplier {
     private void applyUpdate(ReconciliationOperation operation, YnabBudgetRepository repository,
                              Map<String, Object> desired) {
         String childId = operation.intent.childTransactionId
-        def lookup = repository.getChildTransaction(operation.intent.targetBudgetId, childId)
+        def lookup = lookupChildTransaction(repository, operation.intent.targetBudgetId, childId)
         if (!lookup.found() || lookup.transaction.deleted) {
             ReconciliationOperationAttempt prior = stateStore.findSuccessfulOperationAttempt(operation.id)
             ReconciliationOperationAttempt priorRecreation = prior?.returnedChildTransactionId &&
@@ -159,6 +171,7 @@ class ReconciliationOperationApplier {
             def result = repository.updateChildTransaction(operation.intent.targetBudgetId, childId, update)
             outcome = 'applied'
             childId = result.transaction.id
+            childTransactionCache?.put(operation.intent.targetBudgetId, result.transaction)
         }
         stateStore.recordOperationAttempt(operation.id, outcome, null, childId)
         stateStore.completeUpdateOperation(operation.id, operation.intent.childMirrorId,
@@ -177,12 +190,38 @@ class ReconciliationOperationApplier {
                 operation.intent.targetBudgetId, operation.intent.childTransactionId)
             outcome = result.alreadyAbsent ? 'already_complete' : 'applied'
         }
+        childTransactionCache?.remove(operation.intent.targetBudgetId, operation.intent.childTransactionId)
         stateStore.recordOperationAttempt(operation.id, outcome, null, null)
         stateStore.completeDeleteOperation(operation.id, operation.intent.childMirrorId)
         log.info(
             'Reconciliation outcome action=delete outcome={} operation={} source={} targetBudget={} childTransaction={}',
             outcome, operation.id, auditSource(operation), operation.intent.targetBudgetId,
             operation.intent.childTransactionId)
+    }
+
+    private def lookupChildTransaction(YnabBudgetRepository repository, String budgetId, String childId) {
+        if (childTransactionCache != null) {
+            return childTransactionCache.lookup(budgetId, childId)
+        }
+        // Unit tests construct the applier without a cycle cache; production always supplies one.
+        repository.getChildTransaction(budgetId, childId)
+    }
+
+    private static ChildTransaction childTransactionFromDesired(String childId, Map<String, Object> desired) {
+        new ChildTransaction(
+            childId,
+            desired.account_id as String,
+            desired.date as String,
+            desired.amount as Integer,
+            desired.payee_id as String,
+            desired.payee_name as String,
+            desired.category_id as String,
+            desired.memo as String,
+            (desired.cleared ?: 'cleared') as String,
+            desired.approved == null ? false : desired.approved as Boolean,
+            desired.flag_color as String,
+            false
+        )
     }
 
     private ChildSyncContext childContext(String targetBudgetId) {
@@ -242,6 +281,9 @@ class ReconciliationOperationApplier {
     }
 
     private static boolean matches(ChildTransaction actual, Map<String, Object> desired) {
+        if (ChildTransactionSnapshotCache.isUnchangedSinceCursor(actual)) {
+            return true
+        }
         if (desired.containsKey('account_id') && actual.accountId != desired.account_id as String) return false
         if (desired.containsKey('date') && actual.date != desired.date as String) return false
         if (desired.containsKey('amount') && actual.amount != (desired.amount as Number).intValue()) return false

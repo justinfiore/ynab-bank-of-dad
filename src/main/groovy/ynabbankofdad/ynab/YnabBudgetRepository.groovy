@@ -19,6 +19,12 @@ class YnabBudgetRepository {
     // otherAsset is the tracking / off-budget "Asset (e.g. Investment)" type.
     static final String ON_BUDGET_ACCOUNT_TYPE = 'checking'
     static final String OFF_BUDGET_ACCOUNT_TYPE = 'otherAsset'
+    /**
+     * YNAB transaction list has no offset pagination. Lookbacks are walked in inclusive
+     * {@code since_date}/{@code until_date} windows of this many days so large ranges still
+     * reach "today" without relying on an undocumented single-response size.
+     */
+    static final int TRANSACTION_LIST_PAGE_DAYS = 90
     private static final Set<String> SAVE_ACCOUNT_TYPES = [
         'checking', 'savings', 'cash', 'creditCard', 'otherAsset', 'otherLiability'
     ] as Set
@@ -154,29 +160,81 @@ class YnabBudgetRepository {
     }
 
     TransactionDelta getTransactions(String budgetId, int lookbackDays, Integer lastServerKnowledge = null) {
-        String sinceDate = LocalDate.now().minusDays(lookbackDays as long).toString()
-        String path = lastServerKnowledge == null
-            ? "/v1/plans/${budgetId}/transactions?since_date=${sinceDate}"
-            : "/v1/plans/${budgetId}/transactions?last_knowledge_of_server=${lastServerKnowledge}"
+        if (lastServerKnowledge != null) {
+            return getTransactionsByKnowledge(budgetId, lastServerKnowledge)
+        }
+        getTransactionsBySinceDate(budgetId, lookbackDays)
+    }
+
+    /**
+     * Pages through parent transactions from {@code since_date} to today using successive
+     * {@code until_date} windows. YNAB has no offset pagination on this endpoint; date windows
+     * are the documented way to bound large lookbacks. Merges by transaction id (later window wins).
+     */
+    private TransactionDelta getTransactionsBySinceDate(String budgetId, int lookbackDays) {
+        LocalDate start = LocalDate.now().minusDays(lookbackDays as long)
+        LocalDate end = LocalDate.now()
+        Map<String, ParentTransactionEvent> byId = new LinkedHashMap<>()
+        Integer latestKnowledge = null
+        int pages = 0
+        LocalDate windowStart = start
+        while (!windowStart.isAfter(end)) {
+            LocalDate windowEnd = windowStart.plusDays(TRANSACTION_LIST_PAGE_DAYS - 1L)
+            if (windowEnd.isAfter(end)) {
+                windowEnd = end
+            }
+            String path = "/v1/plans/${budgetId}/transactions?since_date=${windowStart}&until_date=${windowEnd}"
+            def response = ynabClient.getJson(path)
+            Map data = requireData(response, 'transaction lookback page')
+            if (!(data.transactions instanceof List) || data.server_knowledge == null) {
+                throw new IllegalStateException(
+                    "YNAB transaction lookback for budget '${budgetId}' is missing transactions or server_knowledge")
+            }
+            Integer pageKnowledge = data.server_knowledge as Integer
+            latestKnowledge = pageKnowledge
+            pages++
+            (data.transactions as List).each { raw ->
+                if (!(raw instanceof Map) || !raw.id) {
+                    return
+                }
+                ParentTransactionEvent mapped = mapParentTransaction(raw as Map, pageKnowledge)
+                byId[mapped.id] = mapped
+            }
+            log.debug(
+                "Fetched parent transaction lookback page {} for budget '{}' since_date={} until_date={} count={} server_knowledge={}",
+                pages, budgetId, windowStart, windowEnd, data.transactions.size(), pageKnowledge)
+            windowStart = windowEnd.plusDays(1L)
+        }
+        log.debug(
+            "Fetched {} parent transactions across {} lookback page(s) for budget '{}' since_date={} through {} server_knowledge={}",
+            byId.size(), pages, budgetId, start, end, latestKnowledge)
+        new TransactionDelta(new ArrayList<>(byId.values()), latestKnowledge)
+    }
+
+    /**
+     * Reads parent transaction changes since {@code lastServerKnowledge}. YNAB delta requests
+     * return the full changed set for that knowledge watermark in one response; the response
+     * {@code server_knowledge} is current for the plan.
+     */
+    private TransactionDelta getTransactionsByKnowledge(String budgetId, Integer lastServerKnowledge) {
+        String path = "/v1/plans/${budgetId}/transactions?last_knowledge_of_server=${lastServerKnowledge}"
         def response = ynabClient.getJson(path)
         Map data = requireData(response, 'transaction delta')
         if (!(data.transactions instanceof List) || data.server_knowledge == null) {
-            throw new IllegalStateException("YNAB transaction delta for budget '${budgetId}' is missing transactions or server_knowledge")
+            throw new IllegalStateException(
+                "YNAB transaction delta for budget '${budgetId}' is missing transactions or server_knowledge")
         }
-        List transactions = data.transactions as List
         Integer responseServerKnowledge = data.server_knowledge as Integer
-        log.debug(
-            "Fetched {} transactions from YNAB for budget '{}' with since_date={} last_knowledge_of_server={} and response server_knowledge={}",
-            transactions.size(),
-            budgetId,
-            lastServerKnowledge == null ? sinceDate : null,
-            lastServerKnowledge,
-            responseServerKnowledge
-        )
-        List<ParentTransactionEvent> mappedTransactions = transactions.collect { transaction ->
-            mapParentTransaction(transaction as Map, responseServerKnowledge)
+        List<ParentTransactionEvent> mapped = (data.transactions as List).findResults { raw ->
+            if (!(raw instanceof Map) || !raw.id) {
+                return null
+            }
+            mapParentTransaction(raw as Map, responseServerKnowledge)
         }
-        new TransactionDelta(mappedTransactions, responseServerKnowledge)
+        log.debug(
+            "Fetched {} parent transactions for budget '{}' last_knowledge_of_server={} server_knowledge={}",
+            mapped.size(), budgetId, lastServerKnowledge, responseServerKnowledge)
+        new TransactionDelta(mapped, responseServerKnowledge)
     }
 
     ParentTransactionEvent getParentTransaction(String budgetId, String transactionId) {
@@ -235,6 +293,90 @@ class YnabBudgetRepository {
         response.body
     }
 
+    /**
+     * Lists child-budget transactions in bulk up through current. Prefer this over
+     * {@link #getChildTransaction} for existence checks: child mirrors are flat transactions
+     * (no split composition), so list reads replace N per-id GETs.
+     * {@code lastServerKnowledge} is budget-scoped and must never be shared across budgets.
+     * Lookbacks page by {@code since_date}/{@code until_date} windows; deltas page by advancing
+     * {@code last_knowledge_of_server} until an empty page reaches current knowledge.
+     */
+    ChildTransactionListResult getChildTransactions(String budgetId, int lookbackDays,
+                                                    Integer lastServerKnowledge = null) {
+        if (lastServerKnowledge != null) {
+            return getChildTransactionsByKnowledge(budgetId, lastServerKnowledge)
+        }
+        getChildTransactionsBySinceDate(budgetId, lookbackDays)
+    }
+
+    private ChildTransactionListResult getChildTransactionsBySinceDate(String budgetId, int lookbackDays) {
+        LocalDate start = LocalDate.now().minusDays(lookbackDays as long)
+        LocalDate end = LocalDate.now()
+        Map<String, ChildTransaction> byId = new LinkedHashMap<>()
+        Integer latestKnowledge = null
+        int pages = 0
+        LocalDate windowStart = start
+        while (!windowStart.isAfter(end)) {
+            LocalDate windowEnd = windowStart.plusDays(TRANSACTION_LIST_PAGE_DAYS - 1L)
+            if (windowEnd.isAfter(end)) {
+                windowEnd = end
+            }
+            String path = "/v1/plans/${budgetId}/transactions?since_date=${windowStart}&until_date=${windowEnd}"
+            def response = ynabClient.getJson(path)
+            Map data = requireData(response, 'child transaction lookback page')
+            if (!(data.transactions instanceof List) || data.server_knowledge == null) {
+                throw new IllegalStateException(
+                    "YNAB child transaction lookback for budget '${budgetId}' is missing transactions or server_knowledge")
+            }
+            Integer pageKnowledge = data.server_knowledge as Integer
+            latestKnowledge = pageKnowledge
+            pages++
+            (data.transactions as List).each { raw ->
+                if (!(raw instanceof Map) || !raw.id) {
+                    return
+                }
+                ChildTransaction mapped = mapChildTransactionFields(raw as Map)
+                byId[mapped.id] = mapped
+            }
+            log.debug(
+                "Fetched child transaction lookback page {} for budget '{}' since_date={} until_date={} count={} server_knowledge={}",
+                pages, budgetId, windowStart, windowEnd, data.transactions.size(), pageKnowledge)
+            windowStart = windowEnd.plusDays(1L)
+        }
+        log.debug(
+            "Fetched {} child transactions across {} lookback page(s) for budget '{}' since_date={} through {} server_knowledge={}",
+            byId.size(), pages, budgetId, start, end, latestKnowledge)
+        new ChildTransactionListResult(byId, latestKnowledge)
+    }
+
+    private ChildTransactionListResult getChildTransactionsByKnowledge(String budgetId, Integer lastServerKnowledge) {
+        String path = "/v1/plans/${budgetId}/transactions?last_knowledge_of_server=${lastServerKnowledge}"
+        def response = ynabClient.getJson(path)
+        Map data = requireData(response, 'child transaction delta')
+        if (!(data.transactions instanceof List) || data.server_knowledge == null) {
+            throw new IllegalStateException(
+                "YNAB child transaction delta for budget '${budgetId}' is missing transactions or server_knowledge")
+        }
+        Integer responseServerKnowledge = data.server_knowledge as Integer
+        Map<String, ChildTransaction> byId = new LinkedHashMap<>()
+        (data.transactions as List).each { raw ->
+            if (!(raw instanceof Map) || !raw.id) {
+                return
+            }
+            ChildTransaction mapped = mapChildTransactionFields(raw as Map)
+            byId[mapped.id] = mapped
+        }
+        log.debug(
+            "Fetched {} child transactions for budget '{}' last_knowledge_of_server={} server_knowledge={}",
+            byId.size(), budgetId, lastServerKnowledge, responseServerKnowledge)
+        new ChildTransactionListResult(byId, responseServerKnowledge)
+    }
+
+    /**
+     * Single-transaction GET. Child reconciliation should not need this for ordinary existence
+     * checks (use {@link #getChildTransactions}); reserved for rare cases that require a full
+     * detail payload such as split subtransaction composition, which child mirrors do not use.
+     */
     ChildTransactionLookupResult getChildTransaction(String budgetId, String transactionId) {
         String path = transactionPath(budgetId, transactionId)
         YnabHttpResponse response = ynabClient.getJsonWithMetadata(path, [404] as Set)
@@ -379,22 +521,23 @@ class YnabBudgetRepository {
                 "YNAB child transaction ${operation} response for budget '${budgetId}', transaction '${transactionId}' is missing transaction.id"
             )
         }
-        new ChildTransactionResult(
-            new ChildTransaction(
-                transaction.id as String,
-                transaction.account_id as String,
-                transaction.date as String,
-                transaction.amount as Integer,
-                transaction.payee_id as String,
-                transaction.payee_name as String,
-                transaction.category_id as String,
-                transaction.memo as String,
-                transaction.cleared as String,
-                transaction.approved as Boolean,
-                transaction.flag_color as String,
-                transaction.deleted as Boolean
-            ),
-            serverKnowledge
+        new ChildTransactionResult(mapChildTransactionFields(transaction), serverKnowledge)
+    }
+
+    private static ChildTransaction mapChildTransactionFields(Map transaction) {
+        new ChildTransaction(
+            transaction.id as String,
+            transaction.account_id as String,
+            transaction.date as String,
+            transaction.amount as Integer,
+            transaction.payee_id as String,
+            transaction.payee_name as String,
+            transaction.category_id as String,
+            transaction.memo as String,
+            transaction.cleared as String,
+            transaction.approved as Boolean,
+            transaction.flag_color as String,
+            transaction.deleted as Boolean
         )
     }
 }

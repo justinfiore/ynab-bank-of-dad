@@ -1437,12 +1437,17 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         stubMoneyMovements([])
         stubChildAccounts('child-one-budget-id', 'child-one-account-id', 'Child One Checking')
         stubChildPost('child-one-budget-id', ['child-update'])
+        Map existingChild = [
+            id: 'child-update', account_id: 'child-one-account-id', date: '2026-07-01', amount: -1000,
+            payee_id: null, payee_name: 'Old Payee', memo: 'child-owned memo',
+            cleared: 'uncleared', approved: true, deleted: false
+        ]
+        // Cycle 2 list must include the existing mirror so applyUpdate PUTs instead of recreating.
+        stubFor(get(urlPathEqualTo('/v1/plans/child-one-budget-id/transactions'))
+            .atPriority(4)
+            .willReturn(jsonResponse([data: [server_knowledge: 2, transactions: [existingChild]]])))
         stubFor(get(urlEqualTo('/v1/plans/child-one-budget-id/transactions/child-update'))
-            .willReturn(jsonResponse([data: [server_knowledge: 1, transaction: [
-                id: 'child-update', account_id: 'child-one-account-id', date: '2026-07-01', amount: -1000,
-                payee_id: null, payee_name: 'Old Payee', memo: 'child-owned memo',
-                cleared: 'uncleared', approved: true, deleted: false
-            ]]])))
+            .willReturn(jsonResponse([data: [server_knowledge: 1, transaction: existingChild]])))
         stubFor(put(urlEqualTo('/v1/plans/child-one-budget-id/transactions/child-update'))
             .willReturn(jsonResponse([data: [server_knowledge: 2, transaction: [
                 id: 'child-update', account_id: 'child-one-account-id', date: '2026-07-02', amount: -1250,
@@ -1746,6 +1751,21 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
     private void stubCommonBudgetDiscovery() {
         stubFor(get(urlEqualTo('/v1/plans'))
             .willReturn(commonBudgetDiscoveryResponse()))
+        stubChildTransactionLists()
+    }
+
+    /**
+     * One list GET (or paged lookback/delta) per child budget for existence checks.
+     * Low priority so per-id stubs still win when tests need them.
+     */
+    private void stubChildTransactionLists(List<String> budgetIds = [
+        'child-one-budget-id', 'child-two-budget-id', 'child-three-budget-id', 'child-four-budget-id'
+    ], List transactions = [], int serverKnowledge = 1) {
+        budgetIds.each { String budgetId ->
+            stubFor(get(urlPathEqualTo("/v1/plans/${budgetId}/transactions"))
+                .atPriority(10)
+                .willReturn(jsonResponse([data: [server_knowledge: serverKnowledge, transactions: transactions]])))
+        }
     }
 
     private void stubCommonBudgetDiscoveryFailureThenSuccess(String failingBudgetId, int status, String detail) {
@@ -1758,6 +1778,7 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         stubFor(get(urlEqualTo('/v1/plans'))
             .atPriority(successPriority)
             .willReturn(commonBudgetDiscoveryResponse()))
+        stubChildTransactionLists()
     }
 
     private static def commonBudgetDiscoveryResponse() {
@@ -1906,15 +1927,29 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
 
     private void stubChildLookup(String budgetId, String transactionId, String accountId,
                                  String date, int amount, String payeeId, String payeeName) {
+        Map row = [
+            id: transactionId, account_id: accountId, date: date, amount: amount,
+            payee_id: payeeId, payee_name: payeeName, category_id: null, memo: 'child memo',
+            cleared: 'cleared', approved: false, deleted: false
+        ]
+        // List cache is the primary existence path; also stub per-id for any leftover callers.
+        stubFor(get(urlPathEqualTo("/v1/plans/${budgetId}/transactions"))
+            .atPriority(5)
+            .willReturn(jsonResponse([data: [server_knowledge: 1, transactions: [row]]])))
         stubFor(get(urlEqualTo("/v1/plans/${budgetId}/transactions/${transactionId}"))
-            .willReturn(jsonResponse([data: [server_knowledge: 1, transaction: [
-                id: transactionId, account_id: accountId, date: date, amount: amount,
-                payee_id: payeeId, payee_name: payeeName, category_id: null, memo: 'child memo',
-                cleared: 'cleared', approved: false, deleted: false
-            ]]])))
+            .willReturn(jsonResponse([data: [server_knowledge: 1, transaction: row]])))
     }
 
     private void stubChildMissing(String budgetId, String transactionId) {
+        // List cache must see a deleted tombstone (empty delta would mean "unchanged present").
+        Map tombstone = [
+            id: transactionId, account_id: 'child-one-account-id', date: '2026-07-01', amount: -1200,
+            payee_id: null, payee_name: null, category_id: null, memo: null,
+            cleared: 'cleared', approved: false, deleted: true
+        ]
+        stubFor(get(urlPathEqualTo("/v1/plans/${budgetId}/transactions"))
+            .atPriority(5)
+            .willReturn(jsonResponse([data: [server_knowledge: 2, transactions: [tombstone]]])))
         stubFor(get(urlEqualTo("/v1/plans/${budgetId}/transactions/${transactionId}"))
             .willReturn(errorResponse(404, 'transaction not found')))
     }

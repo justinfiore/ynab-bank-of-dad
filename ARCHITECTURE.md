@@ -576,13 +576,22 @@ Version 1 is the first supported state schema. Operators must delete databases c
 
 #### Update
 
-1. GET the recorded child transaction.
+1. Resolve the recorded child transaction from the **per-child list cache** loaded once per cycle (see below). Do **not** issue a per-id GET for ordinary existence checks; child mirrors are flat transactions and do not need split subtransaction detail.
 2. If absent/deleted, execute recreation.
 3. Build a partial update containing only account, date, amount, and payee fields.
 4. Enforce `cleared` and `approved = false`.
 5. Omit memo, category, and import ID.
-6. Skip PUT when remote state already matches.
+6. Skip PUT when remote state already matches (including the delta-mode "unchanged since cursor" marker).
 7. Append the attempt and atomically update mirror state plus operation completion.
+
+#### Child transaction list cache
+
+Before applying durable operations, each resolved child budget loads transactions with list GET(s) that page through to current:
+
+- `forceLookback: true` or no stored child cursor → successive `GET /v1/plans/{child}/transactions?since_date=…&until_date=…` windows (90-day pages from lookback start through today). YNAB has no offset pagination; date windows are how large lookbacks reach current. Id absent after the full walk ⇒ absent (404-equivalent).
+- otherwise → one `GET /v1/plans/{child}/transactions?last_knowledge_of_server={childCursor}` (YNAB returns the full changed set for that watermark; response `server_knowledge` is current). Id present uses the delta row (including `deleted: true`). Id absent means unchanged since the cursor: treat as still present without a field-level PUT.
+
+Child cursors are stored per budget as `child.transactions.last_server_knowledge.<budgetId>` in `sync_cursors` and must never be shared across budgets or with the parent `transactions.last_server_knowledge` key. After a successful apply phase the final response `server_knowledge` is written back per child. Creates/updates/deletes also update the in-memory cache for later ops in the same cycle. Parent transaction reads use the same paging strategy.
 
 #### Delete
 
@@ -740,8 +749,9 @@ Failures remain ERROR and unconfirmed movements remain WARN. Tokens are never lo
 | Plan discovery | `GET /v1/plans` |
 | Accounts | `GET /v1/plans/{plan}/accounts` |
 | Categories | `GET /v1/plans/{plan}/categories` |
-| Transaction bootstrap/delta | `GET /v1/plans/{plan}/transactions` |
-| Complete transaction/child lookup | `GET /v1/plans/{plan}/transactions/{transaction}` |
+| Transaction bootstrap/delta (parent) | `GET /v1/plans/{plan}/transactions` |
+| Child transaction list (existence cache) | `GET /v1/plans/{plan}/transactions` (`since_date` or per-child `last_knowledge_of_server`) |
+| Complete parent transaction detail (split recovery only) | `GET /v1/plans/{plan}/transactions/{transaction}` |
 | Child create | `POST /v1/plans/{plan}/transactions/bulk` |
 | Child update | `PUT /v1/plans/{plan}/transactions/{transaction}` |
 | Import-ID recovery/update by identity | `PATCH /v1/plans/{plan}/transactions` |
