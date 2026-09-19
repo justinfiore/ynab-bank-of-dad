@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Fast wake-up checks for YNAB Bank of Dad orbs. No installs. Must finish in seconds.
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+log() { printf '[resume] %s\n' "$*"; }
+
+find_jdk_home() {
+  local c found
+  for c in \
+    /usr/lib/jvm/temurin-25-jdk-amd64 \
+    /usr/lib/jvm/temurin-25-jdk-arm64 \
+    /usr/lib/jvm/java-25-temurin-amd64 \
+    /usr/lib/jvm/java-25-temurin
+  do
+    if [[ -x "$c/bin/java" ]]; then
+      printf '%s\n' "$c"
+      return 0
+    fi
+  done
+  found="$(find /usr/lib/jvm -maxdepth 1 -type d \( -name '*temurin*25*' -o -name '*jdk-25*' -o -name 'java-25-*' \) 2>/dev/null | head -n 1 || true)"
+  if [[ -n "$found" && -x "$found/bin/java" ]]; then
+    printf '%s\n' "$found"
+    return 0
+  fi
+  return 1
+}
+
+if ! JAVA_HOME_VALUE="$(find_jdk_home)"; then
+  log "ERROR: Temurin JDK 25 not found; re-run .agents/setup"
+  exit 1
+fi
+
+export JAVA_HOME="$JAVA_HOME_VALUE"
+export PATH="$JAVA_HOME/bin:$PATH"
+
+if ! command -v java >/dev/null 2>&1; then
+  log "ERROR: java not on PATH after setting JAVA_HOME=$JAVA_HOME"
+  exit 1
+fi
+
+if [[ ! -x ./gradlew ]]; then
+  log "ERROR: ./gradlew missing or not executable"
+  exit 1
+fi
+
+# Confirm the JVM answers quickly; do not download or build here.
+java -version >/dev/null 2>&1
+
+log "ok JAVA_HOME=$JAVA_HOME java=$(command -v java)"

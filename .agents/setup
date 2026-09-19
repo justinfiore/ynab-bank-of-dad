@@ -1,0 +1,197 @@
+#!/usr/bin/env bash
+# Install toolchain and dependencies for YNAB Bank of Dad (Gradle + Groovy + JDK 25).
+# Idempotent: safe to re-run on warm/stale snapshots. Non-interactive. No long-lived processes.
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+log() { printf '[setup] %s\n' "$*"; }
+step() {
+  local label="$1"
+  shift
+  log ">> $label"
+  local start end elapsed
+  start=$(date +%s)
+  "$@"
+  end=$(date +%s)
+  elapsed=$((end - start))
+  log "<< $label (${elapsed}s)"
+}
+
+# --- System packages used by setup itself ---
+MISSING_PKGS=()
+for pkg in ca-certificates curl gnupg wget; do
+  if dpkg -s "$pkg" >/dev/null 2>&1; then
+    log "package already installed: $pkg"
+  else
+    MISSING_PKGS+=("$pkg")
+  fi
+done
+
+if ((${#MISSING_PKGS[@]} > 0)); then
+  log "installing base packages: ${MISSING_PKGS[*]}"
+  step "apt-get update (base)" sudo apt-get update -y
+  step "apt-get install base" sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${MISSING_PKGS[@]}"
+fi
+
+# --- Temurin JDK 25 (matches CI: actions/setup-java temurin 25) ---
+find_jdk_home() {
+  local c found
+  for c in \
+    /usr/lib/jvm/temurin-25-jdk-amd64 \
+    /usr/lib/jvm/temurin-25-jdk-arm64 \
+    /usr/lib/jvm/java-25-temurin-amd64 \
+    /usr/lib/jvm/java-25-temurin
+  do
+    if [[ -x "$c/bin/java" ]]; then
+      printf '%s\n' "$c"
+      return 0
+    fi
+  done
+  found="$(find /usr/lib/jvm -maxdepth 1 -type d \( -name '*temurin*25*' -o -name '*jdk-25*' -o -name 'java-25-*' \) 2>/dev/null | head -n 1 || true)"
+  if [[ -n "$found" && -x "$found/bin/java" ]]; then
+    printf '%s\n' "$found"
+    return 0
+  fi
+  return 1
+}
+
+install_temurin_25() {
+  local keyring="/usr/share/keyrings/adoptium.gpg"
+  local list="/etc/apt/sources.list.d/adoptium.list"
+  local codename
+
+  if [[ ! -f "$keyring" ]]; then
+    log "adding Adoptium APT signing key"
+    curl -fsSL https://packages.adoptium.net/artifactory/api/gpg/key/public \
+      | sudo gpg --batch --yes --dearmor -o "$keyring"
+  else
+    log "Adoptium keyring already present"
+  fi
+
+  if [[ ! -f "$list" ]]; then
+    codename="$(. /etc/os-release && printf '%s' "$VERSION_CODENAME")"
+    log "adding Adoptium APT source for $codename"
+    printf 'deb [signed-by=%s] https://packages.adoptium.net/artifactory/deb %s main\n' \
+      "$keyring" "$codename" | sudo tee "$list" >/dev/null
+  else
+    log "Adoptium APT source already present"
+  fi
+
+  step "apt-get update (adoptium)" sudo apt-get update -y
+  step "apt-get install temurin-25-jdk" \
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y temurin-25-jdk
+}
+
+JAVA_HOME_VALUE=""
+if JAVA_HOME_VALUE="$(find_jdk_home)"; then
+  log "JDK 25 already installed at $JAVA_HOME_VALUE"
+else
+  step "install Temurin JDK 25" install_temurin_25
+  if ! JAVA_HOME_VALUE="$(find_jdk_home)"; then
+    log "ERROR: temurin-25-jdk installed but JAVA_HOME could not be resolved under /usr/lib/jvm"
+    ls -la /usr/lib/jvm || true
+    exit 1
+  fi
+fi
+
+export JAVA_HOME="$JAVA_HOME_VALUE"
+export PATH="$JAVA_HOME/bin:$PATH"
+
+log "java: $(java -version 2>&1 | head -n 1)"
+log "JAVA_HOME=$JAVA_HOME"
+
+# Persist JAVA_HOME for non-interactive login shells (Amp + supervised services).
+profile_marker="# ynab-bank-of-dad JAVA_HOME (Temurin 25)"
+profile_file="$HOME/.bash_profile"
+profile_block=$(cat <<EOF
+$profile_marker
+export JAVA_HOME="$JAVA_HOME_VALUE"
+case ":\$PATH:" in
+  *":\$JAVA_HOME/bin:"*) ;;
+  *) export PATH="\$JAVA_HOME/bin:\$PATH" ;;
+esac
+EOF
+)
+
+if grep -Fqx "$profile_marker" "$profile_file" 2>/dev/null; then
+  if grep -Fq "export JAVA_HOME=\"$JAVA_HOME_VALUE\"" "$profile_file" 2>/dev/null; then
+    log "JAVA_HOME already configured in $profile_file"
+  else
+    log "refreshing JAVA_HOME block in $profile_file"
+    tmp="$(mktemp)"
+    # Drop the previous marker block (marker + next 4 lines of known shape), then append.
+    awk -v marker="$profile_marker" '
+      $0 == marker { skip=5; next }
+      skip > 0 { skip--; next }
+      { print }
+    ' "$profile_file" > "$tmp"
+    printf '\n%s\n' "$profile_block" >> "$tmp"
+    mv -- "$tmp" "$profile_file"
+  fi
+else
+  log "appending JAVA_HOME export to $profile_file"
+  printf '\n%s\n' "$profile_block" >> "$profile_file"
+fi
+
+mkdir -p "$HOME/.config/ynab-bank-of-dad"
+{
+  printf 'export JAVA_HOME=%q\n' "$JAVA_HOME"
+  printf 'export PATH=%q:"${PATH}"\n' "$JAVA_HOME/bin"
+} > "$HOME/.config/ynab-bank-of-dad/java.env"
+
+# Lightweight orb guidance for agents (no secrets).
+amp_agents="$HOME/.config/amp/AGENTS.md"
+mkdir -p "$(dirname "$amp_agents")"
+marker_start="<!-- ynab-bank-of-dad orb toolchain -->"
+marker_end="<!-- /ynab-bank-of-dad orb toolchain -->"
+toolchain_block=$(cat <<EOF
+$marker_start
+# Orb toolchain (YNAB Bank of Dad)
+
+- Java: Temurin JDK 25 (\`JAVA_HOME=$JAVA_HOME_VALUE\`)
+- Build: Gradle wrapper (\`./gradlew\`) — distribution and dependencies are prefetched in \`.agents/setup\`
+- Unit/integration tests: \`./gradlew testAll\`
+- Do not guess YNAB API shapes; check official docs. Never log raw tokens.
+- Live disposable QA needs secrets/env (see \`qa/SETUP.md\`); do not invent tokens.
+- Copy config only when missing: \`[ -f config.yaml ] || cp -- config.yaml.example config.yaml\`
+$marker_end
+EOF
+)
+
+if [[ -f "$amp_agents" ]] && grep -Fq "$marker_start" "$amp_agents"; then
+  tmp="$(mktemp)"
+  awk -v start="$marker_start" -v end="$marker_end" '
+    $0 == start { skip=1; next }
+    skip && $0 == end { skip=0; next }
+    !skip { print }
+  ' "$amp_agents" > "$tmp"
+  # Trim trailing blank lines then append fresh block
+  printf '%s\n' "$toolchain_block" >> "$tmp"
+  mv -- "$tmp" "$amp_agents"
+else
+  printf '\n%s\n' "$toolchain_block" >> "$amp_agents"
+fi
+
+# --- Local config template (do not clobber existing) ---
+if [[ ! -f config.yaml ]]; then
+  log "creating config.yaml from example (placeholder values only)"
+  cp -- config.yaml.example config.yaml
+else
+  log "config.yaml already present; leaving untouched"
+fi
+
+# --- Gradle wrapper distribution + dependency resolution ---
+if [[ ! -x ./gradlew ]]; then
+  log "ERROR: ./gradlew missing or not executable"
+  exit 1
+fi
+
+# Downloads the pinned wrapper dist (if needed), resolves main+test classpaths
+# into the Gradle cache, and compiles sources so warm orbs skip Maven fetches.
+step "gradle testClasses (wrapper + deps + compile)" \
+  ./gradlew --no-daemon --quiet testClasses
+
+log "setup complete"
+log "verify: JAVA_HOME=$JAVA_HOME java=$(command -v java)"

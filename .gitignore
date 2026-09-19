@@ -15,3 +15,6 @@ qa/.campaign-state/
 __pycache__/
 *.pyc
 tokens*.txt
+
+# Amp orb portals (generated)
+.amp/portals/*
