@@ -408,6 +408,64 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         verify(0, getRequestedFor(urlPathMatching('/v1/plans/parent-budget-id/transactions/.+')))
     }
 
+    def "enabling a second child at the same money-movement server knowledge creates a new batch instead of colliding"() {
+        given:
+        // Reproduces the live Evan onboard failure: after a completed Colin-only MM snapshot
+        // batch, adding Evan at unchanged server_knowledge must not reopen that batch and
+        // throw "operation key already has different intent" when sequence shifts.
+        stubCommonBudgetDiscovery()
+        stubParentCategories()
+        // Same knowledge both cycles so the second cycle is pure incremental empty delta
+        // while money movements stay at unchanged server_knowledge=1 (stubMoneyMovements).
+        stubParentTransactions([], 510)
+        stubParentTransactions([], 510, 510)
+        List movements = [[
+            id: 'mm-shared-to-one', money_movement_group_id: 'group-shared',
+            moved_at: '2026-07-03T12:00:00Z', from_category_id: 'cat-parent-only',
+            to_category_id: 'cat-child-one-spend', amount: 7500
+        ], [
+            id: 'mm-two-only', money_movement_group_id: 'group-two',
+            moved_at: '2026-07-04T12:00:00Z', from_category_id: 'cat-parent-only',
+            to_category_id: 'cat-child-two-spend', amount: 2500
+        ]]
+        stubMoneyMovements(movements)
+        stubChildAccounts('child-one-budget-id', 'child-one-account-id', 'Child One Checking')
+        stubChildAccounts('child-two-budget-id', 'child-two-account-id', 'Child Two Checking')
+        stubChildPost('child-one-budget-id', ['child-one-mm-inflow'])
+        stubChildPost('child-two-budget-id', ['child-two-mm-inflow'])
+        stubChildLookup('child-one-budget-id', 'child-one-mm-inflow', 'child-one-account-id',
+            '2026-07-03', 7500, null, 'From Parent Only')
+        SyncConfig bothChildren = syncConfig()
+        SyncConfig firstChildOnly = new SyncConfig(bothChildren.parentBudget, [bothChildren.childBudgets[0]],
+            bothChildren.pollingIntervalSeconds, bothChildren.logging, bothChildren.state)
+
+        when:
+        syncer(false, firstChildOnly).runOnce(1)
+
+        then:
+        postedTransactions('child-one-budget-id').size() == 1
+        postedTransactions('child-two-budget-id').isEmpty()
+        ingestionBatchRows().count { it.source_kind == 'money_movement_snapshot' } == 1
+        ingestionBatchRows().find { it.source_kind == 'money_movement_snapshot' }.status == 'completed'
+        runRows().last().status == 'succeeded'
+
+        when:
+        syncer(false, bothChildren).runOnce(2)
+
+        then:
+        noExceptionThrown()
+        postedTransactions('child-two-budget-id').size() == 1
+        postedTransactions('child-two-budget-id').find {
+            it.memo == 'YBOD: From Parent Only to Child Two Spend Bank' && it.amount == 2500
+        }
+        ingestionBatchRows().count { it.source_kind == 'money_movement_snapshot' } == 2
+        ingestionBatchRows().findAll { it.source_kind == 'money_movement_snapshot' }*.status.every {
+            it == 'completed'
+        }
+        runRows().last().status == 'succeeded'
+        operationRows().count { it.status == 'pending' } == 0
+    }
+
     def "three process-like cycles preserve partial success retry failure and apply only incremental work"() {
         given:
         stubCommonBudgetDiscovery()
