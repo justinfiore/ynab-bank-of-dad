@@ -283,6 +283,59 @@ class ReconciliationOperationApplierSpec extends Specification {
         !repository.lastCreated.containsKey(DesiredMirrorFactory.LOGICAL_DIRECTION_FIELD)
     }
 
+    def "one cycle drains more ready operations than the fetch page size so later creates are not starved"() {
+        given:
+        // forceLookback can re-queue many transaction existence-check updates ahead of
+        // money-movement creates. A hard 100-op cap left those creates pending forever
+        // while each cycle only re-applied the first page of ready work.
+        int aheadOfCreate = 5
+        (1..aheadOfCreate).each { int index ->
+            long entityId = store.upsertSourceEntity(
+                new SourceEntityKey('parent-budget', SourceEntityType.TRANSACTION,
+                    "ahead-txn-${index}", null, null))
+            long mirrorId = store.recordMirrorCreated(entityId, 'child-budget', 'outflow',
+                "existing-${index}", 'account-1', "hash-update-${index}")
+            repository.remote["existing-${index}"] = child("existing-${index}", 'account-1',
+                'memo', 'cleared', false)
+            createOperationForSource("update-${index}", entityId, ReconciliationOperationType.UPDATE,
+                mirrorId, "existing-${index}", payload())
+        }
+        createOperation('late-create', ReconciliationOperationType.CREATE, null, null, payload())
+
+        when:
+        def result = applier(store).applyReadyOperations(3)
+
+        then:
+        result.failed == 0
+        result.applied == aheadOfCreate + 1
+        repository.postCalls == 1
+        scalar('SELECT COUNT(*) FROM sync_operations WHERE status = ?', 'pending') == 0
+        scalar('SELECT COUNT(*) FROM sync_operations WHERE status = ?', 'applied') == aheadOfCreate + 1
+        store.findMirrorsForParent('parent-budget', 'parent-txn')
+            .any { it.childTransactionId == 'child-1' }
+    }
+
+    def "failed ready operations are not retried endlessly within the same drain"() {
+        given:
+        long siblingSource = store.upsertSourceEntity(
+            new SourceEntityKey('parent-budget', SourceEntityType.TRANSACTION, 'sibling-txn', null, null))
+        createOperation('failing', ReconciliationOperationType.CREATE, null, null,
+            payload(amount: -999))
+        repository.failAmounts << -999
+        createOperationForSource('sibling', siblingSource, ReconciliationOperationType.CREATE,
+            null, null, payload())
+
+        when:
+        def result = applier(store).applyReadyOperations(1)
+
+        then:
+        result.failed == 1
+        result.applied == 1
+        repository.postCalls == 2
+        scalar('SELECT status FROM sync_operations WHERE operation_key = ?', 'failing') == 'retryable_failed'
+        scalar('SELECT status FROM sync_operations WHERE operation_key = ?', 'sibling') == 'applied'
+    }
+
     def "update and delete crash windows recover from remote state or successful attempts"() {
         given:
         long updateMirror = store.recordMirrorCreated(sourceId, 'child-budget', 'outflow', 'update-child')

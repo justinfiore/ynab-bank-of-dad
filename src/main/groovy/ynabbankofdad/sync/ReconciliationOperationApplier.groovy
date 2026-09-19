@@ -30,15 +30,31 @@ class ReconciliationOperationApplier {
         this.payloadFactory = payloadFactory
     }
 
-    ReconciliationApplicationResult applyReadyOperations(int limit = 100) {
+    /**
+     * Applies every ready operation for this cycle. Operations are fetched in pages of
+     * {@code pageSize} (default 100) so SQLite queries stay bounded, but the loop continues
+     * until no unattempted ready work remains. Previously a hard 100-op cap per cycle left
+     * later money-movement creates pending when force-lookback re-queued many transaction
+     * existence-check updates ahead of them.
+     * Failed operations stay in {@code attempted} so they are not retried endlessly in the
+     * same invocation; they remain {@code retryable_failed} for the next cycle.
+     */
+    ReconciliationApplicationResult applyReadyOperations(int pageSize = 100) {
+        if (pageSize < 1) {
+            throw new IllegalArgumentException("pageSize must be at least 1, was ${pageSize}")
+        }
         int applied = 0
         int failed = 0
         List<String> failures = []
         Set<Long> attempted = [] as Set
 
-        while (attempted.size() < limit) {
-            List<ReconciliationOperation> ready = stateStore.findReadyOperations(limit - attempted.size())
+        while (true) {
+            // Over-fetch by the number already attempted so retryable failures that remain
+            // "ready" cannot hide later unattempted work behind a small page.
+            List<ReconciliationOperation> ready = stateStore
+                .findReadyOperations(pageSize + attempted.size())
                 .findAll { !attempted.contains(it.id) }
+                .take(pageSize)
             if (ready.isEmpty()) {
                 break
             }
