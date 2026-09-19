@@ -105,8 +105,7 @@ class ParentChildBudgetSyncer {
             throw new IllegalArgumentException('Parent-child reconciliation requires reconciliation-capable sync state')
         }
         this.reconciliationState = stateStore as ReconciliationSyncStateRepository
-        this.reconciliationApplier = dryRun ? null :
-            new ReconciliationOperationApplier(reconciliationState, childContexts)
+        this.reconciliationApplier = null
     }
 
     static ParentChildBudgetSyncer fromConfig(RuntimeConfig runtimeConfig, SyncCliOptions options) {
@@ -225,7 +224,20 @@ class ParentChildBudgetSyncer {
             Long movementBatchId = movementPlanning == null ? null :
                 persistMovementBatch(parentBudgetId, movementSnapshot, movementPlanning)
 
-            ReconciliationApplicationResult application = reconciliationApplier.applyReadyOperations()
+            List<ChildSyncContext> resolvedChildren = []
+            resolvedChildren.addAll(transactionRouting.contexts)
+            resolvedChildren.addAll(movementRouting.contexts)
+            ChildTransactionSnapshotCache childTransactionCache = new ChildTransactionSnapshotCache()
+            childTransactionCache.load(
+                resolvedChildren.unique { it.budgetId },
+                stateStore,
+                syncConfig.state.forceLookback,
+                syncConfig.state.transactionLookbackDays)
+            ReconciliationOperationApplier cycleApplier =
+                new ReconciliationOperationApplier(reconciliationState, childContexts, new ChildTransactionPayloadFactory(),
+                    childTransactionCache)
+            ReconciliationApplicationResult application = cycleApplier.applyReadyOperations()
+            childTransactionCache.persistCursors(stateStore)
             boolean transactionComplete = transactionRouting.failures.isEmpty() &&
                 reconciliationState.completeIngestionBatchesOfKindIfReady('transaction_delta')
             boolean movementComplete = movementBatchId == null || (movementRouting.failures.isEmpty() &&
@@ -244,9 +256,6 @@ class ParentChildBudgetSyncer {
             failures.addAll(movementRouting.failures)
             SyncRunResult result = new SyncRunResult(failures)
             coordinator.finishRun(runId, result, transactionDelta.serverKnowledge, transactionComplete)
-            List<ChildSyncContext> resolvedChildren = []
-            resolvedChildren.addAll(transactionRouting.contexts)
-            resolvedChildren.addAll(movementRouting.contexts)
             refreshChildAccountSnapshots(resolvedChildren)
             logCycleCompletion(cycleNumber, completeTransactionDelta, movementSnapshot,
                 transactionResults, movementPlanning, transactionRouting, movementRouting, failures,
