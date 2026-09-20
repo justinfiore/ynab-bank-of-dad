@@ -45,8 +45,14 @@ class ParentTransactionReconciler {
         }
         DesiredMirrorFactory factory = new DesiredMirrorFactory(childContexts, categoriesById, mappingCache)
         revision.components.findAll { !it.deleted }.collectMany { component ->
+            // YNAB commonly keeps the payee on the split parent and leaves each
+            // subtransaction payee blank. Mirror the effective payee: a component's
+            // own payee wins when set; otherwise inherit the parent transaction payee.
+            boolean componentHasPayee = component.payeeId != null || component.payeeName != null
+            String payeeId = componentHasPayee ? component.payeeId : revision.payeeId
+            String payeeName = componentHasPayee ? component.payeeName : revision.payeeName
             factory.forSource(component.source, component.categoryId, component.categoryName,
-                revision.date, component.amount, component.payeeId, component.payeeName,
+                revision.date, component.amount, payeeId, payeeName,
                 component.memo ?: revision.memo)
         }
     }

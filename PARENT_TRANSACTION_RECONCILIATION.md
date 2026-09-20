@@ -85,6 +85,8 @@ Before the first live reconciliation, review a `--dry-run --max-cycles 1` using 
 
 Each mapped split component is treated as a stable source with its own child mirror.
 
+YNAB often keeps the payee only on the split parent and leaves each subtransaction payee blank. When a component has no payee of its own, the child mirror inherits the parent transaction payee name. A payee set on the subtransaction still wins for that component.
+
 | Split change | Child-side result |
 |---|---|
 | Add a mapped component | Create only the new component's mirror |

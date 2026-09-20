@@ -210,6 +210,23 @@ class ParentTransactionReconcilerSpec extends Specification {
         desired*.authoritativePayloadJson.every { !it.contains('"payee_name":"Parent Payee"') }
     }
 
+    def "split mirrors inherit the parent payee when subtransaction payee is blank"() {
+        given:
+        def split = revision(payeeId: 'parent-payee', payeeName: 'Target', subtransactions: [
+            sub(id: 'one', amount: -40),
+            sub(id: 'two', amount: -60, payeeId: 'sub-payee', payeeName: 'Split Store')])
+
+        when:
+        def desired = reconciler(context('child', 'budget-1', 'acct-1', 'Spend'))
+            .reconcile(split).desiredMirrors.toList().sort { it.source.parentSubtransactionId }
+
+        then:
+        desired*.payeeId == [null, null]
+        desired*.payeeName == ['Target', 'Split Store']
+        desired[0].authoritativePayloadJson.contains('"payee_name":"Target"')
+        desired[1].authoritativePayloadJson.contains('"payee_name":"Split Store"')
+    }
+
     def "category rename with unchanged route and repeated delta are no-ops"() {
         given:
         def child = context('child', 'budget-1', 'acct-1', 'Spend', 'Renamed')
