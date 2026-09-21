@@ -423,6 +423,8 @@ cleared = cleared
 approved = false
 ```
 
+For a **new** money movement whose from and to sides map to different accounts in the same child budget, desired state is a single **transfer** create on the outflow account: `payee_id` is the destination account’s `transfer_payee_id`, `payee_name` is null, and an internal `_transfer_destination_account_id` is kept only for cycle balance netting (stripped before the YNAB request). Pre-existing dual inflow/outflow mirrors for the same movement are grandfathered and are not converted.
+
 The child category is explicitly unset on creation and recreation. Later update and verification paths neither mutate nor compare category, so a category manually added in the child remains child-owned. The decorated memo is included for creation and recreation, but excluded from the authoritative hash so later parent memo changes do not overwrite child-owned memo text.
 
 ### Mirror Identity

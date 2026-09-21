@@ -111,7 +111,9 @@ class YnabBudgetRepository {
                 snapshotsByName[account.name as String] = new AccountSnapshot(
                     account.id as String,
                     account.name as String,
-                    (account.balance ?: 0) as Integer
+                    (account.balance ?: 0) as Integer,
+                    account.transfer_payee_id as String,
+                    account.on_budget == null ? null : account.on_budget as Boolean
                 )
             }
         }

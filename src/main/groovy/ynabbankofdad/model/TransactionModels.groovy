@@ -38,6 +38,10 @@ class AccountSnapshot {
     String id
     String name
     Integer balance = 0
+    /** YNAB payee id used when transferring into this account; null when unknown. */
+    String transferPayeeId = null
+    /** Whether the account is on-budget; null when unknown. */
+    Boolean onBudget = null
 }
 
 @Immutable(knownImmutableClasses = [Date])

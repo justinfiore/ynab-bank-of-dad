@@ -30,12 +30,28 @@ class CycleBalanceReporterSpec extends Specification {
         ]).values().sum() == -1900
     }
 
+    def "transfer create nets outflow and inverse destination accounts"() {
+        given:
+        def payload = '{"account_id":"from-acct","amount":-5000,' +
+            '"_transfer_destination_account_id":"to-acct"}'
+        def transferCreate = new PlannedReconciliationIntent('key', 1, PlannedAction.CREATE,
+            new SourceEntityKey('parent', SourceEntityType.MONEY_MOVEMENT, null, null, 'mm'),
+            'child-one', 'budget', 'outflow', null, null, payload, 'hash', [], false,
+            'from-acct', null)
+
+        expect:
+        new CycleBalanceReporter().netChangeByAccount([transferCreate]) == [
+            'child-one|from-acct': -5000,
+            'child-one|to-acct'  : 5000
+        ]
+    }
+
     def "dry-run projects current plus net and live uses actual balance"() {
         given:
         def cache = cache('Child One Spend Bank', 'child-one-account-id', 'Child One Checking')
         def parent = ['Child One Spend Bank': new CategorySnapshot('cat', 'Child One Spend Bank', 98800)]
         def accounts = ['child-one': ['Child One Checking':
-            new AccountSnapshot('child-one-account-id', 'Child One Checking', current)]]
+            new AccountSnapshot('child-one-account-id', 'Child One Checking', current, null, null)]]
         def appender = attach()
         def reporter = new CycleBalanceReporter()
 
@@ -64,7 +80,7 @@ class CycleBalanceReporterSpec extends Specification {
             'Child Two Gold CD 07/31/26': new CategorySnapshot('cd-1', 'Child Two Gold CD 07/31/26', 20000),
             'Child Two Gold CD 08/31/26': new CategorySnapshot('cd-2', 'Child Two Gold CD 08/31/26', 30000)
         ]
-        def accounts = ['child-two': ['CD Account': new AccountSnapshot('cd-acct', 'CD Account', 50000)]]
+        def accounts = ['child-two': ['CD Account': new AccountSnapshot('cd-acct', 'CD Account', 50000, null, null)]]
         def appender = attach()
 
         when:
@@ -83,7 +99,7 @@ class CycleBalanceReporterSpec extends Specification {
         given:
         def cache = cache('Child One Spend Bank', 'derived-id', 'Child One Spend')
         def parent = ['Child One Spend Bank': new CategorySnapshot('cat', 'Child One Spend Bank', 0)]
-        def accounts = ['child-one': ['Child One Spend': new AccountSnapshot('derived-id', 'Child One Spend', 0)]]
+        def accounts = ['child-one': ['Child One Spend': new AccountSnapshot('derived-id', 'Child One Spend', 0, null, null)]]
         def appender = attach()
 
         when:
@@ -102,7 +118,7 @@ class CycleBalanceReporterSpec extends Specification {
         def cache = cache('Child One Spend Bank', 'child-one-account-id', 'Child One Checking')
         def parent = ['Child One Spend Bank': new CategorySnapshot('cat', 'Child One Spend Bank', 48000)]
         def accounts = ['child-one': ['Child One Checking':
-            new AccountSnapshot('child-one-account-id', 'Child One Checking', 50000)]]
+            new AccountSnapshot('child-one-account-id', 'Child One Checking', 50000, null, null)]]
         def appender = attach()
 
         when:

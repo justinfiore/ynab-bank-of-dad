@@ -341,7 +341,13 @@ class ParentChildBudgetSyncer {
                 derived, child.target.budgetName, accountType)
             Map created = child.repository.createAccount(child.budgetId, derived, accountType)
             String createdId = created.id as String
-            child.cacheAccountId(derived, createdId)
+            child.cacheAccountSnapshot(new AccountSnapshot(
+                createdId,
+                (created.name ?: derived) as String,
+                (created.balance ?: 0) as Integer,
+                created.transfer_payee_id as String,
+                created.on_budget == null ? null : created.on_budget as Boolean
+            ))
             existingIds[derived] = createdId
         }
     }

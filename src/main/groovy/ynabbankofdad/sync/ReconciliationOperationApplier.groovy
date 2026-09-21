@@ -104,6 +104,7 @@ class ReconciliationOperationApplier {
                              boolean recreation) {
         String direction = desired.remove(DesiredMirrorFactory.LOGICAL_DIRECTION_FIELD) as String
         String importIdNamespace = desired.remove(DesiredMirrorFactory.IMPORT_ID_NAMESPACE_FIELD) as String
+        desired.remove(DesiredMirrorFactory.TRANSFER_DESTINATION_ACCOUNT_FIELD)
         if (!direction) {
             throw new IllegalStateException('Child transaction payload must contain a logical reconciliation direction')
         }
@@ -163,6 +164,7 @@ class ReconciliationOperationApplier {
         }
 
         desired.remove(DesiredMirrorFactory.IMPORT_ID_NAMESPACE_FIELD)
+        desired.remove(DesiredMirrorFactory.TRANSFER_DESTINATION_ACCOUNT_FIELD)
         Map<String, Object> update = desired.findAll { String key, Object ignored -> UPDATE_FIELDS.contains(key) }
         update.cleared = 'cleared'
         update.approved = false

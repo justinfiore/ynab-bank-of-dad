@@ -562,7 +562,7 @@ class YnabBudgetRepositorySpec extends Specification {
         YnabBudgetRepository.saveAccountTypeForOnBudget(false) == 'otherAsset'
     }
 
-    def "accountsByName preserves balances and defaults missing balances to zero"() {
+    def "accountsByName preserves balances transfer payees on-budget and defaults missing balances to zero"() {
         given:
         stubFor(get(urlEqualTo('/v1/plans/budget-new/accounts'))
             .willReturn(aResponse()
@@ -572,8 +572,8 @@ class YnabBudgetRepositorySpec extends Specification {
 {
   "data": {
     "accounts": [
-      {"id": "acct-spend", "name": "Spend", "balance": 12500, "deleted": false},
-      {"id": "acct-save", "name": "Save", "deleted": false},
+      {"id": "acct-spend", "name": "Spend", "balance": 12500, "transfer_payee_id": "tp-spend", "on_budget": true, "deleted": false},
+      {"id": "acct-save", "name": "Save", "transfer_payee_id": "tp-save", "on_budget": false, "deleted": false},
       {"id": "acct-gone", "name": "Gone", "balance": 9, "deleted": true},
       {"id": "acct-dup", "name": "Spend", "balance": 1, "deleted": false}
     ]
@@ -586,8 +586,8 @@ class YnabBudgetRepositorySpec extends Specification {
         def ids = buildRepository().accountIdByName('budget-new')
 
         then:
-        accounts['Spend'] == new AccountSnapshot('acct-spend', 'Spend', 12500)
-        accounts['Save'] == new AccountSnapshot('acct-save', 'Save', 0)
+        accounts['Spend'] == new AccountSnapshot('acct-spend', 'Spend', 12500, 'tp-spend', true)
+        accounts['Save'] == new AccountSnapshot('acct-save', 'Save', 0, 'tp-save', false)
         !accounts.containsKey('Gone')
         ids == [Spend: 'acct-spend', Save: 'acct-save']
     }

@@ -32,7 +32,8 @@ class ChildSyncContext {
         AccountSnapshot existing = accountSnapshotsByName[accountName]
         if (existing == null || existing.id != accountId) {
             accountSnapshotsByName[accountName] = new AccountSnapshot(
-                accountId, accountName, existing?.balance ?: 0)
+                accountId, accountName, existing?.balance ?: 0,
+                existing?.transferPayeeId, existing?.onBudget)
         }
     }
 
@@ -44,6 +45,17 @@ class ChildSyncContext {
         if (snapshot.id) {
             accountIdsByName[snapshot.name] = snapshot.id
         }
+    }
+
+    AccountSnapshot resolveAccountSnapshot(String accountName) {
+        accountSnapshotsByName[accountName]
+    }
+
+    AccountSnapshot resolveAccountSnapshotById(String accountId) {
+        if (!accountId) {
+            return null
+        }
+        accountSnapshotsByName.values().find { it.id == accountId }
     }
 }
 

@@ -94,6 +94,54 @@ class ParentChildBudgetSyncerWireMockSpec extends Specification {
         cursorValue('transactions.last_server_knowledge') == 41
     }
 
+    def "same-child money movement posts one YNAB transfer using destination transfer_payee_id"() {
+        given:
+        stubCommonBudgetDiscovery()
+        stubParentCategories()
+        stubParentTransactions([], 51)
+        stubMoneyMovements([[
+            id: 'mm-silver-to-cd', money_movement_group_id: 'group-cd',
+            moved_at: '2026-07-03T12:00:00Z', from_category_id: 'cat-child-one-spend',
+            to_category_id: 'cat-child-one-save', amount: 7500
+        ]])
+        stubChildAccounts('child-one-budget-id', [
+            [id: 'child-one-spend-id', name: 'Child One Checking', transfer_payee_id: 'tp-spend', on_budget: true],
+            [id: 'child-one-save-id', name: 'Child One Save', transfer_payee_id: 'tp-save', on_budget: true]
+        ])
+        // Map spend + save to different accounts in one child (override default single Checking).
+        def config = new SyncConfig(
+            new BudgetRef('Parent Budget', 'YNAB_PARENT_TOKEN'),
+            [childTarget('child-one', 'Child One Budget', 'YNAB_CHILD_ONE_TOKEN', [
+                ['spend', ['Child One Spend Bank'], 'Child One Checking'],
+                ['save', ['Child One Save Bank'], 'Child One Save']
+            ])],
+            300,
+            new SyncLoggingConfig(tempDir.resolve('parent-child-sync.log').toString(), 'INFO', 7, 10),
+            new SyncStateConfig(tempDir.resolve('syncstate-wiremock.db').toString(), 45, 45, false)
+        )
+        stubChildPost('child-one-budget-id', ['child-transfer-1'])
+
+        when:
+        syncer(false, config).runOnce(1)
+
+        then:
+        List posts = postedTransactions('child-one-budget-id')
+        posts.size() == 1
+        posts[0].account_id == 'child-one-spend-id'
+        posts[0].amount == -7500
+        posts[0].payee_id == 'tp-save'
+        posts[0].payee_name == null
+        posts[0].category_id == null
+        posts[0].cleared == 'cleared'
+        posts[0].approved == false
+        posts[0].memo == 'YBOD: From Child One Spend Bank to Child One Save Bank'
+        !posts[0].containsKey('_transfer_destination_account_id')
+        !posts[0].containsKey('_reconciliation_direction')
+        tableCount('child_mirrors') == 1
+        mirrorRows()*.status == ['active']
+        cursorValue('transactions.last_server_knowledge') == 51
+    }
+
     def "live child post uses custom memo decoration and cleared status"() {
         given:
         stubCommonBudgetDiscovery()

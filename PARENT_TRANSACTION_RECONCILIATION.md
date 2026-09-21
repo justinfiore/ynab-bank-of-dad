@@ -127,20 +127,43 @@ This avoids a config typo immediately rewriting large amounts of history while s
 
 Money movements have less change information than transactions in the current YNAB API. YNAB provides a stable movement ID and movement fields, but it does not document a deletion tombstone, revision timestamp, individual movement lookup, or replacement lineage.
 
+### Same-child account transfers
+
+When **both** sides of a **new** money movement map to **different accounts in the same child budget**, the syncer posts **one** YNAB transfer instead of two ordinary transactions:
+
+- Create on the **outflow** account only.
+- Set `payee_id` to the destination account’s `transfer_payee_id` (from `GET /plans/{id}/accounts`).
+- Leave `category_id` unset. On-budget ↔ on-budget needs no category; when cash leaves or enters the plan via a tracking account, YNAB assigns Ready to Assign.
+- Keep the decorated memo (`From … to …`).
+- Record one active mirror with direction `outflow`. YNAB creates and links the opposite side.
+
+This covers funding or emptying a CD by moving money between Silver and a CD account in one child budget.
+
+| Case | Child-side result |
+|---|---|
+| New movement, same child, different accounts, destination has `transfer_payee_id` | One transfer CREATE |
+| Destination missing `transfer_payee_id` | Fall back to two ordinary transactions; log a warning |
+| Sides map to different child budgets | Two independent ordinary transactions (unchanged) |
+| Only one side maps | One ordinary transaction (unchanged) |
+| Movement already has active dual `inflow`+`outflow` mirrors | **Grandfather**: keep two sides; do not convert to a transfer. Amount/date updates omit payee so operator-converted transfer payees are not overwritten |
+| Movement already has a single posted transfer (`outflow`) mirror | Keep planning one transfer; amount/date updates PUT that side |
+
+Ordinary parent transactions are never collapsed into transfers.
+
 ### What can be reconciled
 
 The syncer can safely reconcile a movement when the same movement ID is observed again with changed fields.
 
 | Re-observed same-ID change | Child-side result |
 |---|---|
-| Amount changes | Update affected existing child transactions |
+| Amount changes | Update affected existing child transactions (or the single transfer outflow) |
 | Source or destination category changes | Recompute both desired sides; update, create, or reroute as needed |
 | Same side moves to another account in one child budget | Update in place |
 | Side moves to another child budget | Delete old mirror, then create replacement |
 | Movement date changes | Update affected mirrors |
 | Group ID changes | Record correlation metadata; group ID does not define identity |
 
-A movement identity is the parent budget plus movement ID. Each mirrored side additionally includes the target child and `inflow` or `outflow`, so two sides routed to one child cannot collide.
+A movement identity is the parent budget plus movement ID. Each mirrored side additionally includes the target child and `inflow` or `outflow`, so two sides routed to one child cannot collide. A posted same-child transfer uses a single `outflow` mirror.
 
 Previously mirrored movements remain eligible for same-ID correction even after their movement date falls outside the lookback used to decide whether a newly discovered movement should be created.
 
