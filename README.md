@@ -9,7 +9,7 @@ Allowance day used to mean a spreadsheet, a calculator, and the quiet dread of "
 Think of it as *The First National Bank of Dad*, except the vault is [YNAB](https://www.ynab.com/) and the bank never closes. A continuous syncer watches the parent budget and keeps each kid's budget in step as money moves, so nobody has to wait for the next family finance meeting to see what happened. Two windows, one bank:
 
 1. **Payday.** An allowance and interest calculator that posts one bulk transaction set into a single budget.
-2. **The mirror.** A parent/child syncer that reflects approved parent-budget activity into one or more child budgets, with category mappings and SQLite-backed replay protection so it never pays the same dollar twice.
+2. **The mirror.** A parent/child syncer that reflects approved parent-budget activity into one or more child budgets, with category mappings and replay protection so it never pays the same dollar twice.
 
 Inspired by the book [*The First National Bank of Dad*](https://a.co/d/0iDelQff). Built for parents who already live in YNAB and would rather teach money than reconcile it by hand.
 
