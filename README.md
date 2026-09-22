@@ -4,9 +4,9 @@
 
 **Your kids have a bank. You have YNAB. This is the teller window.** 🏦
 
-Allowance day used to mean a spreadsheet, a calculator, and the quiet dread of "wait, whose piggy bank earned interest this week?" 🐷 YNAB Bank of Dad turns that ritual into a command: it reads your family budget, pays the weekly allowance, compounds the interest, and posts the whole payday in one tidy batch. 💸 Then, when a parent budget moves money that a kid should actually see, it mirrors that activity into their own budget — same date, same amount, no copy-paste, no "I already did that one."
+Allowance day used to mean a spreadsheet, a calculator, and the quiet dread of "wait, whose piggy bank earned interest this week?" YNAB Bank of Dad turns that ritual into a command: it reads your family budget, pays the weekly allowance, compounds the interest, and posts the whole payday in one tidy batch. 💸 Then, when a parent budget moves money that a kid should actually see, it mirrors that activity into their own budget — same date, same amount, no copy-paste, no "I already did that one."
 
-Think of it as *The First National Bank of Dad*, except the vault is [YNAB](https://www.ynab.com/) and the bank never closes. 🌙 A continuous syncer watches the parent budget and keeps each kid's budget in step as money moves, so nobody has to wait for the next family finance meeting to see what happened. Two windows, one bank:
+Think of it as *The First National Bank of Dad*, except the vault is [YNAB](https://www.ynab.com/) and the bank never closes. A continuous syncer watches the parent budget and keeps each kid's budget in step as money moves, so nobody has to wait for the next family finance meeting to see what happened. Two windows, one bank:
 
 1. **Payday.** 🎉 An allowance and interest calculator that posts one bulk transaction set into a single budget.
 2. **The mirror.** 🪞 A parent/child syncer that reflects approved parent-budget activity into one or more child budgets, with category mappings and replay protection so it never pays the same dollar twice.
