@@ -11,11 +11,11 @@ Think of it as *The First National Bank of Dad*, except the vault is [YNAB](http
 1. **Payday.** An allowance and interest calculator that posts one bulk transaction set into a single budget.
 2. **The mirror.** A parent/child syncer that reflects approved parent-budget activity into one or more child budgets, with category mappings and replay protection so it never pays the same dollar twice.
 
-Inspired by the book [*The First National Bank of Dad*](https://a.co/d/0iDelQff). Built for parents who already live in YNAB and would rather teach money than reconcile it by hand.
+Inspired by the book [*The First National Bank of Dad*](https://a.co/d/0iDelQff). Built for parents who already live in YNAB and would rather teach money management than reconcile it by hand.
 
 ---
 
-Under the hood, YNABBankOfDad is a Groovy/Gradle command-line tool. The two workflows above are independent:
+Under the hood, YNABBankOfDad is a Groovy/Gradle command-line tool. The two workflows above are independent.
 
 ## Who this is for
 
@@ -27,7 +27,7 @@ This is a configurable starting point, not a plug-and-play budgeting app. It fit
 ## What the tool does
 
 ### Allowance CLI
-The original CLI:
+
 - connects to the YNAB API using `YNAB_ACCESS_TOKEN`
 - loads budget/account/category/rate rules from a YAML config file
 - finds the most recently modified budget matching the configured `budgetName`
@@ -39,7 +39,7 @@ The original CLI:
 - supports `-c` / `--config` so you can choose a config file path explicitly
 
 ### Parent/child syncer
-The standalone syncer:
+
 - loads the `sync:` section from the same YAML config file
 - authenticates parent and child budgets with separate environment variables
 - polls the configured parent budget on an interval
