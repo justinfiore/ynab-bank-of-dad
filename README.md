@@ -2,20 +2,27 @@
 
 [![CI](https://github.com/justinfiore/ynab-bank-of-dad/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/justinfiore/ynab-bank-of-dad/actions/workflows/ci.yml)
 
-YNABBankOfDad is a Groovy/Gradle command-line tool for running a family "Bank of Dad" workflow inside [YNAB](https://www.ynab.com/). It now supports two separate command-line workflows:
+**Your kids have a bank. You have YNAB. This is the teller window.**
 
-1. the original allowance/interest calculator that posts one bulk transaction set into a single budget
-2. a standalone parent/child syncer that mirrors approved parent-budget activity into one or more child budgets using configurable category mappings and SQLite-backed replay protection
+Allowance day used to mean a spreadsheet, a calculator, and the quiet dread of "wait, whose piggy bank earned interest this week?" YNAB Bank of Dad turns that ritual into a command: it reads your family budget, pays the weekly allowance, compounds the interest, and posts the whole payday in one tidy batch. Then, when a parent budget moves money that a kid should actually see, it mirrors that activity into their own budget — same date, same amount, no copy-paste, no "I already did that one."
 
-This project is inspired by the book [*The First National Bank of Dad*](https://a.co/d/0iDelQff).
+Think of it as *The First National Bank of Dad*, except the vault is [YNAB](https://www.ynab.com/), the ledger is YAML, and the night teller is a Groovy CLI that refuses to touch live money until you ask it to with `--dry-run` first. Two windows, one bank:
+
+1. **Payday.** An allowance and interest calculator that posts one bulk transaction set into a single budget.
+2. **The mirror.** A parent/child syncer that reflects approved parent-budget activity into one or more child budgets, with category mappings and SQLite-backed replay protection so it never pays the same dollar twice.
+
+Inspired by the book [*The First National Bank of Dad*](https://a.co/d/0iDelQff). Built for parents who already live in YNAB and would rather teach money than reconcile it by hand.
+
+---
+
+Under the hood, YNABBankOfDad is a Groovy/Gradle command-line tool. The two workflows above are independent:
 
 ## Who this is for
 
-This repository is best suited to people who:
+This is a configurable starting point, not a plug-and-play budgeting app. It fits if you:
 - already use YNAB
 - are comfortable running a command-line tool
 - want to adapt a "Bank of Dad"-style family budgeting workflow
-- want a configurable starting point rather than a plug-and-play budgeting app
 
 ## What the tool does
 
