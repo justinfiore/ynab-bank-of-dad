@@ -115,11 +115,14 @@ class TransactionAssemblyService {
                                                                   List<String> kidsWithoutInterest,
                                                                   Map<String, Number> allowanceRates,
                                                                   Number giveBankRate) {
+        if (!kidsWithoutInterest) {
+            return []
+        }
         CategorySnapshot allowanceCategory = categoryInfoByCategoryName[allowanceCategoryName]
         if (allowanceCategory == null) {
             throw new IllegalStateException("Missing category info for ${allowanceCategoryName}")
         }
-        Number amount = giveBankRate + allowanceRates.values().sum()
+        Number amount = giveBankRate + allowanceRates.values().sum(0)
         kidsWithoutInterest.collect { String kid ->
             new TransactionDraft(
                 accountId,

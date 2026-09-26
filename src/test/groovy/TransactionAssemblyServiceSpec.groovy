@@ -87,6 +87,40 @@ class TransactionAssemblyServiceSpec extends Specification {
         ex.message.contains('Family Allowance')
     }
 
+    def "generateNonInterestBearingTransactions returns no transactions when no kids are configured"() {
+        given:
+        def service = buildAssemblyService('2025-07-06')
+
+        expect:
+        service.generateNonInterestBearingTransactions(
+            'allowance-escrow',
+            [:],
+            [],
+            [:],
+            0.5
+        ) == []
+    }
+
+    def "generateNonInterestBearingTransactions treats empty allowance rates as zero"() {
+        given:
+        def service = buildAssemblyService('2025-07-06')
+        def categories = [
+            'Family Allowance': new CategorySnapshot('allowance-id', 'Family Allowance', 0)
+        ]
+
+        when:
+        def transactions = service.generateNonInterestBearingTransactions(
+            'allowance-escrow',
+            categories,
+            ['Sam'],
+            [:],
+            0.5
+        )
+
+        then:
+        transactions*.amount == [-500]
+    }
+
     def "generateNonInterestBearingTransactions reuses the allowance category for each configured kid"() {
         given:
         def service = buildAssemblyService('2025-07-06')
